@@ -117,6 +117,8 @@ mem_set (word addr, word value)
     }
 }
 
+#define mem_set_32 mem_set
+
 void
 mem_set_8 (word addr, word value)
 {
@@ -187,6 +189,8 @@ mem_get (word addr)
 	return *(word*)(seg->mem + (addr - seg->addr));
     }
 }
+
+#define mem_get_32 mem_get
 
 word
 mem_get_8 (word addr)
@@ -273,7 +277,7 @@ mask (word begin, word end)
 word
 maskmask (word width, word num, word mask)
 {
-    word x;
+    word x = 0;
     word mb = 1, xb = 1;
     word i, j;
 
@@ -1094,19 +1098,12 @@ main (int argc, char *argv[])
 
     /* debug = 1; */
 
+#if 1
     debugger();
-
-    /*
+#else
     for (;;)
-    {
-	if (debug)
-	    dump_registers();
-	printf("%08x:  ", pc);
-	disassemble_insn(mem_get(pc), pc);
-	printf("\n");
 	interpret_insn();
-    }
-    */
+#endif
 
     return 0;
 }
