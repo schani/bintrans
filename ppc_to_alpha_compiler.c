@@ -862,6 +862,8 @@ handle_b_insn (word_32 insn, word_32 pc)
     }
     else
     {
+	emit_start_direct_jump(1);
+
 	emit_store_regs(EMU_INSN_EPILOGUE);
 
 	emit_direct_jump(pc + (SEX32(FIELD_LI, 24) << 2));
@@ -916,6 +918,8 @@ gen_branch_with_decrement_insn (word_32 insn, word_32 pc, int zero)
 
 	unref_integer_reg(ctr_reg);
 
+	emit_start_direct_jump(1);
+
 	emit_store_regs(EMU_INSN_EPILOGUE);
 
 	emit_direct_jump(pc + (SEX32(FIELD_BD, 14) << 2));
@@ -961,6 +965,8 @@ gen_bcrfb_insn (word_32 insn, word_32 pc, int eq)
 
 	    unref_integer_reg(crfb_reg);
 
+	    emit_start_direct_jump(1);
+
 	    emit_store_regs(EMU_INSN_EPILOGUE);
 
 	    emit_direct_jump(pc + (SEX32(FIELD_BD, 14) << 2));
@@ -997,6 +1003,8 @@ gen_bcrfb_insn (word_32 insn, word_32 pc, int eq)
 		emit_branch(COMPOSE_BLBC(tmp_reg, 0), end_label);
 	    else
 		emit_branch(COMPOSE_BLBS(tmp_reg, 0), end_label);
+
+	    emit_start_direct_jump(1);
 
 	    emit_store_regs(EMU_INSN_EPILOGUE);
 
@@ -3594,7 +3602,10 @@ handle_sc_insn (word_32 insn, word_32 pc)
 
     emit_system_call();
 
+    emit_start_direct_jump(0);
     emit_direct_jump(pc + 4);
+
+    set_all_regs_must_be_saved();
 }
 
 static void

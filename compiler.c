@@ -44,8 +44,8 @@
 
 #define MAX_UNRESOLVED_JUMPS 16384 /* should be a lot less if we actually do resolve branches */
 
-#define MAX_FRAGMENT_EMU_INSNS          256
-#define MAX_FRAGMENT_INSNS              512
+#define MAX_FRAGMENT_EMU_INSNS          512
+#define MAX_FRAGMENT_INSNS             1024
 #define MAX_REG_FIELDS                 1024
 #define MAX_REG_LOCKS                  2048
 #define MAX_FRAGMENT_UNRESOLVED_JUMPS    16
@@ -96,10 +96,8 @@ typedef struct
 
 #if defined(EMU_PPC)
 reg_range_t integer_reg_range[] = { { 4, 16 }, { 18, 26 }, { 0, 0 } };
-#define NUM_INTEGER_REGS                       20
 #elif defined(EMU_I386)
 reg_range_t integer_reg_range[] = { { 15, 16 }, { 18, 26 }, { 0, 0 } };
-#define NUM_INTEGER_REGS                        9
 #define FIRST_NATIVE_INTEGER_HOST_REG           1
 #define NUM_NATIVE_INTEGER_HOST_REGS           14 /* FIXME: this should be in the machine definition (NUM_INTEGER_EMU_REGISTERS) */
 #endif
@@ -108,17 +106,15 @@ reg_range_t integer_reg_range[] = { { 15, 16 }, { 18, 26 }, { 0, 0 } };
 
 #if defined(EMU_PPC) && defined(FAST_PPC_FPR)
 #define FIRST_FLOAT_REG        28
-#define NUM_FLOAT_REGS          3
 #else
 #define FIRST_FLOAT_REG         2
-#define NUM_FLOAT_REGS         14
 #endif
 
 #define FIRST_TMP_FLOAT_REG     1
 #define NUM_TMP_FLOAT_REGS      1
 
-int native_integer_regs[NUM_INTEGER_REGS];
-int native_float_regs[NUM_FLOAT_REGS];
+int native_integer_regs[NUM_FREE_INTEGER_REGS];
+int native_float_regs[NUM_FREE_FLOAT_REGS];
 
 #define REG_TYPE_INTEGER        1
 #define REG_TYPE_FLOAT          2
@@ -172,11 +168,13 @@ typedef struct
     int shift;
 } reg_field_t;
 
-#define EMU_INSN_INSN         1
-#define EMU_INSN_EPILOGUE     2
-#define EMU_INSN_INTERLUDE    3
-#define EMU_INSN_STORE_REGS   4
-#define EMU_INSN_CONTINUE     5
+#define EMU_INSN_INSN                     1
+#define EMU_INSN_EPILOGUE                 2
+#define EMU_INSN_INTERLUDE                3
+#define EMU_INSN_STORE_REGS               4
+#define EMU_INSN_CONTINUE                 5
+#define EMU_INSN_DIRECT_JUMP              6
+#define EMU_INSN_DIRECT_JUMP_NO_SYNC      7
 
 typedef struct
 {
@@ -185,11 +183,27 @@ typedef struct
     int native_index;
 } emu_insn_t;
 
+#define ALLOCED_REG_NONE      0xff
+#define ALLOCED_REG_REG_MASK  0x7f
+#define ALLOCED_REG_DIRTY     0x80
+#define ALLOCED_REG_SAVED     0x80
+
+typedef struct
+{
+    word_64 addr;
+    word_32 target;
+#ifdef SYNC_BLOCKS
+    word_64 start;
+    unsigned char alloced_integer_regs[NUM_FREE_INTEGER_REGS];
+    unsigned char alloced_float_regs[NUM_FREE_FLOAT_REGS];
+#endif
+} unresolved_jump_t;
+
 typedef struct
 {
     int insn_num;
     word_32 target;
-} unresolved_jump_t;
+} fragment_unresolved_jump_t;
 
 #ifdef COLLECT_STATS
 typedef struct
@@ -216,7 +230,7 @@ int num_reg_fields;
 label_info_t label_infos[MAX_LABELS];
 int num_labels;
 
-unresolved_jump_t fragment_unresolved_jumps[MAX_FRAGMENT_UNRESOLVED_JUMPS];
+fragment_unresolved_jump_t fragment_unresolved_jumps[MAX_FRAGMENT_UNRESOLVED_JUMPS];
 int num_fragment_unresolved_jumps;
 
 #ifdef COLLECT_PPC_FPR_STATS
@@ -232,8 +246,7 @@ int old_num_constants;
 int num_constants_init;
 word_32 constant_area[NUM_EMU_REGISTERS * 2 + 2 + MAX_CONSTANTS] __attribute__ ((aligned (8)));
 
-word_64 unresolved_jump_addrs[MAX_UNRESOLVED_JUMPS];
-word_32 unresolved_jump_targets[MAX_UNRESOLVED_JUMPS];
+unresolved_jump_t unresolved_jumps[MAX_UNRESOLVED_JUMPS];
 
 tmp_register_t tmp_integer_regs[NUM_TMP_INTEGER_REGS];
 tmp_register_t tmp_float_regs[NUM_TMP_FLOAT_REGS];
@@ -245,6 +258,8 @@ reg_t alloced_float_regs[NUM_NATIVE_FLOAT_REGS];
 
 int have_jumped = 0;
 int generated_insn_index;
+
+int all_regs_must_be_saved;
 
 interpreter_t *compiler_intp = 0;
 #ifdef CROSSDEBUGGER
@@ -268,6 +283,8 @@ unsigned long num_loop_profiler_calls = 0;
 unsigned long num_const_adds = 0;
 unsigned long num_isyncs = 0;
 #endif
+
+fragment_hash_entry_t fragment_entry;
 
 void (*branch_profile_func) (void) = 0;
 
@@ -387,6 +404,15 @@ dump_fragment_code (word_64 start, word_64 end)
 	    case EMU_INSN_STORE_REGS :
 		printf("store regs");
 		break;
+
+	    case EMU_INSN_CONTINUE :
+		printf("continue");
+		break;
+
+	    case EMU_INSN_DIRECT_JUMP :
+	    case EMU_INSN_DIRECT_JUMP_NO_SYNC :
+		printf("direct jump");
+		break;
 	}
 
 	printf("\n- - - - - - - - \n");
@@ -415,13 +441,13 @@ direct_emit (word_32 insn)
 }
 
 void
-load_reg (int type, reg_t native_reg, reg_t foreign_reg)
+load_reg (reg_t native_reg, reg_t foreign_reg)
 {
 #ifdef COLLECT_STATS
     ++num_load_store_reg_insns;
 #endif
 
-    switch (type)
+    switch (emu_regs[foreign_reg].type)
     {
 	case REG_TYPE_INTEGER :
 	    direct_emit(COMPOSE_LDL(native_reg, foreign_reg * 8, CONSTANT_AREA_REG));
@@ -437,13 +463,13 @@ load_reg (int type, reg_t native_reg, reg_t foreign_reg)
 }
 
 void
-store_reg (int type, reg_t native_reg, reg_t foreign_reg)
+store_reg (reg_t native_reg, reg_t foreign_reg)
 {
 #ifdef COLLECT_STATS
     ++num_load_store_reg_insns;
 #endif
 
-    switch (type)
+    switch (emu_regs[foreign_reg].type)
     {
 	case REG_TYPE_INTEGER :
 	    direct_emit(COMPOSE_STL(native_reg, foreign_reg * 8, CONSTANT_AREA_REG));
@@ -584,6 +610,12 @@ unref_float_reg (reg_t reg)
 #else
     unref_reg(reg);
 #endif
+}
+
+void
+set_all_regs_must_be_saved (void)
+{
+    all_regs_must_be_saved = 1;
 }
 
 reg_t
@@ -780,6 +812,19 @@ emit_branch (word_32 insn, label_t label)
 }
 
 void
+emit_start_direct_jump (int sync_block)
+{
+#ifdef SYNC_BLOCKS
+    if (sync_block)
+	start_emu_insn(EMU_INSN_DIRECT_JUMP, 0);
+    else
+	start_emu_insn(EMU_INSN_DIRECT_JUMP_NO_SYNC, 0);
+
+    start_emu_insn(EMU_INSN_CONTINUE, 0);
+#endif
+}
+
+void
 emit_direct_jump (word_32 target)
 {
     if (branch_profile_func != 0)
@@ -807,7 +852,7 @@ emit_indirect_jump (void)
     /* we assume that the target address is already in $7 */
 
     emit(COMPOSE_LDQ(PROCEDURE_VALUE_REG, INDIRECT_DISPATCHER_CONST * 4, CONSTANT_AREA_REG));
-    emit(COMPOSE_JMP(31, PROCEDURE_VALUE_REG));
+    emit(COMPOSE_JMP(0, PROCEDURE_VALUE_REG)); /* FIXME: should be 31! */
 
     have_jumped = 1;
 }
@@ -841,6 +886,8 @@ start_fragment (void)
     num_fragment_unresolved_jumps = 0;
     old_num_constants = num_constants;
 
+    all_regs_must_be_saved = 0;
+
     for (i = 0; i < NUM_EMU_REGISTERS; ++i)
     {
 	emu_regs[i].used = 0;
@@ -867,13 +914,16 @@ simple_reg_alloc (void)
 		{
 		    while (alloced_integer_regs[native_integer_regs[ii]] != NO_REG)
 			++ii;
-		    assert(ii < NUM_INTEGER_REGS);
+		    assert(ii < NUM_FREE_INTEGER_REGS);
 		    emu_regs[i].native_reg = native_integer_regs[ii];
 		}
 		alloced_integer_regs[emu_regs[i].native_reg] = i;
 	    }
 	    else if (emu_regs[i].type == REG_TYPE_FLOAT)
+	    {
 		emu_regs[i].native_reg = native_float_regs[fi++];
+		alloced_float_regs[emu_regs[i].native_reg] = i;
+	    }
 	    else
 		assert(0);
 	}
@@ -912,7 +962,10 @@ alloc_native_reg_for_emu_reg (reg_t emu_reg, int current_insn_num)
     assert(l >= 0 && l < NUM_EMU_REGISTERS);
 
     if (emu_regs[l].dirty)
-	store_reg(emu_regs[l].type, emu_regs[l].native_reg, l);
+	assert(emu_regs[l].live_at_end);
+
+    if (/* emu_regs[l].dirty */ emu_regs[l].live_at_end)
+	store_reg(emu_regs[l].native_reg, l);
 
     native_reg = emu_regs[l].native_reg;
 
@@ -921,6 +974,10 @@ alloc_native_reg_for_emu_reg (reg_t emu_reg, int current_insn_num)
 
     if (emu_regs[emu_reg].type == REG_TYPE_INTEGER)
 	alloced_integer_regs[native_reg] = emu_reg;
+    else if (emu_regs[emu_reg].type == REG_TYPE_FLOAT)
+	alloced_float_regs[native_reg] = emu_reg;
+    else
+	assert(0);
 }
 
 void
@@ -934,6 +991,14 @@ finish_fragment (void)
     word_64 body_start;
     int jumps_index;
     int rf, rl;
+#ifdef SYNC_BLOCKS
+    word_64 direct_jump_start;
+    int no_sync;
+#endif
+
+    init_fragment_hash_entry(&fragment_entry);
+
+    fragment_entry.native_addr = (word_64)emit_loc;
 
     for (i = 0; i < NUM_NATIVE_INTEGER_REGS; ++i)
 	alloced_integer_regs[i] = NO_REG;
@@ -950,6 +1015,8 @@ finish_fragment (void)
 		++num_float_regs;
 	    else
 		assert(0);
+
+	    emu_regs[i].dirty = 0;
 	}
     }
 
@@ -957,9 +1024,7 @@ finish_fragment (void)
     printf("%d integer regs, %d float regs\n", num_integer_regs, num_float_regs);
 #endif
 
-    /* assert(num_float_regs == 0); */
-
-    if (num_integer_regs <= NUM_INTEGER_REGS && num_float_regs <= NUM_FLOAT_REGS)
+    if (num_integer_regs <= NUM_FREE_INTEGER_REGS && num_float_regs <= NUM_FREE_FLOAT_REGS)
 	simple_reg_alloc();
     else
     {
@@ -979,10 +1044,10 @@ finish_fragment (void)
 			emu_regs[reg].native_reg = emu_regs[reg].preferred_native_reg;
 		    else
 		    {
-			while (ii < NUM_INTEGER_REGS && alloced_integer_regs[native_integer_regs[ii]] != NO_REG)
+			while (ii < NUM_FREE_INTEGER_REGS && alloced_integer_regs[native_integer_regs[ii]] != NO_REG)
 			    ++ii;
 
-			if (ii < NUM_INTEGER_REGS)
+			if (ii < NUM_FREE_INTEGER_REGS)
 			    emu_regs[reg].native_reg = native_integer_regs[ii];
 		    }
 
@@ -991,13 +1056,16 @@ finish_fragment (void)
 		}
 		else if (emu_regs[reg_fields[i].reg].type == REG_TYPE_FLOAT)
 		{
-		    if (fi < NUM_FLOAT_REGS)
-			emu_regs[reg_fields[i].reg].native_reg = native_float_regs[fi++];
+		    if (fi < NUM_FREE_FLOAT_REGS)
+			emu_regs[reg].native_reg = native_float_regs[fi++];
+
+		    if (emu_regs[reg].native_reg != NO_REG)
+			alloced_float_regs[emu_regs[reg].native_reg] = reg;
 		}
 		else
 		    assert(0);
 
-		if (ii == NUM_INTEGER_REGS && fi == NUM_FLOAT_REGS)
+		if (ii == NUM_FREE_INTEGER_REGS && fi == NUM_FREE_FLOAT_REGS)
 		    break;
 	    }
 	}
@@ -1006,13 +1074,44 @@ finish_fragment (void)
     for (i = 0; i < NUM_EMU_REGISTERS; ++i)
     {
 	if (emu_regs[i].used && emu_regs[i].live_at_start && emu_regs[i].native_reg != NO_REG)
-	    load_reg(emu_regs[i].type, emu_regs[i].native_reg, i);
+	    load_reg(emu_regs[i].native_reg, i);
     }
 
     body_start = (word_64)emit_loc;
     jumps_index = 0;
     rf = 0;
     rl = 0;
+
+#ifdef SYNC_BLOCKS
+    fragment_entry.synced_native_addr = body_start;
+
+    for (i = 0; i < NUM_FREE_INTEGER_REGS; ++i)
+    {
+	if (alloced_integer_regs[native_integer_regs[i]] == NO_REG)
+	    fragment_entry.alloced_integer_regs[i] = ALLOCED_REG_NONE;
+	else
+	{
+	    reg_t reg = alloced_integer_regs[native_integer_regs[i]];
+
+	    fragment_entry.alloced_integer_regs[i] = reg;
+	    if (!all_regs_must_be_saved && emu_regs[reg].live_at_end)
+		fragment_entry.alloced_integer_regs[i] |= ALLOCED_REG_SAVED;
+	}
+    }
+    for (i = 0; i < NUM_FREE_FLOAT_REGS; ++i)
+    {
+	if (alloced_float_regs[native_float_regs[i]] == NO_REG)
+	    fragment_entry.alloced_float_regs[i] = ALLOCED_REG_NONE;
+	else
+	{
+	    reg_t reg = alloced_float_regs[native_float_regs[i]];
+
+	    fragment_entry.alloced_float_regs[i] = reg;
+	    if (!all_regs_must_be_saved && emu_regs[reg].live_at_end)
+		fragment_entry.alloced_float_regs[i] |= ALLOCED_REG_SAVED;
+	}
+    }
+#endif
 
     /* instructions are patched and emitted; register allocation happens simultaneously */
     for (i = 0; i < num_fragment_emu_insns; ++i)
@@ -1031,78 +1130,120 @@ finish_fragment (void)
 
 	fragment_emu_insns[i].native_index = emit_loc - (word_32*)body_start;
 
-	if (fragment_emu_insns[i].type == EMU_INSN_STORE_REGS)
+	switch (fragment_emu_insns[i].type)
 	{
-	    assert(first + 1 == last);
+	    case EMU_INSN_STORE_REGS :
+		assert(first + 1 == last);
 
-	    fragment_insns[first] = emit_loc - code_area;
+		fragment_insns[first] = emit_loc - code_area;
 
-	    for (j = 0; j < NUM_EMU_REGISTERS; ++j)
-		if (emu_regs[j].used && emu_regs[j].live_at_end && emu_regs[j].native_reg != NO_REG)
-		    store_reg(emu_regs[j].type, emu_regs[j].native_reg, j);
-	}
-	else
-	{
-	    for (j = first; j < last; ++j)
-	    {
-		word_32 *first_insn = emit_loc;
+		for (j = 0; j < NUM_EMU_REGISTERS; ++j)
+		    if (emu_regs[j].used && emu_regs[j].live_at_end && emu_regs[j].native_reg != NO_REG)
+			store_reg(emu_regs[j].native_reg, j);
+		break;
 
-		while (rl < num_reg_locks && reg_locks[rl].insn_num == j)
+#ifdef SYNC_BLOCKS
+	    case EMU_INSN_DIRECT_JUMP :
+		direct_jump_start = (word_64)emit_loc;
+		no_sync = 0;
+		break;
+
+	    case EMU_INSN_DIRECT_JUMP_NO_SYNC :
+		direct_jump_start = (word_64)emit_loc;
+		no_sync = 1;
+		break;
+#endif
+
+	    default :
+		for (j = first; j < last; ++j)
 		{
-		    if (reg_locks[rl].type == REG_LOCK_UNLOCK)
-			emu_regs[reg_locks[rl].reg].locked = 0;
-		    else
+		    word_32 *first_insn = emit_loc;
+
+		    while (rl < num_reg_locks && reg_locks[rl].insn_num == j)
 		    {
-			assert(!emu_regs[reg_locks[rl].reg].locked);
-
-			emu_regs[reg_locks[rl].reg].locked = 1;
-
-			if (emu_regs[reg_locks[rl].reg].native_reg == NO_REG)
-			{
-			    alloc_native_reg_for_emu_reg(reg_locks[rl].reg, j);
-
-			    if (reg_locks[rl].type & REG_LOCK_READ)
-				load_reg(emu_regs[reg_locks[rl].reg].type, emu_regs[reg_locks[rl].reg].native_reg,
-					 reg_locks[rl].reg);
-			    emu_regs[reg_locks[rl].reg].dirty = (reg_locks[rl].type & REG_LOCK_WRITE) ? 1 : 0;
-			}
+			if (reg_locks[rl].type == REG_LOCK_UNLOCK)
+			    emu_regs[reg_locks[rl].reg].locked = 0;
 			else
-			    emu_regs[reg_locks[rl].reg].dirty |= (reg_locks[rl].type & REG_LOCK_WRITE) ? 1 : 0;
+			{
+			    assert(!emu_regs[reg_locks[rl].reg].locked);
+
+			    emu_regs[reg_locks[rl].reg].locked = 1;
+
+			    if (emu_regs[reg_locks[rl].reg].native_reg == NO_REG)
+			    {
+				alloc_native_reg_for_emu_reg(reg_locks[rl].reg, j);
+
+				if (reg_locks[rl].type & REG_LOCK_READ)
+				    load_reg(emu_regs[reg_locks[rl].reg].native_reg, reg_locks[rl].reg);
+				emu_regs[reg_locks[rl].reg].dirty = (reg_locks[rl].type & REG_LOCK_WRITE) ? 1 : 0;
+			    }
+			    else
+				emu_regs[reg_locks[rl].reg].dirty |= (reg_locks[rl].type & REG_LOCK_WRITE) ? 1 : 0;
+
+			    if (emu_regs[reg_locks[rl].reg].dirty)
+				assert(emu_regs[reg_locks[rl].reg].live_at_end);
+			}
+
+			++rl;
 		    }
 
-		    ++rl;
+		    while (rf < num_reg_fields && reg_fields[rf].insn_num == j)
+		    {
+			assert(emu_regs[reg_fields[rf].reg].locked);
+
+			fragment_insns[j] |= emu_regs[reg_fields[rf].reg].native_reg << reg_fields[rf].shift;
+
+			++rf;
+		    }
+
+		    direct_emit(fragment_insns[j]);
+
+		    /* the insn is replaced by its code_area index */
+		    fragment_insns[j] = first_insn - code_area;
+
+		    if (jumps_index < num_fragment_unresolved_jumps && j + 1 == fragment_unresolved_jumps[jumps_index].insn_num)
+		    {
+			int k;
+			int l;
+
+			for (k = 0; k < MAX_UNRESOLVED_JUMPS; ++k)
+			    if (unresolved_jumps[k].addr == 0)
+				break;
+
+			assert(k < MAX_UNRESOLVED_JUMPS);
+
+			unresolved_jumps[k].addr = (word_64)emit_loc;
+			unresolved_jumps[k].target = fragment_unresolved_jumps[jumps_index].target;
+#ifdef SYNC_BLOCKS
+			unresolved_jumps[k].start = direct_jump_start;
+			for (l = 0; l < NUM_FREE_INTEGER_REGS; ++l)
+			{
+			    if (no_sync || alloced_integer_regs[native_integer_regs[l]] == NO_REG)
+				unresolved_jumps[k].alloced_integer_regs[l] = ALLOCED_REG_NONE;
+			    else
+			    {
+				reg_t reg = alloced_integer_regs[native_integer_regs[l]];
+
+				unresolved_jumps[k].alloced_integer_regs[l] = reg | (emu_regs[reg].dirty ? ALLOCED_REG_DIRTY : 0);
+			    }
+			}
+			for (l = 0; l < NUM_FREE_FLOAT_REGS; ++l)
+			{
+			    if (no_sync || alloced_float_regs[native_float_regs[l]] == NO_REG)
+				unresolved_jumps[k].alloced_float_regs[l] = ALLOCED_REG_NONE;
+			    else
+			    {
+				reg_t reg = alloced_float_regs[native_float_regs[l]];
+
+				unresolved_jumps[k].alloced_float_regs[l] = reg | (emu_regs[reg].dirty ? ALLOCED_REG_DIRTY : 0);
+			    }
+			}
+#endif
+
+			++jumps_index;
+		    }
 		}
-
-		while (rf < num_reg_fields && reg_fields[rf].insn_num == j)
-		{
-		    assert(emu_regs[reg_fields[rf].reg].locked);
-
-		    fragment_insns[j] |= emu_regs[reg_fields[rf].reg].native_reg << reg_fields[rf].shift;
-
-		    ++rf;
-		}
-
-		direct_emit(fragment_insns[j]);
-
-		/* the insn is replaced by its code_area index */
-		fragment_insns[j] = first_insn - code_area;
-
-		if (jumps_index < num_fragment_unresolved_jumps && j + 1 == fragment_unresolved_jumps[jumps_index].insn_num)
-		{
-		    int k;
-
-		    for (k = 0; k < MAX_UNRESOLVED_JUMPS; ++k)
-			if (unresolved_jump_addrs[k] == 0)
-			    break;
-
-		    assert(k < MAX_UNRESOLVED_JUMPS);
-
-		    unresolved_jump_addrs[k] = (word_64)emit_loc;
-		    unresolved_jump_targets[k] = fragment_unresolved_jumps[jumps_index].target;
-
-		    ++jumps_index;
-		}
-	    }
+		break;
 	}
     }
 
@@ -1241,7 +1382,6 @@ lookup_fragment (word_32 addr)
 void
 enter_fragment (word_32 foreign_addr, word_64 native_addr)
 {
-    fragment_hash_entry_t entry;
 #ifdef PROFILE_LOOPS
     int i;
 #endif
@@ -1251,9 +1391,7 @@ enter_fragment (word_32 foreign_addr, word_64 native_addr)
 	print_compiler_stats();
 #endif
 
-    init_fragment_hash_entry(&entry);
-    entry.native_addr = native_addr;
-    fragment_hash_put(foreign_addr, &entry);
+    fragment_hash_put(foreign_addr, &fragment_entry);
 }
 #endif
 
@@ -1440,7 +1578,7 @@ init_compiler (interpreter_t *intp, interpreter_t *dbg_intp)
     }
 
     i = 0;
-    for (native = FIRST_FLOAT_REG; native < FIRST_FLOAT_REG + NUM_FLOAT_REGS; ++native)
+    for (native = FIRST_FLOAT_REG; native < FIRST_FLOAT_REG + NUM_FREE_FLOAT_REGS; ++native)
 	native_float_regs[i++] = native;
 
     for (i = 0; i < NUM_TMP_INTEGER_REGS; ++i)
@@ -1465,11 +1603,11 @@ init_compiler (interpreter_t *intp, interpreter_t *dbg_intp)
 	else
 	{
 	    emu_regs[i].type = REG_TYPE_INTEGER;
-	    emu_regs[i].preferred_native_reg = native_integer_regs[j++ % NUM_INTEGER_REGS];
+	    emu_regs[i].preferred_native_reg = native_integer_regs[j++ % NUM_FREE_INTEGER_REGS];
 	}
 
     for (i = 0; i < MAX_UNRESOLVED_JUMPS; ++i)
-	unresolved_jump_addrs[i] = 0;
+	unresolved_jumps[i].addr = 0;
 
     emit_loc = code_area;
 
@@ -1657,6 +1795,8 @@ compile_basic_block (word_32 addr, int as_trace)
 
     compile_until_jump(&addr, 0, 0, 0);
 
+    emit_start_direct_jump(1);
+
     emit_store_regs(EMU_INSN_EPILOGUE);
 
     emit_direct_jump(addr);	/* this is not necessary if the jump at the end of the basic block was unconditional */
@@ -1737,6 +1877,8 @@ compile_trace (word_32 addr, int length, int bits)
 
 	    compile_until_jump(&addr, 1, taken_jump_label, &target_addr);
 
+	    emit_start_direct_jump(1);
+
 	    emit_store_regs(EMU_INSN_INTERLUDE);
 
 	    emit_direct_jump(addr);
@@ -1753,6 +1895,8 @@ compile_trace (word_32 addr, int length, int bits)
     branch_profile_func = branch_profile_end_trace;
 
     compile_until_jump(&addr, 0, 0, 0);
+
+    emit_start_direct_jump(1);
 
     emit_store_regs(EMU_INSN_EPILOGUE);
 
@@ -1915,13 +2059,180 @@ provide_fragment (word_32 addr)
 #endif
 }
 
+#ifdef SYNC_BLOCKS
+void
+shuffle_regs (unsigned char *src, unsigned char *dst, int i)
+{
+    int j;
+    unsigned char reg;
+
+    if (src[i] == ALLOCED_REG_NONE)
+	return;
+
+    for (j = 0; j < NUM_FREE_INTEGER_REGS; ++j)
+	if ((src[i] & ALLOCED_REG_REG_MASK) == (dst[j] & ALLOCED_REG_REG_MASK))
+	    break;
+
+    assert(j < NUM_FREE_INTEGER_REGS);
+
+    reg = src[i];
+
+    shuffle_regs(src, dst, j);
+
+    assert(src[i] == reg);
+
+    assert(src[j] == ALLOCED_REG_NONE);
+
+    direct_emit(COMPOSE_MOV(native_integer_regs[i], native_integer_regs[j]));
+
+    src[i] = ALLOCED_REG_NONE;
+    src[j] = reg;
+}
+
+#define SYNC_BLOCK_NONE          1
+#define SYNC_BLOCK_STANDARD      2
+#define SYNC_BLOCK_CUSTOM        3
+
+int
+generate_sync_block (unsigned char *src, unsigned char *dst, word_32 foreign_addr, word_64 native_addr)
+{
+    int i;
+
+    /* first check whether we have to generate a sync block at all */
+    for (i = 0; i < NUM_FREE_INTEGER_REGS; ++i)
+	if (!(src[i] == dst[i]
+	      || ((src[i] & ALLOCED_REG_REG_MASK) == (dst[i] & ALLOCED_REG_REG_MASK)
+		  && (!(src[i] & ALLOCED_REG_DIRTY) || (dst[i] & ALLOCED_REG_SAVED)))
+	      || (src[i] != ALLOCED_REG_NONE && !(src[i] & ALLOCED_REG_DIRTY) && dst[i] == ALLOCED_REG_NONE)))
+	    break;
+
+    if (i == NUM_FREE_INTEGER_REGS)
+    {
+	/* printf("no sync block\n\n"); */
+	return SYNC_BLOCK_NONE;
+    }
+
+    /* now check whether it is equally (or more) efficient to use the
+       standard epilogue/prologue */
+    for (i = 0; i < NUM_FREE_INTEGER_REGS; ++i)
+	if (dst[i] != ALLOCED_REG_NONE)
+	{
+	    int j;
+
+	    for (j = 0; j < NUM_FREE_INTEGER_REGS; ++j)
+		if (src[j] != ALLOCED_REG_NONE && (src[j] & ALLOCED_REG_REG_MASK) == (dst[i] & ALLOCED_REG_REG_MASK))
+		    break;
+
+	    if (j < NUM_FREE_INTEGER_REGS)
+		break;
+	}
+    
+
+    if (i == NUM_FREE_INTEGER_REGS)
+    {
+	/* printf("standard prologue/epilogue\n\n"); */
+	return SYNC_BLOCK_STANDARD;
+    }
+
+    for (i = 0; i < NUM_FREE_INTEGER_REGS; ++i)
+	if (src[i] != ALLOCED_REG_NONE)
+	{
+	    int j;
+
+	    if (src[i] & ALLOCED_REG_DIRTY)
+	    {
+		for (j = 0; j < NUM_FREE_INTEGER_REGS; ++j)
+		    if ((src[i] & ALLOCED_REG_REG_MASK) == (dst[j] & ALLOCED_REG_REG_MASK))
+			break;
+
+		if ((j < NUM_FREE_INTEGER_REGS && !(dst[j] & ALLOCED_REG_SAVED))
+		    || j == NUM_FREE_INTEGER_REGS)
+		{
+		    store_reg(native_integer_regs[i], src[i] & ALLOCED_REG_REG_MASK);
+		    if (j < NUM_FREE_INTEGER_REGS)
+			src[i] &= ~ALLOCED_REG_DIRTY;
+		    else
+			src[i] = ALLOCED_REG_NONE;
+		}
+	    }
+	    else
+	    {
+		for (j = 0; j < NUM_FREE_INTEGER_REGS; ++j)
+		    if ((src[i] & ALLOCED_REG_REG_MASK) == (dst[j] & ALLOCED_REG_REG_MASK))
+			break;
+
+		if (j == NUM_FREE_INTEGER_REGS)
+		    src[i] = ALLOCED_REG_NONE;
+	    }
+	}
+
+    for (i = 0; i < NUM_FREE_INTEGER_REGS; ++i)
+    {
+	if (src[i] != ALLOCED_REG_NONE && (src[i] & ALLOCED_REG_REG_MASK) != (dst[i] & ALLOCED_REG_REG_MASK))
+	{
+	    int j;
+
+	    for (j = 0; j < NUM_FREE_INTEGER_REGS; ++j)
+		if ((src[i] & ALLOCED_REG_REG_MASK) == (dst[j] & ALLOCED_REG_REG_MASK))
+		    break;
+
+	    assert(j < NUM_FREE_INTEGER_REGS);
+
+	    if (src[j] == ALLOCED_REG_NONE)
+	    {
+		direct_emit(COMPOSE_MOV(native_integer_regs[i], native_integer_regs[j]));
+		src[j] = src[i];
+		src[i] = ALLOCED_REG_NONE;
+	    }
+	    else
+	    {
+		reg_t reg = src[i] & ALLOCED_REG_REG_MASK;
+
+		direct_emit(COMPOSE_MOV(native_integer_regs[i], 0));
+		src[i] = ALLOCED_REG_NONE;
+
+		shuffle_regs(src, dst, j);
+
+		assert(src[j] == ALLOCED_REG_NONE);
+
+		direct_emit(COMPOSE_MOV(0, native_integer_regs[j]));
+		src[j] = reg;
+	    }
+	}
+    }
+
+    for (i = 0; i < NUM_FREE_INTEGER_REGS; ++i)
+	if (src[i] == ALLOCED_REG_NONE && dst[i] != ALLOCED_REG_NONE)
+	{
+	    load_reg(native_integer_regs[i], dst[i] & ALLOCED_REG_REG_MASK);
+	    src[i] = dst[i] & ALLOCED_REG_REG_MASK;
+	}
+
+
+    for (i = 0; i < NUM_FREE_INTEGER_REGS; ++i)
+	assert((src[i] == ALLOCED_REG_NONE && dst[i] == ALLOCED_REG_NONE) || (src[i] & ALLOCED_REG_REG_MASK) == (dst[i] & ALLOCED_REG_REG_MASK));
+
+    return SYNC_BLOCK_CUSTOM;
+}
+#endif
+
+word_32
+compose_branch (word_64 branch_addr, word_64 target_addr)
+{
+    sword_64 disp = target_addr - branch_addr - 4;
+    word_32 field;
+
+    assert(disp >= -(1 << 22) && disp < (1 << 22));
+    field = (disp >> 2) & 0x1fffff;
+
+    return COMPOSE_BR(31, field);
+}
+
 word_64
 provide_fragment_and_patch (word_64 jump_addr)
 {
     int i;
     word_64 native_addr;
-    sword_64 disp;
-    word_32 field;
     word_32 foreign_addr;
 
 #if defined(COLLECT_STATS) && !defined(COMPILER_THRESHOLD)
@@ -1929,12 +2240,12 @@ provide_fragment_and_patch (word_64 jump_addr)
 #endif
 
     for (i = 0; i < MAX_UNRESOLVED_JUMPS; ++i)
-	if (unresolved_jump_addrs[i] == jump_addr)
+	if (unresolved_jumps[i].addr == jump_addr)
 	    break;
 
     assert(i < MAX_UNRESOLVED_JUMPS);
 
-    foreign_addr = unresolved_jump_targets[i];
+    foreign_addr = unresolved_jumps[i].target;
 
 #ifdef COMPILER_THRESHOLD
     native_addr = lookup_fragment(foreign_addr);
@@ -1956,20 +2267,75 @@ provide_fragment_and_patch (word_64 jump_addr)
 	native_addr = provide_fragment(foreign_addr);
 #endif
 
+#ifdef SYNC_BLOCKS
+	{
+	    fragment_hash_entry_t *entry = fragment_hash_get(foreign_addr);
+	    int j;
+	    int sync;
+	    word_64 sync_block_start = (word_64)emit_loc;
+
+	    assert(entry != 0);
+
+	    /*
+	    printf("src: ");
+	    for (j = 0; j < NUM_FREE_INTEGER_REGS; ++j)
+		if (unresolved_jumps[i].alloced_integer_regs[j] != ALLOCED_REG_NONE)
+		    printf("$%d -> %d%s ", native_integer_regs[j], unresolved_jumps[i].alloced_integer_regs[j] & ALLOCED_REG_REG_MASK,
+			   (unresolved_jumps[i].alloced_integer_regs[j] & ALLOCED_REG_DIRTY) ? " (d)" : "");
+	    printf("\ndst: ");
+	    for (j = 0; j < NUM_FREE_INTEGER_REGS; ++j)
+		if (entry->alloced_integer_regs[j] != ALLOCED_REG_NONE)
+		    printf("$%d -> %d%s ", native_integer_regs[j], entry->alloced_integer_regs[j] & ALLOCED_REG_REG_MASK,
+			   (entry->alloced_integer_regs[j] & ALLOCED_REG_SAVED) ? " (s)" : "");
+	    printf("\n\n");
+	    */
+
+	    for (j = 0; j < NUM_FREE_FLOAT_REGS; ++j)
+		if (entry->alloced_float_regs[j] != ALLOCED_REG_NONE || unresolved_jumps[i].alloced_float_regs[j] != ALLOCED_REG_NONE)
+		    break;
+
+	    if (j == NUM_FREE_FLOAT_REGS)
+	    {
+		sync = generate_sync_block(unresolved_jumps[i].alloced_integer_regs, entry->alloced_integer_regs, foreign_addr, native_addr);
+	    }
+	    else
+	    {
+		/* printf("float regs involved\n"); */
+		sync = SYNC_BLOCK_STANDARD;
+	    }
+
+	    if (sync == SYNC_BLOCK_NONE)
+		*(word_32*)unresolved_jumps[i].start = compose_branch(unresolved_jumps[i].start, entry->synced_native_addr);
+	    else if (sync == SYNC_BLOCK_STANDARD)
+	    {
+		jump_addr -= 8;
+
+		*(word_32*)jump_addr = compose_branch(jump_addr, native_addr);
+	    }
+	    else
+	    {
+		assert(sync == SYNC_BLOCK_CUSTOM);
+
+		*(word_32*)unresolved_jumps[i].start = compose_branch(unresolved_jumps[i].start, sync_block_start);
+		direct_emit(compose_branch((word_64)emit_loc, entry->synced_native_addr));
+	    }
+
+	    unresolved_jumps[i].addr = 0;
+
+	    flush_icache();
+	}
+#else
 #if !defined(CROSSDEBUGGER) && !defined(NO_PATCHING)
 	/* printf("patching at %lx\n", jump_addr); */
 
 	jump_addr -= 8;
 
-	disp = native_addr - jump_addr - 4;
-	assert(disp >= -(1 << 22) && disp < (1 << 22));
-	field = (disp >> 2) & 0x1fffff;
+	*(word_32*)jump_addr = compose_branch(jump_addr, native_addr);
 
-	*(word_32*)jump_addr = COMPOSE_BR(31, field);
-
-	unresolved_jump_addrs[i] = 0;
+	unresolved_jumps[i].addr = 0;
 
 	flush_icache();
+#endif
 #endif
 
 	return native_addr;
@@ -2016,7 +2382,7 @@ isync_handler (word_32 addr)
     emit_loc = code_area;
 
     for (i = 0; i < MAX_UNRESOLVED_JUMPS; ++i)
-	unresolved_jump_addrs[i] = 0;
+	unresolved_jumps[i].addr = 0;
 
     init_fragment_hash();
 

@@ -217,6 +217,9 @@ indirect_dispatcher:
 	addq	a3,a1,a1
 #elif defined(PROFILE_FRAGMENTS)
 	s8addq	a2,a1,a1
+#elif defined(SYNC_BLOCKS)
+	sll	a2,4,a3
+	addq	a3,a1,a1
 #else
 	s4addq	a2,a1,a1
 #endif

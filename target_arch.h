@@ -21,11 +21,26 @@
  */
 
 #ifdef ARCH_ALPHA
+
 #include "alpha_types.h"
 
 #define NUM_NATIVE_INTEGER_REGS      31
 #define NUM_NATIVE_FLOAT_REGS        31
+
+#if defined(EMU_PPC)
+#define NUM_FREE_INTEGER_REGS                  20
+#elif defined(EMU_I386)
+#define NUM_FREE_INTEGER_REGS                   9
 #endif
+
+#if defined(EMU_PPC) && defined(FAST_PPC_FPR)
+#define NUM_FREE_FLOAT_REGS     3
+#else
+#define NUM_FREE_FLOAT_REGS    14
+#endif
+
+#endif /* ARCH_ALPHA */
+
 #ifdef ARCH_I386
 #include "i386_types.h"
 #endif

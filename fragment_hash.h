@@ -44,6 +44,11 @@ typedef struct
     trace_count_t trace0_count;
     int trace_pool_indexes[MAX_TRACE_JUMPS];
 #endif
+#ifdef SYNC_BLOCKS
+    word_64 synced_native_addr;
+    unsigned char alloced_integer_regs[NUM_FREE_INTEGER_REGS];
+    unsigned char alloced_float_regs[NUM_FREE_FLOAT_REGS];
+#endif
 } fragment_hash_entry_t;
 
 #ifdef COLLECT_STATS
