@@ -23,6 +23,7 @@
 open Int64
 open List
 
+open Monad
 open Utils
 open Cond_monad
 open Expr
@@ -65,6 +66,53 @@ let fast_simplify_conditions conds =
   map (cfold_expr [])
     (filter (fun x -> not (is_const (cfold_expr [] x))) conds)
 
+(*** applying the sex optimization ***)
+
+let rec sex_simplify_expr mapping fields expr =
+  let optimize_and_simplify one expr =
+    let mapping = make_sex_mapping mapping one
+    in cm_bind (optimize_sex_expr mapping fields expr)
+	 (fun expr ->
+	    simplify_and_prune_expr_until_fixpoint mapping fields expr)
+  in if is_const (cfold_expr fields expr) then
+      cm_return expr
+    else
+      cm_bind (apply_to_expr_subs_with_monad cm_return cm_bind (sex_simplify_expr mapping fields) expr)
+	(fun expr ->
+	   (make_bind2 cm_bind cm_bind)
+	     (optimize_and_simplify false expr)
+	     (optimize_and_simplify true expr)
+	     (fun expr0 expr1 ->
+		if expr0 = expr1 then
+		  cm_return expr0
+		else
+		  cm_return expr))
+
+let sex_simplify_stmt mapping fields stmt =
+  let optimize_and_simplify one stmt =
+    let mapping = make_sex_mapping mapping one
+    in cm_bind (optimize_sex_stmt mapping fields stmt)
+	 (fun stmt ->
+	    simplify_and_prune_stmt_until_fixpoint mapping fields stmt)
+  in cm_bind (apply_to_stmt_subs_with_monad cm_return cm_bind (sex_simplify_expr mapping fields) stmt)
+       (fun sstmt ->
+	  if stmt <> sstmt then
+	    ( print_stmt stmt ; print_stmt sstmt )
+	  else
+	    () ;
+	  (make_bind2 cm_bind cm_bind)
+	    (optimize_and_simplify false sstmt)
+	    (optimize_and_simplify true sstmt)
+            (fun stmt0 stmt1 ->
+	       if stmt0 = stmt1 then
+		 (if sstmt <> stmt0 then
+		    ( print_stmt sstmt ; print_stmt stmt0 )
+		  else
+		    () ;
+		  cm_return stmt0)
+	       else
+		 cm_return sstmt))
+
 (*** exploring all field values ***)
 
 type stmt_form_match =
@@ -98,7 +146,10 @@ let explore_all_fields stmt mapping fields target_insns =
   and add_stmt_form fields stmt_forms =
     match stmt_forms with
 	[] ->
-	  let (new_stmt, new_conds) = cm_yield (simplify_and_prune_stmt_until_fixpoint mapping fields stmt)
+	  let (new_stmt, new_conds) =
+	    cm_yield
+	      (cm_bind (simplify_and_prune_stmt_until_fixpoint mapping fields stmt)
+		 (fun sstmt -> sex_simplify_stmt mapping fields sstmt))
 	  in [{ stmt = new_stmt ;
 		form_conditions = simplify_conditions new_conds ;
 		matches = add_stmt_form_match fields new_stmt [] }]

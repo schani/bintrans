@@ -25,9 +25,11 @@ open Int64
 
 open Utils
 open Expr
+open Monad
 open Cond_monad
 open Target_alpha
 open Matcher
+open Pruner
 open Mapping
 open Explorer
 open Switcher
@@ -241,14 +243,24 @@ let main () =
     print_stmt (cfold_stmt fields stmt) ; print_string "when\n" ;
     iter (fun x -> print_expr x ; print_newline ()) conds ;;
 
-(* main ();; *)
+let test_sex () =
+  let (r1, r2, r3) = make_registers ()
+  in let stmt = make_ppc_rlwinm r1 (Register r2) (IntConst (IntField "sh")) (IntConst (IntField "mb")) (IntConst (IntField "me"))
+     and fields = [("sh", 8L); ("mb", 0L); ("me", 23L)]
+  in let (sstmt, conds) = cm_yield (simplify_and_prune_stmt_until_fixpoint mapping_ppc_to_alpha fields (alpha_wrap stmt))
+  in let (ssstmt, conds) = cm_yield (sex_simplify_stmt mapping_ppc_to_alpha fields sstmt)
+  in print_stmt (cfold_stmt [] ssstmt) ;;
 
-test_explore ();;
+(* main () ;; *)
 
-(* test_maybe ();; *)
+test_explore () ;;
 
-(* test_zapnot ();; *)
+(* test_maybe () ;; *)
 
-(* test_rotand (); *)
+(* test_zapnot () ;; *)
 
-exit 0;;
+(* test_rotand () ;; *)
+
+(* test_sex () ;; *)
+
+exit 0 ;;

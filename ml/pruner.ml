@@ -633,3 +633,21 @@ let prune_stmt mapping fields stmt =
 	(prune_expr mapping fields value (width_mask (mapping.needed_target_width register)))
 	(fun pvalue ->
 	  cm_return (Assign (register, pvalue)))
+
+(*** sex optimization ***)
+
+let rec optimize_sex_expr mapping fields expr =
+  cm_bind (apply_to_expr_subs_with_monad cm_return cm_bind (optimize_sex_expr mapping fields) expr)
+    (fun expr ->
+       match expr with
+	   UnaryWidth (Sex, width, Binary (BitAnd, arg1, arg2)) when is_const (cfold_expr fields arg2) ->
+	     cm_if fields (make_zero_or_full_p 8 (BinaryWidth (AShiftR, 8, expr_known mapping fields arg1,
+							       int_literal_expr (of_int (width * 8 - 1)))))
+	       (fun _ ->
+		  cm_return (bitand_expr arg1 (bitor_expr arg2 (int_literal_expr (lognot (width_mask width))))))
+	       (fun _ ->
+		  cm_return expr)
+	 | _ -> cm_return expr)
+
+let optimize_sex_stmt mapping fields stmt =
+  apply_to_stmt_subs_with_monad cm_return cm_bind (optimize_sex_expr mapping fields) stmt

@@ -46,3 +46,8 @@ let dummy_mapping =
     needed_target_width = (fun _ -> raise Not_supported_in_dummy_mapping) ;
     register_known = (fun _ -> raise Not_supported_in_dummy_mapping) ;
     register_bits = (fun _ -> raise Not_supported_in_dummy_mapping) }
+
+let make_sex_mapping mapping one =
+  { mapping with
+      register_known = (fun _ -> shift_left minus_one 31) ;
+      register_bits = (fun _ -> if one then shift_left minus_one 31 else zero) }
