@@ -135,6 +135,8 @@ typedef struct
     int free;
 } tmp_register_t;
 
+#define DONT_KNOW           -1
+
 typedef struct
 {
     int type;
@@ -145,6 +147,7 @@ typedef struct
     int last_insn_num;
     int live_at_start;
     int live_at_end;
+    int is_saved;
     reg_t preferred_native_reg;
     reg_t native_reg;
 } emu_register_t;
@@ -964,8 +967,17 @@ alloc_native_reg_for_emu_reg (reg_t emu_reg, int current_insn_num)
     if (emu_regs[l].dirty)
 	assert(emu_regs[l].live_at_end);
 
-    if (/* emu_regs[l].dirty */ emu_regs[l].live_at_end)
+    if (emu_regs[l].dirty)
+    {
 	store_reg(emu_regs[l].native_reg, l);
+	if (emu_regs[l].is_saved == DONT_KNOW)
+	    emu_regs[l].is_saved = 1;
+    }
+    else
+    {
+	if (emu_regs[l].is_saved == DONT_KNOW)
+	    emu_regs[l].is_saved = 0;
+    }
 
     native_reg = emu_regs[l].native_reg;
 
@@ -1017,6 +1029,7 @@ finish_fragment (void)
 		assert(0);
 
 	    emu_regs[i].dirty = 0;
+	    emu_regs[i].is_saved = DONT_KNOW;
 	}
     }
 
@@ -1086,31 +1099,16 @@ finish_fragment (void)
     fragment_entry.synced_native_addr = body_start;
 
     for (i = 0; i < NUM_FREE_INTEGER_REGS; ++i)
-    {
 	if (alloced_integer_regs[native_integer_regs[i]] == NO_REG)
 	    fragment_entry.alloced_integer_regs[i] = ALLOCED_REG_NONE;
 	else
-	{
-	    reg_t reg = alloced_integer_regs[native_integer_regs[i]];
+	    fragment_entry.alloced_integer_regs[i] = alloced_integer_regs[native_integer_regs[i]];
 
-	    fragment_entry.alloced_integer_regs[i] = reg;
-	    if (!all_regs_must_be_saved && emu_regs[reg].live_at_end)
-		fragment_entry.alloced_integer_regs[i] |= ALLOCED_REG_SAVED;
-	}
-    }
     for (i = 0; i < NUM_FREE_FLOAT_REGS; ++i)
-    {
 	if (alloced_float_regs[native_float_regs[i]] == NO_REG)
 	    fragment_entry.alloced_float_regs[i] = ALLOCED_REG_NONE;
 	else
-	{
-	    reg_t reg = alloced_float_regs[native_float_regs[i]];
-
-	    fragment_entry.alloced_float_regs[i] = reg;
-	    if (!all_regs_must_be_saved && emu_regs[reg].live_at_end)
-		fragment_entry.alloced_float_regs[i] |= ALLOCED_REG_SAVED;
-	}
-    }
+	    fragment_entry.alloced_float_regs[i] = alloced_float_regs[native_float_regs[i]];
 #endif
 
     /* instructions are patched and emitted; register allocation happens simultaneously */
@@ -1246,6 +1244,22 @@ finish_fragment (void)
 		break;
 	}
     }
+
+    for (i = 0; i < NUM_EMU_REGISTERS; ++i)
+	if (emu_regs[i].used && emu_regs[i].is_saved == DONT_KNOW)
+	    emu_regs[i].is_saved = emu_regs[i].live_at_end;
+
+#ifdef SYNC_BLOCKS
+    for (i = 0; i < NUM_FREE_INTEGER_REGS; ++i)
+	if (fragment_entry.alloced_integer_regs[i] != ALLOCED_REG_NONE
+	    && emu_regs[fragment_entry.alloced_integer_regs[i]].is_saved)
+	    fragment_entry.alloced_integer_regs[i] |= ALLOCED_REG_SAVED;
+
+    for (i = 0; i < NUM_FREE_FLOAT_REGS; ++i)
+	if (fragment_entry.alloced_float_regs[i] != ALLOCED_REG_NONE
+	    && emu_regs[fragment_entry.alloced_float_regs[i]].is_saved)
+	    fragment_entry.alloced_float_regs[i] |= ALLOCED_REG_SAVED;
+#endif
 
     /* jumps are patched */
     for (i = 0; i < num_labels; ++i)
