@@ -139,8 +139,10 @@ count_fragment_hash_entries (int *used, int *compiled)
 	if (fragment_hash_table[i].foreign_addr != (word_32)-1)
 	{
 	    ++*used;
+#ifdef NEED_COMPILER
 	    if (fragment_hash_table[i].native_addr != 0)
 		++*compiled;
+#endif
 	}
 }
 

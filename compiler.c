@@ -647,6 +647,7 @@ direct_emit (word_32 insn)
     }
 }
 
+#ifdef NEED_REGISTER_ALLOCATOR
 #ifdef ARCH_ALPHA
 void
 load_reg (reg_t native_reg, reg_t foreign_reg)
@@ -699,7 +700,6 @@ store_reg (reg_t native_reg, reg_t foreign_reg)
 }
 #endif
 
-#ifdef NEED_REGISTER_ALLOCATOR
 reg_t
 ref_reg (int foreign_reg, int reading, int writing, int type)
 {

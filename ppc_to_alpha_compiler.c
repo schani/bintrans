@@ -5017,45 +5017,55 @@ handle_subfe_insn (word_32 insn, word_32 pc)
 	}
 	else if (KILL_GPR(FIELD_RD))
 	{
-	    reg_t ra_reg, rb_reg, rd_reg, ca_reg;
-
-	    assert(FIELD_RD != FIELD_RA && FIELD_RD != FIELD_RB);
+	    reg_t ra_reg, rb_reg, rd_reg, ca_reg, tmp_reg;
 
 	    ca_reg = ref_ppc_xer_ca_r();
-	    rd_reg = ref_ppc_gpr_w(FIELD_RD);
+	    tmp_reg = alloc_tmp_integer_reg();
 
-	    emit(COMPOSE_XOR_IMM(ca_reg, 1, rd_reg));
+	    emit(COMPOSE_XOR_IMM(ca_reg, 1, tmp_reg));
 
 	    unref_integer_reg(ca_reg);
 	    ra_reg = ref_ppc_gpr_r(FIELD_RA);
 
-	    emit(COMPOSE_ADDL(ra_reg, rd_reg, rd_reg));
+	    emit(COMPOSE_ADDL(ra_reg, tmp_reg, tmp_reg));
 
 	    rb_reg = ref_ppc_gpr_r(FIELD_RB);
+	    rd_reg = ref_ppc_gpr_w(FIELD_RD);
 
-	    emit(COMPOSE_SUBL(rb_reg, rd_reg, rd_reg));
+	    emit(COMPOSE_SUBL(rb_reg, tmp_reg, rd_reg));
 
 	    unref_integer_reg(rb_reg);
 	    unref_integer_reg(ra_reg);
+	    free_tmp_integer_reg(tmp_reg);
 
 	    if (FIELD_RC)
 		gen_rc_code(rd_reg);
 
 	    unref_integer_reg(rd_reg);
-
 	}
 	else if (KILL_XER_CA)
 	{
-	    reg_t ra_reg, rb_reg, ca_reg, tmp_reg, rd_reg;
+	    reg_t ra_reg, rb_reg, ca_reg, tmp_reg;
 
-	    ca_reg = ref_ppc_xer_ca_rw();
-	    rd_reg = ref_ppc_gpr_w(FIELD_RD);
+	    ra_reg = ref_ppc_gpr_r(FIELD_RA);
 	    tmp_reg = alloc_tmp_integer_reg();
 
 	    emit(COMPOSE_NOT(ra_reg, tmp_reg));
+
+	    unref_integer_reg(ra_reg);
+
 	    emit(COMPOSE_ZAPNOT_IMM(tmp_reg, 15, tmp_reg));
+
+	    ca_reg = ref_ppc_xer_ca_rw();
+
 	    emit(COMPOSE_ADDQ(tmp_reg, ca_reg, ca_reg));
+
+	    rb_reg = ref_ppc_gpr_r(FIELD_RB);
+
 	    emit(COMPOSE_ZAPNOT_IMM(rb_reg, 15, tmp_reg));
+
+	    unref_integer_reg(rb_reg);
+
 	    emit(COMPOSE_ADDQ(tmp_reg, ca_reg, ca_reg));
 
 	    free_tmp_integer_reg(tmp_reg);
@@ -5064,8 +5074,6 @@ handle_subfe_insn (word_32 insn, word_32 pc)
 	    emit(COMPOSE_AND_IMM(ca_reg, 1, ca_reg));
 
 	    unref_integer_reg(ca_reg);
-	    unref_integer_reg(rb_reg);
-	    unref_integer_reg(ra_reg);
 	}
     }
 }
