@@ -1217,14 +1217,13 @@
   ((syscall))
   ("sc"))
 
-(define-insn slw
+(define-rc-insn slw ra
     ((opcd 31)
-     (xo1 24)
-     (rc 0))
+     (xo1 24))
   ((set (reg ra gpr) (if (bit-set-p (reg rb gpr) 5)
 			 0
 			 (shiftl (reg rs gpr) (zex (subreg 0 4 rb gpr))))))
-  ("slw r%u,r%u,r%u" ra rs rb))
+  ("~A r%u,r%u,r%u" ra rs rb))
 
 (define-rc-insn sraw ra
     ((opcd 31)

@@ -3953,8 +3953,17 @@ handle_slw_insn (word_32 insn, word_32 pc)
 
 	emit(COMPOSE_ADDL(ra_reg, 31, ra_reg));
 
+	if (FIELD_RC)
+	    gen_rc_code(ra_reg);
+
 	unref_integer_reg(ra_reg);
     }
+}
+
+static void
+handle_slwd_insn (word_32 insn, word_32 pc)
+{
+    handle_slw_insn(insn, pc);
 }
 
 static void
@@ -5433,6 +5442,11 @@ case 1584:
 /* SRAW */
 assert((insn & 0xFC0007FF) == 0x7C000630);
 handle_sraw_insn(insn, pc);
+break;
+case 49:
+/* SLW. */
+assert((insn & 0xFC0007FF) == 0x7C000031);
+handle_slwd_insn(insn, pc);
 break;
 case 48:
 /* SLW */
