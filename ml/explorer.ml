@@ -86,7 +86,8 @@ let rec sex_simplify_expr mapping fields expr =
 		if expr0 = expr1 then
 		  cm_return expr0
 		else
-		  cm_return expr))
+		  ( (* print_expr expr0 ; print_newline () ; print_expr expr1 ; print_newline () ; *)
+		  cm_return expr)))
 
 let sex_simplify_stmt mapping fields stmt =
   let optimize_and_simplify one stmt =
@@ -97,7 +98,7 @@ let sex_simplify_stmt mapping fields stmt =
   in cm_bind (apply_to_stmt_subs_with_monad cm_return cm_bind (sex_simplify_expr mapping fields) stmt)
        (fun sstmt ->
 	  if stmt <> sstmt then
-	    ( print_stmt stmt ; print_stmt sstmt )
+	    ( (* print_stmt stmt ; print_stmt sstmt *) )
 	  else
 	    () ;
 	  (make_bind2 cm_bind cm_bind)
@@ -175,4 +176,3 @@ let explore_all_fields stmt mapping fields target_insns =
     | _ -> stmts_so_far
   in
     explore [] fields []
-

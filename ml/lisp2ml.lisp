@@ -91,12 +91,23 @@
 ;; an ir macro is a list (lisp-name args needs-width body)
 (defvar *ir-macros* '())
 
-(defmacro defirmacro (name args body)
+(defun add-ir-macro (name args body)
   (multiple-value-bind (args needs-width)
       (if (eql (car args) 'width)
 	  (values (cdr args) t)
 	(values args nil))
-    `(push (list ',name ',args ',needs-width ',body) *ir-macros*)))
+    (let ((macro (list name args needs-width body)))
+      (push macro *ir-macros*)
+      macro)))
+
+(defmacro defirmacro (name args body)
+  `(add-ir-macro ',name ',args ',body))
+
+;; a machine macro is an ir macro
+(defvar *machine-macros* '())
+
+(defmacro defmachinemacro (name args body)
+  `(push (add-ir-macro ',name ',args ',body) *machine-macros*))
 
 ;; a simplify is a list (pattern expr)
 (defvar *simplifies* '())
@@ -109,6 +120,18 @@
 
 (defmacro defmatcher (name pattern cost-expr exec-format gen-format)
   `(push (list ',name ',pattern ',cost-expr ',exec-format ',gen-format) *matchers*))
+
+;; a field is a list (name bit-width)
+(defvar *fields* '())
+
+(defmacro deffields (fields)
+  `(setq *fields* ',fields))
+
+;; an insn is a list (name field-ranges stmt)
+(defvar *insns* '())
+
+(defmacro definsn (name field-ranges stmt)
+  `(push (list ',name ',field-ranges ',stmt) *insns*))
 
 ;; returns ml-name, kind-ml-name, num-args, and need-width
 ;; kind-ml-name is nil of the operator is a macro
@@ -141,7 +164,7 @@
 	  (if (eql type 'int)
 	      ml-name
 	      (error "variable ~A is of wrong type (should be int, but is ~A)" name type)))
-	(error "unbound symbol ~A" name))))
+      (error "unbound symbol ~A" name))))
 
 ;; a binding is a list of the form (lisp-name ml-name type) where type can be
 ;; int or expr
@@ -169,7 +192,9 @@
 		(cond ((integerp int-const)
 		       (format nil "IntLiteral (~AL)" int-const))
 		      ((symbolp int-const)
-		       (format nil "IntLiteral ~A" (lookup-int bindings int-const)))
+		       (if (assoc int-const *fields*)
+			   (format nil "IntField \"~A\"" (dcs int-const))
+			 (format nil "IntLiteral ~A" (lookup-int bindings int-const))))
 		      (t
 		       (error "illegal int const ~A" int-const))))))
 	   (convert-width (width)
@@ -183,6 +208,9 @@
 	     (case-match expr
 	       ((const int ?expr)
 		(convert expr))
+	       ((register ?reg)
+		(format nil "Register (GuestRegister (~A, Int))"
+			(convert-int-const reg)))
 	       ((load ?byte-order ?width ?addr)
 		(format nil "LoadBO (~A, ~A, ~A)"
 			(convert-byte-order byte-order)
@@ -207,6 +235,10 @@
 	       ((user-op ?name . ?args)
 		(format nil "UserOp (\"~A\", [~{~A~^ ; ~}])"
 			name (mapcar #'convert args)))
+	       ((set ?reg ?value)
+		(format nil "Assign (GuestRegister (~A, Int), ~A)"
+			(convert-int-const reg)
+			(convert-expr value '())))
 	       ((?op . ?args)
 		(multiple-value-bind (ml-name kind-ml-name num-args need-width)
 		    (lookup-operator op)
@@ -234,7 +266,9 @@
 		      ((eql expr 'nil)
 		       "ConditionConst false")
 		      ((symbolp expr)
-		       (lookup-expr expr))
+		       (if (assoc expr *fields*)
+			   (format nil "IntConst (IntField \"~A\")" (dcs expr))
+			 (lookup-expr expr)))
 		      (t
 		       (error "illegal expression ~A" expr)))))))
     (convert expr)))
@@ -471,22 +505,25 @@
 			      (convert-tilde (char format (1+ tilde-pos)) args (subseq format (+ tilde-pos 2)))))))))
     (convert format args)))
 
+(defun print-ir-macros (out macros)
+  (dolist (macro macros)
+    (destructuring-bind (name args needs-width body)
+	macro
+      (let* ((arg-bindings (mapcar #'(lambda (arg) (list arg (dcs arg) 'expr)) args))
+	     (bindings (if needs-width
+			   (cons '(width "(of_int width)" int) arg-bindings)
+			 arg-bindings)))
+	(format out "let make_~A~A~{ ~A~} = ~%  ~A~%"
+		(dcs name) (if needs-width " width" "") (mapcar #'dcs args)
+		(convert-expr body bindings))
+	(format out "let make_~A_pattern~A~{ ~A~} = ~%  ~A~%~%"
+		(dcs name) (if needs-width " width" "") (mapcar #'dcs args)
+		(convert-pattern body bindings))))))
+
 (defun make-ir-macros ()
   (with-open-file (out "irmacros.ml" :direction :output :if-exists :supersede)
     (format out "open Int64~%~%open Expr~%~%")
-    (dolist (macro (reverse *ir-macros*))
-      (destructuring-bind (name args needs-width body)
-	  macro
-	(let* ((arg-bindings (mapcar #'(lambda (arg) (list arg (dcs arg) 'expr)) args))
-	       (bindings (if needs-width
-			     (cons '(width "(of_int width)" int) arg-bindings)
-			   arg-bindings)))
-	  (format out "let make_~A~A~{ ~A~} = ~%  ~A~%"
-		  (dcs name) (if needs-width " width" "") (mapcar #'dcs args)
-		  (convert-expr body bindings))
-	  (format out "let make_~A_pattern~A~{ ~A~} = ~%  ~A~%~%"
-		  (dcs name) (if needs-width " width" "") (mapcar #'dcs args)
-		  (convert-pattern body bindings)))))))
+    (print-ir-macros out (reverse *ir-macros*))))
 
 (defun make-simplifies ()
   (with-open-file (out "simplifiers.ml" :direction :output :if-exists :supersede)
@@ -570,3 +607,18 @@
     (format out "let ~A = [ ~{~A_matcher~^ ; ~} ]~%" matchers-name (mapcar #'dcs (mapcar #'first (reverse *matchers*))))
     (format out "let ~A = [ ~{~A_printer~^ ; ~} ]~%" printers-name (mapcar #'dcs (mapcar #'first (reverse *matchers*))))
     (format out "let ~A = [ ~{~A_gen_gen~^ ; ~} ]~%" gen-gens-name (mapcar #'dcs (mapcar #'first (reverse *matchers*))))))
+
+(defun make-insns (filename machine-name)
+  (with-open-file (out filename :direction :output :if-exists :supersede)
+    (format out "open Expr~%open Irmacros~%open Machine~%~%")
+    (print-ir-macros out (reverse *machine-macros*))
+    (format out "let ~A_insns = [~%" machine-name)
+    (dolist (insn (reverse *insns*))
+      (destructuring-bind (name field-ranges stmt)
+	  insn
+	(format out "  { machine_insn_name = \"~A\" ;~%    insn_stmt = ~A ;~%    explore_fields = [ ~{(\"~A\", ~AL, ~AL)~^ ; ~} ] } ;~%"
+		(dcs name) (convert-expr stmt '())
+		(mappend #'(lambda (r)
+			     (list (dcs (first r)) (second r) (third r)))
+			 field-ranges))))
+    (format out "    ]~%")))

@@ -18,5 +18,6 @@ utils.ml
 build.lisp
 irmacros.lisp
 lisp2ml.lisp
+machine_ppc.lisp
 simplify.lisp
 target_alpha.lisp

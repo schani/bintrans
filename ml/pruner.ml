@@ -64,7 +64,7 @@ let unmemoized_expr_known known_one_arg bits_one_arg mapping fields expr =
 	  bool_to_int_expr (BinaryWidth (IntEqual, width, known arg, full_mask))
       | IntSign -> bool_to_int_expr (is_bit_set_expr (known arg) (int_literal_expr (of_int (width * 8 - 1))))
       | Sex -> UnaryWidth (Sex, width, known arg)
-      | Zex -> UnaryWidth (Zex, width, known arg)
+      | Zex -> bitor_expr (UnaryWidth (Zex, width, known arg)) (int_literal_expr (shift_left minus_one (width * 8)))
   and known_binary op arg1 arg2 =
     match op with
 	FloatEqual | FloatLess -> empty_mask
@@ -125,7 +125,7 @@ let unmemoized_expr_known known_one_arg bits_one_arg mapping fields expr =
     | IntConst _ -> empty_mask
     | FloatConst _ -> full_mask
     | ConditionConst _ -> full_mask
-    | Register _ -> empty_mask
+    | Register reg -> int_literal_expr (mapping.register_known reg)
     | LoadBO _ -> empty_mask
     | Unary (op, arg) -> known_unary op arg
     | UnaryWidth (op, width, arg) -> known_unary_width op width arg
@@ -253,7 +253,7 @@ let unmemoized_expr_bits bits_one_arg known_one_arg mapping fields expr =
     | IntConst _ -> empty_mask
     | FloatConst float -> int_literal_expr (bits_of_float float)
     | ConditionConst bool -> int_literal_expr (bool_to_int bool)
-    | Register _ -> empty_mask
+    | Register reg -> int_literal_expr (mapping.register_bits reg)
     | LoadBO _ -> empty_mask
     | Unary (op, arg) -> bits_unary op arg
     | UnaryWidth (op, width, arg) -> bits_unary_width op width arg
@@ -598,7 +598,12 @@ let unmemoized_prune_expr prune_one_arg mapping fields expr needed =
 		  (prune cons needed)
 		  (prune alt needed)
 		  (fun pcondition pcons palt ->
-		     return (If (pcondition, pcons, palt)))
+		     if is_const (cfold_expr fields pcondition) then
+		       if_prune pcondition
+			 (fun _ -> return pcons)
+			 (fun _ -> return palt)
+		     else
+		       return (If (pcondition, pcons, palt)))
 	    | UserOp (name, args) ->
 		match args with
 		    [] -> return (UserOp (name, []))

@@ -178,7 +178,7 @@ type int_const =
   | IntField of input_name
 
 type register =
-    GuestRegister of int * value_type
+    GuestRegister of int_const * value_type
   | HostRegister of int * value_type
   | IntermediateRegister of expr
 and expr =
@@ -269,10 +269,32 @@ let stmt_sub_exprs stmt =
     Store (byte_order, width, sub1, sub2) -> [ sub1 ; sub2 ]
   | Assign (register, sub) -> [ sub ]
 
+(* returns a list of tuples (reg, read, write) where reg is a GuestRegister,
+   read is true if the register is read from, write is true if the register is
+   written to *)
+let collect_stmt_guest_regs stmt =
+  let rec add_reg (reg, read, write) regs =
+    match regs with
+	[] -> [ (reg, read, write) ]
+      | (reg1, read1, write1) :: rest when reg = reg1 ->
+	  (reg, read or read1, write or write1) :: rest
+      | r :: rest ->
+	  r :: (add_reg (reg, read, write) rest)
+  and collect_expr regs expr =
+    let regs = fold_left collect_expr regs (expr_sub_exprs expr)
+    in match expr with
+	Register (GuestRegister _ as reg) -> add_reg (reg, true, false) regs
+      | _ -> regs
+  in let toplevel_regs =
+      match stmt with
+	  Assign (GuestRegister _ as reg, _) -> [ (reg, false, true) ]
+	| _ -> []
+  in fold_left collect_expr toplevel_regs (stmt_sub_exprs stmt)
+
 let is_const expr =
-  match expr with
-      IntConst (IntLiteral _) | FloatConst _ | ConditionConst _ -> true
-    | _ -> false
+    match expr with
+	IntConst (IntLiteral _) | FloatConst _ | ConditionConst _ -> true
+      | _ -> false
 
 (* an expression is register const if its value only depends on fields, but
    not on registers or memory *)
@@ -674,12 +696,6 @@ let print_byte_order byte_order =
 let print_value_type value_type =
   print_string (value_type_string value_type)
 
-let print_register register =
-  match register with
-      GuestRegister (num, value_type) -> print_string "G" ; print_value_type value_type ; print_int num
-    | HostRegister (num, value_type) -> print_string "H" ; print_value_type value_type ; print_int num
-    | IntermediateRegister expr -> print_string "*IR*"
-
 let print_input_name input_name =
   print_string "?" ; print_string input_name
 
@@ -687,6 +703,12 @@ let print_int_const const =
   match const with
       IntLiteral int -> print_string (to_string int)
     | IntField input_name -> print_input_name input_name
+
+let print_register register =
+  match register with
+      GuestRegister (num, value_type) -> print_string "G" ; print_value_type value_type ; print_int_const num
+    | HostRegister (num, value_type) -> print_string "H" ; print_value_type value_type ; print_int num
+    | IntermediateRegister expr -> print_string "*IR*"
 
 let rec print_expr expr =
   let print_args exprs =

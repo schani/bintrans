@@ -22,6 +22,7 @@
 
 open Int64
 open List
+open String
 
 open Utils
 open Expr
@@ -78,11 +79,12 @@ let lookup_intermediate_reg allocation expr =
 let int_const_to_c int_const =
   match int_const with
       IntLiteral const -> (to_string const) ^ "LL"
-    | IntField input_name -> "field_" ^ input_name
+    | IntField input_name -> "FIELD_" ^ (uppercase input_name)
 
 let register_to_c allocation reg =
   match reg with
-      GuestRegister (num, _) -> "guest_reg_" ^ (string_of_int num)
+      GuestRegister (IntLiteral num, _) -> "guest_reg_" ^ (to_string num)
+    | GuestRegister (IntField name, _) -> "guest_reg_" ^ name
     | HostRegister (num, _) -> "host_reg_" ^ (string_of_int num)
     | IntermediateRegister expr -> "interm_reg_" ^ (string_of_int (lookup_intermediate_reg allocation expr))
 
@@ -131,8 +133,4 @@ let stmt_to_c allocation stmt =
 
 (*** generating generators ***)
 
-let register_to_c_gen allocation reg =
-  match reg with
-      GuestRegister (num, _) -> "guest_reg_" ^ (string_of_int num)
-    | HostRegister (num, _) -> "host_reg_" ^ (string_of_int num)
-    | IntermediateRegister expr -> "interm_reg_" ^ (string_of_int (lookup_intermediate_reg allocation expr))
+let register_to_c_gen = register_to_c

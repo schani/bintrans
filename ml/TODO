@@ -1,3 +1,6 @@
+sex optimizer must not only try either all registers with zero or all
+with one but all combinations!
+
 ask on comp.lang.functional about user op monad problem.
 
 check out why rlwinm with sex doesn't use the rotl alpha matcher

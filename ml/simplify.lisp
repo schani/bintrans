@@ -33,3 +33,14 @@
 
 (defsimplify (ashiftr ? 0 ?)
     0)
+
+;; sign extends
+
+(defsimplify (sex 4 (sex 1 ?x))
+    (sex 1 x))
+
+(defsimplify (sex 4 (sex 2 ?x))
+    (sex 2 x))
+
+(defsimplify (sex 2 (sex 1 ?x))
+    (sex 1 x))

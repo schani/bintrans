@@ -20,6 +20,8 @@
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  *)
 
+open List
+
 open Expr
 
 exception Not_supported_in_dummy_machine
@@ -28,6 +30,11 @@ type machine =
     { addr_width : int ;
       register_width : register -> int }
 
+type machine_insn =
+    { machine_insn_name : string ;
+      insn_stmt : stmt ;
+      explore_fields : (string * int64 * int64) list }
+
 let machine_ppc =
   { addr_width = 4 ;
     register_width = (fun _ -> 4) }
@@ -35,3 +42,6 @@ let machine_ppc =
 let dummy_machine =
   { addr_width = 8 ;
     register_width = (fun _ -> raise Not_supported_in_dummy_machine) }
+
+let find_insn insns name =
+  find (fun i -> i.machine_insn_name = name) insns

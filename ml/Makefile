@@ -1,10 +1,10 @@
 WARN_OPTS = -w A -w e
 
-#OC = ocamlc -g $(WARN_OPTS)
-#OEXT = cmo
-#ENGINE = engine
-OC = ocamlopt $(WARN_OPTS)
-OEXT = cmx
+OC = ocamlc -g $(WARN_OPTS)
+OEXT = cmo
+ENGINE = engine
+#OC = ocamlopt $(WARN_OPTS)
+#OEXT = cmx
 AEXT = cma
 
 ENGINE_OBJS = monad.$(OEXT) memoize.$(OEXT) bitmath.$(OEXT) utils.$(OEXT) \
@@ -16,6 +16,7 @@ ENGINE_OBJS = monad.$(OEXT) memoize.$(OEXT) bitmath.$(OEXT) utils.$(OEXT) \
 	      pruner.$(OEXT) \
 	      explorer.$(OEXT) \
 	      cgen.$(OEXT) switcher.$(OEXT) \
+	      machine_ppc.$(OEXT) \
 	      target_alpha.$(OEXT)
 
 TEST_OBJS = test.$(OEXT)
@@ -31,8 +32,8 @@ engine : $(ENGINE_OBJS)
 %.$(OEXT) : %.ml
 	$(OC) -c $<
 
-simplifiers.ml irmacros.ml target_alpha.ml : simplify.lisp irmacros.lisp target_alpha.lisp lisp2ml.lisp
+simplifiers.ml irmacros.ml target_alpha.ml machine_ppc.ml : simplify.lisp irmacros.lisp target_alpha.lisp machine_ppc.lisp lisp2ml.lisp
 	clisp build.lisp
 
 clean :
-	rm -f *.cmo *.cmx *.o *.cmi simplifiers.ml irmacros.ml target_alpha.ml test engine *~
+	rm -f *.cmo *.cmx *.o *.cmi simplifiers.ml irmacros.ml target_alpha.ml machine_ppc.ml test engine *~
