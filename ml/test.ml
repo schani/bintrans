@@ -23,6 +23,7 @@
 open List
 open Int64
 
+open Utils
 open Expr
 open Cond_monad
 open Target_alpha
@@ -31,6 +32,7 @@ open Explorer
 open Switcher
 open Cgen
 open Irmacros
+open Uncertainty
 
 let make_rotl4 =
   make_rotl 4
@@ -44,6 +46,11 @@ let make_ppc_andc ra rs rb =
 let make_ppc_mask mb me =
   make_mask (Binary (IntSub, IntConst (IntLiteral 31L), me))
     (Binary (IntSub, IntConst (IntLiteral 31L), mb))
+
+let make_ppc_rlwimi ra rs sh mb me =
+  Assign (ra,
+	  bitor_expr (bitand_expr (make_rotl4 rs sh) (make_ppc_mask mb me))
+	    (bitand_expr (Register ra) (make_ppc_mask mb me)))
 
 let make_ppc_rlwinm ra rs sh mb me =
   Assign (ra, Binary (BitAnd, make_rotl4 rs sh, make_ppc_mask mb me))
@@ -61,14 +68,24 @@ let rec repeat_until_fixpoint fn data =
     repeat_until_fixpoint fn ndata
 *)
 
-let print_target_insns allocation best_matches_alist match_data =
+let sort_match_datas match_datas =
+  sort (fun a b ->
+	  match (a.cumulative_cost, b.cumulative_cost) with
+	      (Certainly _, _) -> 1
+	    | (_, Certainly _) -> -1
+	    | (Maybe (c1, _), Maybe (c2, _)) -> c1 - c2)
+    match_datas
+
+let print_target_insns allocation best_matches_alist match_datas =
   let rec print_bindings exprs_printed bindings =
     match bindings with
 	[] -> exprs_printed
       | ExprBinding (name, expr) :: rest ->
 	  let exprs_printed =
 	    if not (mem expr exprs_printed) then
-	      expr :: (print exprs_printed best_matches_alist (assoc expr best_matches_alist).expr_match_data)
+	      expr :: (print_exprs exprs_printed best_matches_alist
+			 (sort_match_datas (map (fun m -> m.expr_match_data)
+					      (assoc expr best_matches_alist))))
 	    else
 	      exprs_printed
 	  in print_bindings exprs_printed rest
@@ -81,13 +98,71 @@ let print_target_insns allocation best_matches_alist match_data =
     in let expr_bindings = print_bindings exprs_printed expr_bindings
     in print_string (printer allocation match_data.bindings) ; print_newline () ;
       expr_bindings
-  in let exprs_printed = print [] best_matches_alist match_data
+  and print_exprs exprs_printed best_matches_alist match_datas =
+    match match_datas with
+	match_data :: rest ->
+	  (match match_data.cumulative_cost with
+	       Maybe (_, cond) ->
+		 if rest <> [] then
+		   (print_string "if (" ; print_string (expr_to_c [] cond) ; print_string ") {\n" ;
+		    let _ = print exprs_printed best_matches_alist match_data
+		    in print_string "} else " ;
+		      let _ = print_exprs exprs_printed best_matches_alist rest ;
+		      in exprs_printed)
+		 else
+		   raise No_match
+	     | Certainly _ ->
+		 if rest = [] then
+		   (print_string "{\n" ;
+		    let exprs_printed = print exprs_printed best_matches_alist match_data
+		    in print_string "}\n" ;
+		      exprs_printed)
+		 else
+		   raise No_match)
+      |	[] -> raise No_match
+  in let _ = print_exprs [] best_matches_alist (sort_match_datas match_datas)
   in ()
 
-let test_expore () =
+let print_test_func name stmt fields num_int_regs =
+  let rec print_fields fields =
+    match fields with
+	[] -> ()
+      |	[name] ->
+	  print_string "word_64 field_" ; print_string name
+      | name :: rest ->
+	  print_string "word_64 field_" ; print_string name ; print_string ", ";
+	  print_fields rest
+  in
+    print_string "word_64\ntest_" ; print_string name ; print_string " (" ; print_fields (stmt_fields stmt) ; print_string ", " ;
+    print_string (join_strings ", " (map0_int (fun i -> "word_64 guest_reg_" ^ (string_of_int i)) 2 num_int_regs)) ;
+    print_string ")\n{\nword_64 guest_reg_1;\n\n" ;
+    let stmt_forms = explore_all_fields stmt fields alpha_matchers
+    in let switch = switch_cases (map (fun form -> (form.form_conditions, form)) stmt_forms)
+    in print_switch (fun form ->
+		       let switch = switch_cases (map (fun form_match -> (form_match.match_conditions, form_match)) form.matches)
+		       in print_switch (fun form_match ->
+					  let allocation = make_allocation form_match.best_sub_matches form_match.match_datas
+					  in print_string "{\n" ;
+					    if allocation <> [] then
+					      (print_string "word_64 " ;
+					       print_string (join_strings ", " (map0_int (fun i -> "interm_reg_" ^ (string_of_int i)) 1 (length allocation))) ;
+					       print_string ";\n\n" ;)
+					    else
+					      () ;
+					    print_target_insns allocation form_match.best_sub_matches form_match.match_datas ;
+					    print_string "}\n")
+			    switch)
+	 switch ;
+      print_string "\nreturn guest_reg_1;\n}\n\n"
+
+let make_registers () =
   let r1 = GuestRegister (1, Int)
   and r2 = GuestRegister (2, Int)
   and r3 = GuestRegister (3, Int)
+  in (r1, r2, r3)
+
+let test_explore () =
+  let (r1, r2, r3) = make_registers ()
   in let stmt1 = make_ppc_andc r1 r2 r3
   and stmt2 = Assign (r1, Binary (BitAnd, Unary (BitNeg, Register r2), Register r3))
   and stmt3 = Assign (r1, (make_rotl4 (Register r2) (IntConst (IntLiteral 8L))))
@@ -95,29 +170,34 @@ let test_expore () =
   and stmt5 = Assign (r1, make_mask (IntConst (IntLiteral 8L)) (IntConst (IntLiteral 15L)))
   and stmt6 = make_ppc_rlwinm r1 (Register r2) (IntConst (IntField "sh")) (IntConst (IntField "mb")) (IntConst (IntField "me"))
   and stmt7 = make_ppc_rlwnm r1 (Register r2) (Register r3) (IntConst (IntField "mb")) (IntConst (IntField "me"))
-(*  and fields = [("sh", 16L); ("mb", 16L); ("me", 31L)]
-  in let stmt = repeat_until_fixpoint (fun stmt -> (cm_value (prune_stmt fields (cm_value (simplify_stmt fields stmt))))) stmt6
-  in print_stmt stmt ;
-  let (best_stmt_match, best_sub_matches_alist) = recursively_match_stmt fields stmt alpha_insns
-  in print_whole_match best_stmt_match best_sub_matches_alist ;
+  and stmt8 = make_ppc_rlwimi r1 (Register r2) (IntConst (IntField "sh")) (IntConst (IntField "mb")) (IntConst (IntField "me"))
+  in
+    print_test_func "rlwinm" stmt6 [("sh", 0L, 32L); ("mb", 0L, 32L); ("me", 0L, 32L)] 2
+(*
+;
+    print_test_func "rlwnm" stmt7 [("mb", 0L, 32L); ("me", 0L, 32L)] 3 ;
+    print_test_func "rlwimi" stmt8 [("sh", 0L, 32L); ("mb", 0L, 32L); ("me", 0L, 32L)] 2
 *)
-  (* in let stmt_forms = explore_all_fields stmt6 [("sh", 0L, 32L); ("mb", 0L, 32L); ("me", 0L, 32L)] alpha_matchers *)
-  in let stmt_forms = explore_all_fields stmt7 [("mb", 0L, 32L); ("me", 0L, 32L)] alpha_matchers
-  in let switch = switch_cases (map (fun form -> (form.form_conditions, form)) stmt_forms)
-  in print_switch (fun form ->
-		     let switch = switch_cases (map (fun form_match -> (form_match.match_conditions, form_match)) form.matches)
-		     in print_switch (fun form_match ->
-					let allocation = make_allocation form_match.best_sub_matches form_match.match_data
-					in print_string "  " ;
-					  print_target_insns allocation form_match.best_sub_matches form_match.match_data ;
-					  print_newline ())
-			  switch)
-       switch
+
+let test_maybe () =
+  let (r1, r2, r3) = make_registers ()
+  in let stmt = Assign (r1, Binary (BitAnd, Register r2, IntConst (IntField "imm")))
+  in print_test_func "and" stmt [] 2
+
+let test_zapnot () =
+  let (r1, r2, r3) = make_registers ()
+  in let stmt = make_ppc_rlwinm r1 (Register r2) (IntConst (IntField "sh")) (IntConst (IntField "mb")) (IntConst (IntField "me"))
+  in
+    print_test_func "rlwinm" stmt [("sh", 0L, 1L); ("mb", 8L, 9L); ("me", 23L, 24L)] 2
+
+let test_rotand () =
+  let (r1, r2, r3) = make_registers ()
+  in let stmt = Assign (r1, bitand_expr (shiftl_expr (Register r2) (IntConst (IntField "sh"))) (bitmask_expr (IntConst (IntField "mb")) (IntConst (IntField "me"))))
+  in 
+    print_test_func "rotand" stmt [("sh", 9L, 10L); ("mb", 0L, 16L); ("me", 0L, 16L)] 2
 
 let main () =
-  let r1 = GuestRegister (1, Int)
-  and r2 = GuestRegister (2, Int)
-  and r3 = GuestRegister (3, Int)
+  let (r1, r2, r3) = make_registers ()
   in let stmt1 = Assign (r1, Binary (BitAnd, Binary (ShiftL, Register r2, IntConst (IntField "sh")),
 				     (make_mask (int_literal_expr 0L) (int_literal_expr 15L))))
      and stmt2 = make_ppc_rlwinm r1 (Register r2) (IntConst (IntField "sh")) (IntConst (IntField "mb")) (IntConst (IntField "me"))
@@ -131,6 +211,12 @@ let main () =
 
 (* main ();; *)
 
-test_expore ();;
+test_explore ();;
+
+(* test_maybe ();; *)
+
+(* test_zapnot ();; *)
+
+(* test_rotand (); *)
 
 exit 0;;

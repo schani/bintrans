@@ -11,7 +11,7 @@
   (when (and (int-zero-p 8 (bit-and i #xffff))
 	     (zero-or-full-p 8 (ashiftr 8 i 31)))
     1)
-  ("~A = ~A << 16;" rs i))
+  ("~A = ~A;" rs i))
 
 (defmatcher load-int
   (set ?rs (any-int ?i))
@@ -31,6 +31,12 @@
 (defmatcher and-imm
   (set ?rs (bit-and (register ?ra) (any-int ?i)))
   (when (int-zero-p 8 (lshiftr 8 i 8))
+    1)
+  ("~A = ~A & ~A;" rs ra i))
+
+(defmatcher zapnot-imm
+  (set ?rs (bit-and (register ?ra) (any-int ?i)))
+  (when (user-op "IsMaskMask" i 8)
     1)
   ("~A = ~A & ~A;" rs ra i))
 
@@ -115,4 +121,4 @@
 (defmatcher zapnot-imm-sll-srl-bis
   (set ?rs (rotl 4 (register ?ra) (register ?rb)))
   4
-  ("do { word_64 tmp = (~A & 0xffffffff) << ~A; ~A = tmp | (tmp >> 32); }" ra rb rs))
+  ("{ word_64 tmp = (~A & 0xffffffff) << ~A; ~A = tmp | (tmp >> 32); }" ra rb rs))

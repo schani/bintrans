@@ -1,3 +1,25 @@
+(*
+ * bitmath.ml
+ *
+ * bintrans
+ *
+ * Copyright (C) 2004 Mark Probst
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *)
+
 open Int64
 
 (*** single bits ***)
@@ -33,6 +55,11 @@ let lshiftr =
 let ashiftr =
   generic_shift shift_right
 
+(*** bitsets ***)
+
+let bitsubset sub super =
+  (logand sub super) = sub
+
 (*** masks ***)
 
 let bitmask s l =
@@ -62,6 +89,20 @@ let rec high_mask int =
   else
     logor (shift_right_logical (high_mask (shift_left int 1)) 1) (shift_left one 63)
 
+let is_mask_mask m w =
+  let submask =
+    sub (shift_left one w) one
+  in let rec check m =
+      if m = zero then
+	true
+      else
+	let low_mask = logand m submask
+	in if (low_mask = zero) || (low_mask = submask) then
+	    check (shift_right_logical m w)
+	  else
+	    false
+  in check m
+
 (*** extracting/inserting ***)
 
 let extract_bits x s l =
@@ -76,11 +117,6 @@ let insert_bits x y s l =
 let rec int_parity int =
   if int = 0L then 0L
   else logxor (logand int 1L) (int_parity (shift_right_logical int 1))
-
-(*** bitsets ***)
-
-let bitsubset sub super =
-  (logand sub super) = sub
 
 (*** comparisons ***)
 

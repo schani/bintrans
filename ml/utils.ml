@@ -1,5 +1,5 @@
 (*
- * expr.ml
+ * utils.ml
  *
  * bintrans
  *
@@ -20,18 +20,36 @@
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  *)
 
-let make_bind2 bind1 bind2 =
-  fun value1 value2 fn ->
-    bind1 value1
-      (fun value1_expr ->
-	bind2 value2
-	  (fun value2_expr ->
-	    fn value1_expr value2_expr))
+open List
 
-let make_bind3 bind1 bind2 bind3 =
-  fun value1 value2 value3 fn ->
-    (make_bind2 bind1 bind2) value1 value2
-      (fun value1_expr value2_expr ->
-	bind3 value3
-	  (fun value3_expr ->
-	    fn value1_expr value2_expr value3_expr))
+let map0_int f start stop =
+  let rec map i =
+    if i > stop then
+      []
+    else
+      (f i) :: map (i + 1)
+  in map start
+
+let map_int f l start =
+  let rec map l i =
+    match l with
+	[] -> []
+      | x :: rest ->
+	  (f x i) :: (map rest (i + 1))
+  in map l start
+
+let join_strings sep strs =
+  match strs with
+      [] -> ""
+    | first :: rest ->
+	fold_left (fun a b -> a ^ sep ^ b) first rest
+
+let rec uniq lst =
+  match lst with
+      [] -> []
+    | x :: xs ->
+	let uxs = uniq xs
+	in if mem x uxs then
+	    uxs
+	  else
+	    x :: uxs

@@ -129,6 +129,7 @@ let unmemoized_expr_known known_one_arg bits_one_arg fields expr =
 	let kcons = known cons
 	and kalt = known alt
 	in bitand_expr kcons kalt
+    | UserOp _ -> empty_mask
   in if is_const (cfold_expr fields expr) then
     full_mask
   else
@@ -250,6 +251,7 @@ let unmemoized_expr_bits bits_one_arg known_one_arg fields expr =
 	| _ -> empty_mask)
     | If (condition, cons, alt) ->
 	bitand_expr (bits cons) (bits alt)
+    | UserOp _ -> empty_mask
   in if is_const (cfold_expr fields expr) then
       match expr_value_type expr with
 	  Int -> expr
@@ -275,8 +277,8 @@ let unmemoized_prune_expr prune_one_arg fields expr needed =
     prune_one_arg (fields, expr, needed)
   and return = cm_return
   and let1 = cm_bind
-  and let2 = (make_bind2 cm_bind)
-  and let3 = (make_bind3 cm_bind)
+  and let2 = (make_bind2 cm_bind cm_bind)
+  and let3 = (make_bind3 cm_bind cm_bind cm_bind)
   and if_prune = cm_if fields
   and bits expr =
     expr_bits fields expr
@@ -558,7 +560,20 @@ let unmemoized_prune_expr prune_one_arg fields expr needed =
 		  (prune cons needed)
 		  (prune alt needed)
 		  (fun pcondition pcons palt ->
-		     return (If (pcondition, pcons, palt)))))
+		     return (If (pcondition, pcons, palt)))
+	    | UserOp (name, args) ->
+		match args with
+		    [] -> return (UserOp (name, []))
+		  | [a] ->
+		      let1 (prune a full_mask)
+			(fun pa -> return (UserOp (name, [pa])))
+		  | [a ; b] ->
+		      let2 (prune a full_mask) (prune b full_mask)
+			(fun pa pb -> return (UserOp (name, [pa ; pb])))
+		  | [a ; b ; c] ->
+		      let3 (prune a full_mask) (prune b full_mask) (prune c full_mask)
+			(fun pa pb pc -> return (UserOp (name, [pa ; pb ; pc])))
+		  | _ -> raise User_op_args_unhandled))
   in unmemoized_prune expr needed
 
 let rec prune_expr_one_arg =
@@ -570,7 +585,7 @@ and prune_expr fields expr needed =
 let prune_stmt fields stmt =
   match stmt with
     Store (byte_order, width, addr, value) ->
-      (make_bind2 cm_bind)
+      (make_bind2 cm_bind cm_bind)
 	(prune_expr fields addr (width_mask (machine_addr_width ())))
 	(prune_expr fields value (width_mask width))
 	(fun paddr pvalue ->

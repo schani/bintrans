@@ -1,6 +1,29 @@
+(*
+ * cgen.ml
+ *
+ * bintrans
+ *
+ * Copyright (C) 2004 Mark Probst
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *)
+
 open Int64
 open List
 
+open Utils
 open Expr
 open Matcher
 
@@ -12,29 +35,29 @@ type printer = (string * ((input_name * int64) list -> allocation -> binding lis
 
 (*** allocation of intermediate registers ***)
 
-let map_int f l start =
-  let rec map l i =
-    match l with
-	[] -> []
-      | x :: rest ->
-	  (f x i) :: (map rest (i + 1))
-  in map l start
-
-let make_allocation best_matches_alist match_data =
+let make_allocation best_matches_alist match_datas =
   let rec make_for_match_data match_data =
     make match_data.bindings
+  and make_for_match_datas match_datas so_far =
+    match match_datas with
+	[] -> so_far
+      | m :: rest ->
+	  let so_far = make_for_match_data m so_far
+	  in make_for_match_datas rest so_far
+  and make_for_expr_matches expr_matches =
+    make_for_match_datas (map (fun m -> m.expr_match_data) expr_matches)
   and make_for_binding binding so_far =
     match binding with
 	RegisterBinding (_, IntermediateRegister expr) ->
 	  if mem expr so_far then
 	    so_far
 	  else
-	    make_for_match_data (assoc expr best_matches_alist).expr_match_data (expr :: so_far)
+	    make_for_expr_matches (assoc expr best_matches_alist) (expr :: so_far)
       | ExprBinding (_, expr) ->
 	  if mem expr so_far then
 	    so_far
 	  else
-	    make_for_match_data (assoc expr best_matches_alist).expr_match_data so_far
+	    make_for_expr_matches (assoc expr best_matches_alist) so_far
       | _ -> so_far
   and make bindings so_far =
     match bindings with
@@ -42,7 +65,7 @@ let make_allocation best_matches_alist match_data =
       | binding :: rest ->
 	  let so_far = make_for_binding binding so_far
 	  in make rest so_far
-  in map_int (fun x i -> (x, i)) (make_for_match_data match_data []) 1
+  in map_int (fun x i -> (x, i)) (make_for_match_datas match_datas []) 1
 
 let lookup_intermediate_reg allocation expr =
   try
@@ -94,6 +117,8 @@ let expr_to_c allocation expr =
 	    "insert(" ^ (expr_to_c arg1) ^ "," ^ (expr_to_c arg2) ^ "," ^ (int_const_to_c start) ^ "," ^ (int_const_to_c length) ^ ")"
 	| If (condition, cons, alt) ->
 	    "(" ^ (expr_to_c condition) ^ "?" ^ (expr_to_c cons) ^ ":" ^ (expr_to_c alt) ^ ")"
+	| UserOp (name, args) ->
+	    "userop_" ^ name ^ "(" ^ (join_strings ", " (map expr_to_c args)) ^ ")"
   in expr_to_c expr
 
 let stmt_to_c allocation stmt =

@@ -1,6 +1,29 @@
+(*
+ * explorer.ml
+ *
+ * bintrans
+ *
+ * Copyright (C) 2004 Mark Probst
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *)
+
 open Int64
 open List
 
+open Utils
 open Cond_monad
 open Expr
 open Matcher
@@ -31,16 +54,6 @@ let simplify_and_prune_stmt_until_fixpoint =
 
 (*** simplifying the conditions ***)
 
-let rec uniq lst =
-  match lst with
-      [] -> []
-    | x :: xs ->
-	let uxs = uniq xs
-	in if mem x uxs then
-	    uxs
-	  else
-	    x :: uxs
-
 let simplify_conditions conds =
   let prune_and_simplify x =
     fst (cm_yield (simplify_and_prune_expr_until_fixpoint [] x))
@@ -54,9 +67,9 @@ let fast_simplify_conditions conds =
 (*** exploring all field values ***)
 
 type stmt_form_match =
-    { match_data : match_data ;
+    { match_datas : match_data list ;
       match_conditions : expr list ;
-      best_sub_matches : (expr * expr_match) list }
+      best_sub_matches : (expr * expr_match list) list }
 
 type stmt_form =
     { stmt : stmt ;
@@ -67,11 +80,11 @@ let explore_all_fields stmt fields target_insns =
   let rec add_stmt_form_match fields stmt matches =
     match matches with
 	[] ->
-	  let (stmt_match, best_sub_matches, conditions) = recursively_match_stmt fields stmt target_insns
-	  in [{ match_data = stmt_match.stmt_match_data ;
+	  let (stmt_matches, best_sub_matches, conditions) = recursively_match_stmt fields stmt target_insns
+	  in [{ match_datas = map (fun m -> m.stmt_match_data) stmt_matches ;
 		match_conditions = simplify_conditions conditions ;
 		best_sub_matches = best_sub_matches }]
-      | { match_data = match_data ;
+      | { match_datas = match_datas ;
 	  match_conditions = conditions ;
 	  best_sub_matches = best_sub_matches } as stmt_form_match :: rest_matches ->
 	  if for_all (fun c ->

@@ -204,6 +204,9 @@
 			(convert condition)
 			(convert consequent)
 			(convert alternative)))
+	       ((user-op ?name . ?args)
+		(format nil "UserOp (\"~A\", [~{~A~^ ; ~}])"
+			name (mapcar #'convert args)))
 	       ((?op . ?args)
 		(multiple-value-bind (ml-name kind-ml-name num-args need-width)
 		    (lookup-operator op)
@@ -410,6 +413,8 @@
 		       (error "illegal pattern ~A" pattern)))))))
     (convert pattern)))
 
+;; returns the ml string of the cost expression and an ml string of
+;; the condition which has to be satisfied for a match.
 (defun convert-cost-expr (expr bindings)
   (let ((convert-expr-bindings (mapcar #'(lambda (binding)
 					   (list (first binding) (dcs (first binding)) (second binding)))
@@ -417,12 +422,17 @@
     (labels ((convert (expr)
 	       (case-match expr
 	         ((when ?condition ?consequent)
-		  (format nil "cm_when fields (~A) (fun _ -> ~A)"
-			  (convert-expr condition convert-expr-bindings)
-			  (convert consequent)))
+		  (let ((condition-string (convert-expr condition convert-expr-bindings)))
+		    (multiple-value-bind (consequent-string consequent-cond)
+			(convert consequent)
+		      (values (format nil "uc_when fields (~A) (fun _ -> ~A)"
+				      condition-string consequent-string)
+			      (format nil "and_expr (~A) (~A)"
+				      condition-string consequent-cond)))))
 		 (t
 		  (cond ((integerp expr)
-			 (format nil "cm_return ~A" expr))
+			 (values (format nil "uc_return ~A" expr)
+				 "ConditionConst true"))
 			(t
 			 (error "illegal cost expression ~A" expr)))))))
       (convert expr))))
@@ -507,43 +517,45 @@
 
 (defun make-matchers (filename matchers-name printers-name)
   (with-open-file (out filename :direction :output :if-exists :supersede)
-    (format out "open Int64~%~%open Expr~%open Cond_monad~%open Matcher~%open Irmacros~%open Cgen~%~%")
+    (format out "open Int64~%~%open Expr~%open Uncertainty~%open Matcher~%open Irmacros~%open Cgen~%~%")
     (dolist (matcher (reverse *matchers*))
       (destructuring-bind (name pattern cost-expr format)
 	  matcher
 	(multiple-value-bind (pattern-string bindings)
 	    (convert-pattern pattern '())
-	  (let* ((binding-names (mapcar #'first bindings))
-		 (binding-ml-names (mapcar #'dcs binding-names))
-		 (binding-types (mapcar #'second bindings)))
-	    (format out (string-concat "let ~A_matcher =~%"
-				       "  { name = \"~A\" ;~%"
-				       "    pattern = ~A ;~%"
-				       "    matcher = (fun fields bindings ->~%"
-				       "                 let __dummy__ = []~{ and ~A = ~A~}~%"
-				       "                 in ~A) }~%"
-				       "and ~A_printer =~%"
-				       "  (\"~A\", (fun alloc bindings ->~%"
-				       "              let~{ ~A = ~A~^ and~}~%"
-				       "              in \"/* ~A */ \" ^ ~A))~%~%")
-		    (dcs name) (dcs name)
-		    pattern-string
-		    (mappend #'(lambda (type name)
-				 (case type
-				   (int (list name (format nil "get_width_binding bindings \"~A\"" name)))
-				   (int-const (list name (format nil "get_const_binding bindings \"~A\"" name)))
-				   (t '())))
-			     binding-types binding-ml-names)
-		    (convert-cost-expr cost-expr bindings)
-		    (dcs name) (dcs name)
-		    (mappend #'(lambda (type name)
-				 (list name
-				       (case type
-					 (int (format nil "get_width_binding bindings \"~A\"" name))
-					 (int-const (format nil "get_const_binding bindings \"~A\"" name))
-					 (reg (format nil "get_register_binding bindings alloc \"~A\"" name))
-					 (t (error "binding of type ~A is not allowed in matcher pattern" type)))))
-			     binding-types binding-ml-names)
-		    (dcs name) (convert-format (car format) (cdr format) bindings))))))
+	  (multiple-value-bind (cost-string cost-cond)
+	      (convert-cost-expr cost-expr bindings)
+	    (let* ((binding-names (mapcar #'first bindings))
+		   (binding-ml-names (mapcar #'dcs binding-names))
+		   (binding-types (mapcar #'second bindings)))
+	      (format out (string-concat "let ~A_matcher =~%"
+					 "  { name = \"~A\" ;~%"
+					 "    pattern = ~A ;~%"
+					 "    matcher = (fun fields bindings ->~%"
+					 "                 let __dummy__ = []~{ and ~A = ~A~}~%"
+					 "                 in ~A) }~%"
+					 "and ~A_printer =~%"
+					 "  (\"~A\", (fun alloc bindings ->~%"
+					 "              let~{ ~A = ~A~^ and~}~%"
+					 "              in \"/* ~A */ { assert(\" ^ (expr_to_c [] (~A)) ^ \"); \" ^ ~A ^ \" }\"))~%~%")
+		      (dcs name) (dcs name)
+		      pattern-string
+		      (mappend #'(lambda (type name)
+				   (case type
+				     (int (list name (format nil "get_width_binding bindings \"~A\"" name)))
+				     (int-const (list name (format nil "get_const_binding bindings \"~A\"" name)))
+				     (t '())))
+			       binding-types binding-ml-names)
+		      cost-string
+		      (dcs name) (dcs name)
+		      (mappend #'(lambda (type name)
+				   (list name
+					 (case type
+					   (int (format nil "get_width_binding bindings \"~A\"" name))
+					   (int-const (format nil "get_const_binding bindings \"~A\"" name))
+					   (reg (format nil "get_register_binding bindings alloc \"~A\"" name))
+					   (t (error "binding of type ~A is not allowed in matcher pattern" type)))))
+			       binding-types binding-ml-names)
+		      (dcs name) cost-cond (convert-format (car format) (cdr format) bindings)))))))
     (format out "let ~A = [ ~{~A_matcher~^ ; ~} ]~%" matchers-name (mapcar #'dcs (mapcar #'first (reverse *matchers*))))
     (format out "let ~A = [ ~{~A_printer~^ ; ~} ]~%" printers-name (mapcar #'dcs (mapcar #'first (reverse *matchers*))))))

@@ -31,9 +31,9 @@ word_64
 ashiftr8 (word_64 x, word_64 a)
 {
     if (x >> 63)
-	return x >> a;
-    else
 	return (x >> a) | ((word_64)-1LL << (64 - a));
+    else
+	return x >> a;
 }
 
 word_64
@@ -67,15 +67,49 @@ width_mask (word_64 w)
 }
 
 word_64
-test_func (word_64 field_sh, word_64 field_mb, word_64 field_me, word_64 guest_reg_2)
+userop_IsMaskMask (word_64 x, word_64 w)
 {
-    word_64 guest_reg_1;
-    word_64 interm_reg_1, interm_reg_2, interm_reg_3, interm_reg_4;
+    word_64 m = (1LL << w) - 1LL;
 
-#include "test.new.h"
+    while (x != 0LL)
+    {
+	if ((x & m) != 0LL && (x & m) != m)
+	    return 0;
+	x >>= w;
+    }
 
-    return guest_reg_1;
+    return 1LL;
 }
+
+word_64
+unary_LowMask (word_64 x)
+{
+    word_64 r = 0LL;
+
+    while (x != 0LL)
+    {
+	r = (r << 1) | 1LL;
+	x >>= 1;
+    }
+
+    return r;
+}
+
+word_64
+unary_HighMask (word_64 x)
+{
+    word_64 r = 0LL;
+
+    while (x != 0LL)
+    {
+	r = (r >> 1) | (1LL << 63);
+	x <<= 1;
+    }
+
+    return r;
+}
+
+#include "test.h"
 
 word_32
 mask_32 (word_32 begin, word_32 end)
@@ -136,11 +170,20 @@ main (void)
 	for (mb = 0; mb < 32; ++mb)
 	    for (me = 0; me < 32; ++me)
 	    {
-		word_64 gen_result = test_func(sh, mb, me, 0xdeadbeefcafebabeLL);
+		word_64 gen_result = test_rlwinm(sh, mb, me, 0xdeadbeefcafebabeLL);
 		word_64 real_result = calc(sh, mb, me, 0xdeadbeefcafebabeLL);
 
 		assert((gen_result & 0xffffffff) == real_result);
 	    }
+
+    /*
+    for (sh = 9; sh < 10; ++sh)
+	for (mb = 0; mb < 16; ++mb)
+	    for (me = 0; me < 16; ++me)
+	    {
+		word_64 gen_result = test_rotand(sh, mb, me, 0xdeadbeefcafebabeLL);
+	    }
+    */
 
     return 0;
 }

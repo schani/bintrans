@@ -1,8 +1,29 @@
-(* -*- caml -*- *)
+(*
+ * expr.ml
+ *
+ * bintrans
+ *
+ * Copyright (C) 2004 Mark Probst
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *)
 
 open Int64
 open List
 
+open Utils
 open Bitmath
 open Monad
 
@@ -11,6 +32,10 @@ exception Illegal_arguments
 exception Unsupported_width
 exception Unsupported_operation
 exception Expression_not_const
+exception Unknown_user_op
+exception Wrong_user_op_args
+exception User_op_called_incorrectly
+exception User_op_args_unhandled
 
 type byte_order =
     BigEndian
@@ -170,10 +195,32 @@ and expr =
   | Extract of expr * int_const * int_const
   | Insert of expr * expr * int_const * int_const
   | If of expr * expr * expr
+  | UserOp of string * (expr list)
 
 type stmt =
     Store of byte_order * width * expr * expr
   | Assign of register * expr
+
+(* user ops *)
+
+type user_op =
+    { op_name : string ;
+      num_args : int ;
+      result_type : value_type ;
+      apply_op : int64 list -> expr }
+
+let user_ops = [
+  { op_name = "IsMaskMask" ;
+    num_args = 2 ;
+    result_type = Condition ;
+    apply_op = (function [m ; w] -> ConditionConst (is_mask_mask m (to_int w)) | _ -> raise User_op_called_incorrectly) }
+]
+
+let lookup_user_op name =
+  try
+    find (fun o -> name = o.op_name) user_ops
+  with
+      Not_found -> raise Unknown_user_op
 
 (* inspecting *)
 
@@ -201,6 +248,7 @@ and expr_value_type expr =
       and alt_type = expr_value_type alt
       in if cons_type <> alt_type then raise Wrong_type ;
 	cons_type
+  | UserOp (name, _) -> (lookup_user_op name).result_type
 
 let expr_sub_exprs expr =
   match expr with
@@ -213,6 +261,7 @@ let expr_sub_exprs expr =
   | Extract (sub, start, length) -> [ sub ]
   | Insert (sub1, sub2, start, length) -> [ sub1 ; sub2 ]
   | If (sub1, sub2, sub3) -> [ sub1 ; sub2 ; sub3 ]
+  | UserOp (_, subs) -> subs
   | _ -> []
 
 let stmt_sub_exprs stmt =
@@ -225,8 +274,27 @@ let is_const expr =
       IntConst (IntLiteral _) | FloatConst _ | ConditionConst _ -> true
     | _ -> false
 
+(* an expression is register const if its value only depends on fields, but
+   not on registers or memory *)
+let rec is_register_const expr =
+  match expr with
+      Register _ -> false
+    | LoadBO _ -> false
+    | Unary (LoadByte, _) -> false
+    | _ -> for_all is_register_const (expr_sub_exprs expr)
+
 let rec expr_size expr =
-  1 + (fold_left ( + ) 0 (map expr_size (expr_sub_exprs expr)))
+    1 + (fold_left ( + ) 0 (map expr_size (expr_sub_exprs expr)))
+
+let rec expr_fields expr =
+  match expr with
+      IntConst (IntField name) -> [ name ]
+    | _ ->
+	let sub_exprs = expr_sub_exprs expr
+	in uniq (flatten (map expr_fields sub_exprs))
+
+let stmt_fields stmt =
+  uniq (flatten (map expr_fields (stmt_sub_exprs stmt)))
 
 (* constructing *)
 
@@ -331,44 +399,62 @@ let instantiate_expr expr fields_alist =
 	  Insert (instantiate arg1, instantiate arg2, instantiate_int_const start, instantiate_int_const length)
       | If (arg1, arg2, arg3) ->
 	  If (instantiate arg1, instantiate arg2, instantiate arg3)
+      | UserOp (name, subs) ->
+	  UserOp (name, map instantiate subs)
   in
     instantiate expr
 
 (* applying a modifier to all subexpressions *)
 
 let apply_to_expr_subs_with_monad return bind modify expr =
-  let bind2 = make_bind2 bind
-  and bind3 = make_bind3 bind
-  in match expr with
-    IntConst _ -> return expr
-  | FloatConst _ -> return expr
-  | ConditionConst _ -> return expr
-  | Register _ -> return expr
-  | LoadBO _ -> return expr
-  | Unary (op, arg) ->
-      bind (modify arg)
-	(fun marg -> return (Unary (op, marg)))
-  | UnaryWidth (op, width, arg) ->
-      bind (modify arg)
-	(fun marg -> return (UnaryWidth (op, width, marg)))
-  | Binary (op, arg1, arg2) ->
-      bind2 (modify arg1) (modify arg2)
-	(fun marg1 marg2 -> return (Binary (op, marg1, marg2)))
-  | BinaryWidth (op, width, arg1, arg2) ->
-      bind2 (modify arg1) (modify arg2)
-	(fun marg1 marg2 -> return (BinaryWidth (op, width, marg1, marg2)))
-  | TernaryWidth (op, width, arg1, arg2, arg3) ->
-      bind3 (modify arg1) (modify arg2) (modify arg3)
-	(fun marg1 marg2 marg3 -> return (TernaryWidth (op, width, marg1, marg2, marg3)))
-  | Extract (arg, start, length) ->
-      bind (modify arg)
-	(fun marg -> return (Extract (marg, start, length)))
-  | Insert (arg1, arg2, start, length) ->
-      bind2 (modify arg1) (modify arg2)
-	(fun marg1 marg2 -> return (Insert (marg1, marg2, start, length)))
-  | If (condition, cons, alt) ->
-      bind3 (modify condition) (modify cons) (modify alt)
-	(fun mcondition mcons malt -> return (If (mcondition, mcons, malt)))
+  let bind2 = make_bind2 bind bind
+  and bind3 = make_bind3 bind bind bind
+  in let rec apply expr =
+    match expr with
+	IntConst _ -> return expr
+      | FloatConst _ -> return expr
+      | ConditionConst _ -> return expr
+      | Register _ -> return expr
+      | LoadBO _ -> return expr
+      | Unary (op, arg) ->
+	  bind (modify arg)
+	    (fun marg -> return (Unary (op, marg)))
+      | UnaryWidth (op, width, arg) ->
+	  bind (modify arg)
+	    (fun marg -> return (UnaryWidth (op, width, marg)))
+      | Binary (op, arg1, arg2) ->
+	  bind2 (modify arg1) (modify arg2)
+	    (fun marg1 marg2 -> return (Binary (op, marg1, marg2)))
+      | BinaryWidth (op, width, arg1, arg2) ->
+	  bind2 (modify arg1) (modify arg2)
+	    (fun marg1 marg2 -> return (BinaryWidth (op, width, marg1, marg2)))
+      | TernaryWidth (op, width, arg1, arg2, arg3) ->
+	  bind3 (modify arg1) (modify arg2) (modify arg3)
+	    (fun marg1 marg2 marg3 -> return (TernaryWidth (op, width, marg1, marg2, marg3)))
+      | Extract (arg, start, length) ->
+	  bind (modify arg)
+	    (fun marg -> return (Extract (marg, start, length)))
+      | Insert (arg1, arg2, start, length) ->
+	  bind2 (modify arg1) (modify arg2)
+	    (fun marg1 marg2 -> return (Insert (marg1, marg2, start, length)))
+      | If (condition, cons, alt) ->
+	  bind3 (modify condition) (modify cons) (modify alt)
+	    (fun mcondition mcons malt -> return (If (mcondition, mcons, malt)))
+      | UserOp (name, subs) ->
+	  match subs with
+	      [] -> return (UserOp (name, []))
+	    | [a] ->
+		bind (modify a)
+		  (fun ma -> return (UserOp (name, [ma])))
+	    | [a ; b] ->
+		bind2 (modify a) (modify b)
+		  (fun ma mb -> return (UserOp (name, [ma ; mb])))
+	    | [a ; b ; c ] ->
+		bind3 (modify a) (modify b) (modify c)
+		  (fun ma mb mc -> return (UserOp (name, [ma ; mb ; mc])))
+	    | _ ->
+		raise User_op_args_unhandled
+  in apply expr
 
 let apply_to_expr_subs =
   apply_to_expr_subs_with_monad (fun x -> x) (fun v f -> f v)
@@ -376,7 +462,7 @@ let apply_to_expr_subs =
 let apply_to_stmt_subs_with_monad return bind modify stmt =
   match stmt with
     Store (byte_order, width, addr, value) ->
-      (make_bind2 bind) (modify addr) (modify value)
+      (make_bind2 bind bind) (modify addr) (modify value)
 	(fun maddr mvalue ->
 	  return (Store (byte_order, width, maddr, mvalue)))
   | Assign (register, expr) ->
@@ -541,6 +627,17 @@ let cfold_expr fields expr =
 	  ConditionConst true -> cons
 	| ConditionConst false -> alt
 	| _ -> fexpr)
+    | UserOp (name, args) ->
+	let cargs = map cfold args
+	and user_op = lookup_user_op name
+	in if ((length cargs) = user_op.num_args) then
+	    try
+	      let iargs = map (fun e -> match e with IntConst (IntLiteral i) -> i | _ -> raise Expression_not_const) cargs
+	      in user_op.apply_op iargs
+	    with
+		Expression_not_const -> UserOp (name, cargs)
+	  else
+	    raise Wrong_user_op_args
   in
     cfold expr
 
@@ -589,37 +686,44 @@ let print_int_const const =
     | IntField input_name -> print_input_name input_name
 
 let rec print_expr expr =
-  match expr with
-    IntConst const -> print_int_const const
-  | FloatConst const -> print_float const
-  | ConditionConst false -> print_string "False"
-  | ConditionConst true -> print_string "True"
-  | Register register -> print_register register
-  | LoadBO (byte_order, width, addr) ->
-      print_string "MEM" ; print_width width ; print_byte_order byte_order ;
-      print_string "(" ; print_expr addr ; print_string ")"
-  | Unary (op, arg) ->
-      print_string (unary_op_name op) ; print_string "(" ; print_expr arg ; print_string ")"
-  | UnaryWidth (op, width, arg) ->
-      print_string (unary_width_op_name op) ; print_width width ; print_string "(" ; print_expr arg ; print_string ")"
-  | Binary (op, arg1, arg2) ->
-      print_string (binary_op_name op) ; print_string "(" ; print_expr arg1 ;
-      print_string ", " ; print_expr arg2 ; print_string ")"
-  | BinaryWidth (op, width, arg1, arg2) ->
-      print_string (binary_width_op_name op) ; print_width width ; print_string "(" ; print_expr arg1 ;
-      print_string ", " ; print_expr arg2 ; print_string ")"
-  | TernaryWidth (op, width, arg1, arg2, arg3) ->
-      print_string (ternary_width_op_name op) ; print_width width ; print_string "(" ; print_expr arg1 ;
-      print_string ", " ; print_expr arg2 ; print_string ", " ; print_expr arg3 ; print_string ")"
-  | Extract (expr, start, length) ->
-      print_string "Extract(" ; print_expr expr ; print_string ", " ; print_int_const start ;
-      print_string ", " ; print_int_const length ; print_string ")"
-  | Insert (arg1, arg2, start, length) ->
-      print_string "Insert(" ; print_expr arg1 ; print_string ", " ; print_expr arg2 ;
-      print_string ", " ; print_int_const start ; print_string ", " ; print_int_const length ; print_string ")"
-  | If (condition, cons, alt) ->
-      print_string "If(" ; print_expr condition ; print_string ", " ; print_expr cons ;
-      print_string ", "; print_expr alt ; print_string ")"
+  let print_args exprs =
+    match exprs with
+	[] -> ()
+      | [e] -> print_expr e
+      | e :: rest -> print_expr e ; print_string ","
+  in match expr with
+      IntConst const -> print_int_const const
+    | FloatConst const -> print_float const
+    | ConditionConst false -> print_string "False"
+    | ConditionConst true -> print_string "True"
+    | Register register -> print_register register
+    | LoadBO (byte_order, width, addr) ->
+	print_string "MEM" ; print_width width ; print_byte_order byte_order ;
+	print_string "(" ; print_expr addr ; print_string ")"
+    | Unary (op, arg) ->
+	print_string (unary_op_name op) ; print_string "(" ; print_expr arg ; print_string ")"
+    | UnaryWidth (op, width, arg) ->
+	print_string (unary_width_op_name op) ; print_width width ; print_string "(" ; print_expr arg ; print_string ")"
+    | Binary (op, arg1, arg2) ->
+	print_string (binary_op_name op) ; print_string "(" ; print_expr arg1 ;
+	print_string ", " ; print_expr arg2 ; print_string ")"
+    | BinaryWidth (op, width, arg1, arg2) ->
+	print_string (binary_width_op_name op) ; print_width width ; print_string "(" ; print_expr arg1 ;
+	print_string ", " ; print_expr arg2 ; print_string ")"
+    | TernaryWidth (op, width, arg1, arg2, arg3) ->
+	print_string (ternary_width_op_name op) ; print_width width ; print_string "(" ; print_expr arg1 ;
+	print_string ", " ; print_expr arg2 ; print_string ", " ; print_expr arg3 ; print_string ")"
+    | Extract (expr, start, length) ->
+	print_string "Extract(" ; print_expr expr ; print_string ", " ; print_int_const start ;
+	print_string ", " ; print_int_const length ; print_string ")"
+    | Insert (arg1, arg2, start, length) ->
+	print_string "Insert(" ; print_expr arg1 ; print_string ", " ; print_expr arg2 ;
+	print_string ", " ; print_int_const start ; print_string ", " ; print_int_const length ; print_string ")"
+    | If (condition, cons, alt) ->
+	print_string "If(" ; print_expr condition ; print_string ", " ; print_expr cons ;
+	print_string ", "; print_expr alt ; print_string ")"
+    | UserOp (name, args) ->
+	print_string (name ^ "(") ; print_args args ; print_string ")"
 
 let print_stmt stmt =
   match stmt with

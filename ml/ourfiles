@@ -12,6 +12,8 @@ pruner.ml
 simplify.ml
 switcher.ml
 test.ml
+uncertainty.ml
+utils.ml
 
 build.lisp
 irmacros.lisp
