@@ -3,6 +3,7 @@
 \usepackage{endnotes}
 
 \newcommand{\enref}[1]{(\ref{#1})}
+\newcommand{\enoteref}[1]{$^{\ref{#1}}$}
 \newcommand{\ir}[1]{\texttt{#1}}
 \newcommand{\cc}[1]{\texttt{#1}} %c code
 
@@ -119,7 +120,7 @@ There are several types of instructions:
     disadvantage.\label{en:widths}} there are variants for each
     operand width.  Integer operations with a width less than the
     virtual register width leave the upper part of the result
-    undefined (see also note~\enref{en:undefined}).  FP operations
+    undefined\enoteref{en:undefined}.  FP operations
     result in values of the correct widths.
 
 \item Unconditional branch.  Branches to a basic block in the same
@@ -169,10 +170,13 @@ There are several types of instructions:
 
 Constant loads are available for all widths of integers and floats.
 Integer loads leave the upper part of the left-hand side virtual
-undefined.  There are no constant loads for conditions.
+undefined.  Constant loads for conditionals are available in the form
+of the operations clear, which sets a condition to zero, and set,
+which sets it to one.
 
 \begin{verbatim}
 T1 :=4 123
+C2 := 0
 \end{verbatim}
 
 \subsection{Copies}
@@ -193,9 +197,12 @@ Integer loads leave the upper part of the virtual assigned to in an
 undefined state.  The addresses of the memory locations are given as
 virtuals.  There are no loads and stores for conditions.
 
+Loads and stores are provided for both byte orders, i.e., little
+endian and big endian.
+
 \begin{verbatim}
-T1 :=4 MEM[T2]
-MEM[T3] :=4 T4
+T1 :=4 MEM_LE[T2]
+MEM_BE[T3] :=4 T4
 \end{verbatim}
 
 \subsection{Conversions}
@@ -234,10 +241,13 @@ The comparisons for integers are: equal, less than unsigned, less than
 signed, add carry, subtract carry, overflow.
 
 The predicates on single integers available for all widths are: zero,
-even, sign.
+parity even, sign\endnote{Maybe we should remove the sign and even
+operations and instead just provide a ``lowest bit set'' operation.
+Sign and even can then be easily synthesized via extract, negate and
+LBS.\label{en:lbs}}
 
 The predicates on single integers operating on the whole virtual
-register width are: parity even.
+register width are: even\enoteref{en:lbs}.
 
 Other predicates can be synthesized by swapping operands and by
 negating the resulting condition.
@@ -257,13 +267,16 @@ those where more signifant bits of inputs have an effect on less
 significant bits in the result, are provided for all widths.
 
 The following ALU operations operate on all bits: Add, negate,
-subtract, multiply, shift left, bitwise and, bitwise or, bitwise xor,
-bitwise negate.
+subtract, bitwise and, bitwise or, bitwise xor, bitwise negate.
 
-These ALU operations have variants for all widths: Divide, modulo,
-logic shift right, arithmetic shift right, sign extend, zero extend.
+These ALU operations have variants for all widths: Shift
+left\endnote{The operand width in the case of shift left is only
+important and necessary for the shift amount.}, logic shift right,
+arithmetic shift right, sign extend, zero extend.
 
-The ALU operation swap bytes is available for all width other than 1.
+%The ALU operation swap bytes is available for all width other than 1.
+%%NOTE: I don't think we need this, since we have loads and stores for
+%%both byte orders.
 
 The two operations extract and insert are special, inasmuch as they
 are the only operations that take arguments which are not virtual
@@ -286,8 +299,8 @@ There are no rotate operations.  Rotations must be implemented via
 shifts and bitwise ors.
 
 \begin{verbatim}
-T1 :=4 ADD(T2,T3)
-T4 := SHIFTL(T5,T6)
+T1 := ADD(T2,T3)
+T4 :=4 LSHIFTR(T5,T6)
 T7 := ZEX2(T8)
 T9 := EXTRACT(T10,0,8)
 T11 := INSERT(T12,T13,8,8)
@@ -328,7 +341,7 @@ C3 := AND(C4,C5)
 
 \subsection{FP Operations}
 
-All FP operations distinguish between single and double precision.
+Some FP operations distinguish between single and double precision.
 
 The following FP operations distinguish between single and double
 precision: add, subtract, multiply, divide, square root\endnote{That's
@@ -366,11 +379,9 @@ branch in sequential order.
 IF C1 THEN GOTO BB2 ELSE GOTO BB3
 \end{verbatim}
 
-\subsection{Exits}
-
-\subsection{Procedure Calls}
-
 \subsection{User-Defined Operations}
+
+\subsubsection{Exits}
 
 \section{API}
 
@@ -381,13 +392,42 @@ containing the optimized IR code\endnote{As far as I could see, this
 is the way Valgrind does it.  I think it's a good start.  We might
 provide IR manipulation functions in the future, though.}.
 
+\subsection{Memory Management}
+
+The data structures for fragments are allocated from arenas.  An arena
+is a preallocated memory block from which smaller blocks can be
+allocated in a linear fashion.  Memory allocated from an arena is not
+freed until the whole arena is freed.  This makes memory management
+both fast and very simple.
+
+\begin{verbatim}
+arena_t* make_arena (size_t size);
+\end{verbatim}
+
+Allocates and returns an arena with \cc{size} bytes using \cc{malloc}.
+
+\begin{verbatim}
+void dispose_arena (arena_t *arena);
+\end{verbatim}
+
+Frees the memory occupied by the arena \cc{arena}.
+
+\begin{verbatim}
+void* arena_alloc (arena_t *arena, size_t size, size_t alignment);
+\end{verbatim}
+
+Allocates and returns a block of \cc{size} bytes aligned to a multiple
+of \cc{alignment} bytes from \cc{arena}.  If the required amount of
+memory cannot be allocated (because the remaining free space in the
+arena is too small), \cc{0} is returned.
+
 \subsection{Generation}
 
 \begin{verbatim}
-fragment_t* make_fragment (void);
+fragment_t* make_fragment (arena_t *arena);
 \end{verbatim}
 
-Create a new fragment which is initially empty.
+Create a new fragment in \cc{arena} which is initially empty.
 
 \begin{verbatim}
 bblock_t* make_bblock (fragment_t *fragment);
@@ -406,37 +446,53 @@ management for IR instructions much easier and reduce memory
 requirements for them.  Objections?}.
 
 \begin{verbatim}
-vreg_t make_treg (reg_type_t type);
+vreg_t* make_treg (fragment_t *fragment, reg_type_t type);
 \end{verbatim}
 
-Introduces a new temp register.  Its type is given by \cc{type}.  The
-built-in types are \cc{REG\_TYPE\_INTEGER}, \cc{REG\_TYPE\_FLOAT}, and
-\cc{REG\_TYPE\_CONDITION}.  Additional types can be defined by the user
-(see section~\ref{sec:regdef}).  The new register is is assumed to be
-live from the start.
+Introduces a new temp register in \cc{fragment}.  Its type is given by
+\cc{type}.  The built-in types are \cc{REG\_TYPE\_INTEGER},
+\cc{REG\_TYPE\_FLOAT}, and \cc{REG\_TYPE\_CONDITION}.  Additional
+types can be defined by the user (see section~\ref{sec:regdef}).  The
+new register is is assumed to be dead from the start\endnote{This
+means that if liveness information is to be provided via
+\cc{set\_vreg\_live}, the register must be set live explicitly before
+its first definition.  The reason for making a register dead by
+default is that if it were the other way around, and a register would
+not be live from the start on, there would nevertheless be an
+unnecessary short live range at the start, unless we were to use
+clever tricks.}.
 
 \begin{verbatim}
-void set_vreg_live (vreg_t reg, int is_live);
+void set_vreg_live (fragment_t *fragment, vreg_t *reg, int is_live);
 \end{verbatim}
 
-Set the liveness status of a virtual register to live if \cc{is\_live}
-is non-zero, to dead otherwise\endnote{The use of this function will
-not be mandatory.  Instead, an additional liveness analysis pass will
-be provided.  That pass will of course be unnecessary if liveness is
-annotated via this function.}.
+Set the liveness status of the virtual register \cc{reg} in
+\cc{fragment} to live if \cc{is\_live} is non-zero, to dead
+otherwise\endnote{The use of this function will not be mandatory.
+Instead, an additional liveness analysis pass will be provided.  That
+pass will of course be unnecessary if liveness is annotated via this
+function.}.  A virtual register must be set to live before emitting
+the instruction producing a value in that register and must be set
+dead after emitting the instruction which uses the value last.
+Setting a virtual register dead and live again without emitting
+intervening instructions introduces a new live range\endnote{In our
+implementation this means that the two live ranges can be allocated to
+different host registers even though they are consecutive.}.  A
+register which has been set to live at least once must be set to dead
+before or at the end of the fragment and not be set to live again.
 
 \begin{verbatim}
-void emit_ir_int1_const (bblock_t *bblock, vreg_t lhs,
+void emit_ir_int1_const (bblock_t *bblock, vreg_t *lhs,
                          ir_int1_t value);
-void emit_ir_int2_const (bblock_t *bblock, vreg_t lhs,
+void emit_ir_int2_const (bblock_t *bblock, vreg_t *lhs,
                          ir_int2_t value);
-void emit_ir_int4_const (bblock_t *bblock, vreg_t lhs,
+void emit_ir_int4_const (bblock_t *bblock, vreg_t *lhs,
                          ir_int4_t value);
-void emit_ir_int8_const (bblock_t *bblock, vreg_t lhs,
+void emit_ir_int8_const (bblock_t *bblock, vreg_t *lhs,
                          ir_int8_t value);
-void emit_ir_float4_const (bblock_t *bblock, vreg_t lhs,
+void emit_ir_float4_const (bblock_t *bblock, vreg_t *lhs,
                            ir_float4_t value);
-void emit_ir_float8_const (bblock_t *bblock, vreg_t lhs,
+void emit_ir_float8_const (bblock_t *bblock, vreg_t *lhs,
                            ir_float8_t value);
 \end{verbatim}
 
@@ -444,36 +500,37 @@ Append a load constant instruction to the end of \cc{bblock}.  These
 may be implemented as macros.
 
 \begin{verbatim}
-void emit_ir_int_load4 (bblock_t *bblock, vreg_t lhs, vreg_t addr);
-void emit_ir_int_lessu4 (bblock_t *bblock, vreg_t lhs,
-                         vreg_t arg1, vreg_t arg2);
+void emit_ir_int_load4 (bblock_t *bblock, vreg_t *lhs, vreg_t *addr);
+void emit_ir_int_lessu4 (bblock_t *bblock, vreg_t *lhs,
+                         vreg_t *arg1, vreg_t *arg2);
 ...
 \end{verbatim}
 
 Append a simple instruction (all operands are virtual registers) to
 the end of \cc{bblock}.  The two functions above are just given as
 examples, since all functions are not listed in this document.  All
-the simple emits will be implemented as macros using these three
+the simple emits will be implemented as macros using these four
 functions\endnote{There are variants for each number of arguments so
 that we don't do unnecessary copying of dead values.}:
 
 \begin{verbatim}
-void emit_ir_op1 (bblock_t *bblock, ir_op_t op, vreg_t lhs,
-                  vreg_t arg1);
-void emit_ir_op2 (bblock_t *bblock, ir_op_t op, vreg_t lhs,
-                  vreg_t arg1, vreg_t arg2);
-void emit_ir_op3 (bblock_t *bblock, it_op_t op, vreg_t lhs,
-                  vreg_t arg1, vreg_t arg2, vreg_t arg3);
+void emit_ir_op0 (bblock_t *bblock, ir_op_t op, vreg_t *lhs);
+void emit_ir_op1 (bblock_t *bblock, ir_op_t op, vreg_t *lhs,
+                  vreg_t *arg1);
+void emit_ir_op2 (bblock_t *bblock, ir_op_t op, vreg_t *lhs,
+                  vreg_t *arg1, vreg_t *arg2);
+void emit_ir_op3 (bblock_t *bblock, it_op_t op, vreg_t *lhs,
+                  vreg_t *arg1, vreg_t *arg2, vreg_t *arg3);
 \end{verbatim}
 
 The number \cc{op} not only indentifies the operation but also
 contains the width it operates on, if applicable.
 
 \begin{verbatim}
-void emit_ir_extract (bblock_t *bblock, vreg_t lhs, vreg_t composite,
+void emit_ir_extract (bblock_t *bblock, vreg_t *lhs, vreg_t *composite,
                       int start, int length);
-void emit_ir_insert (bblock_t *bblock, vreg_t lhs, vreg_t template,
-                     vreg_t bits, int start, int length);
+void emit_ir_insert (bblock_t *bblock, vreg_t *lhs, vreg_t *template,
+                     vreg_t *bits, int start, int length);
 \end{verbatim}
 
 Append an extract/insert operation to the end of \cc{bblock}.  May be
@@ -481,13 +538,23 @@ implemented as a macro.
 
 \begin{verbatim}
 void emit_ir_branch (bblock_t *bblock, bblock_t *target);
-void emit_ir_conditional_branch (bblock_t *bblock, vreg_t condition,
+void emit_ir_conditional_branch (bblock_t *bblock, vreg_t *condition,
                                  bblock_t *target,
                                  bblock_t *alternative);
 \end{verbatim}
 
 Append an unconditional/conditional branch instruction to the end of
 \cc{bblock}.  A branch ends a basic block, i.e., emitting another IR
+instruction to the same basic block is illegal.
+
+\begin{verbatim}
+void emit_user_op (bblock_t *bblock, user_op_t *user_op,
+                   vreg_t **args);
+\end{verbatim}
+
+Append a user-defined operation \cc{user\_op} to the end of
+\cc{bblock}.  The arguments must be given as an array in \cc{args}.
+An exit user-op ends a basic block, i.e., emitting another IR
 instruction to the same basic block is illegal.
 
 \subsection{Register Definition}
@@ -499,7 +566,115 @@ reg_type_t make_register_type (char prefix);
 
 Make a new register type known.  \cc{prefix} is an arbitrary character
 used for signifying the register type in debugging output.  It has no
-other purpose.
+other purpose.  This function must not be called after any host or
+guest registers have been set up (see below), i.e., host and guest
+registers must be set up after all register types have been
+introduced.
+
+\subsubsection{Host Registers}
+
+\begin{verbatim}
+void setup_hregs (reg_type_t type, unsigned int number);
+\end{verbatim}
+
+Specifies that the number of host registers of type \cc{type} is
+\cc{number}.  This function must not be called for any type more than
+once.  If the number of host registers for some type is not specified,
+it is assumed to be zero.  Host registers are numbered separately for
+each type, beginning with zero.
+
+\begin{verbatim}
+void set_hreg_name (reg_type_t type, unsigned int index, char *name);
+\end{verbatim}
+
+Sets the name of the host register of type \cc{type} with index
+\cc{index} to \cc{name}.  The name is only used for debugging output.
+
+\begin{verbatim}
+hreg_t* get_hreg (reg_type_t type, unsigned int index);
+\end{verbatim}
+
+Returns the host register of type \cc{type} with index \cc{index}.
+
+\subsubsection{Guest Registers}
+
+\begin{verbatim}
+void setup_gregs (reg_type_t type, unsigned int number);
+\end{verbatim}
+
+Specifies that the number of guest registers of type \cc{type} is
+\cc{number}.  This function must not be called for any type more than
+once\endnote{This is a restriction which will most definitely fall in
+the future.  If we want to support compilation of higher-level
+languages, guest registers correspond to local variables, and it is
+obviously necessary to be able to compile fragments with different
+numbers of local variables.  For this reason, we should also consider
+making guest registers local to fragments, so that it's possible to
+compile fragments with different guest registers at the same time.}.
+If the number of host registers for some type is not specified, it is
+assumed to be zero.  Host registers are numbered separately for each
+type, beginning with zero.
+
+\begin{verbatim}
+void set_greg_location (reg_type_t type, unsigned int index,
+                        hreg_t *base, off_t offset);
+\end{verbatim}
+
+Sets the home location of the guest register of type \cc{type} with
+index \cc{index} to be at offset \cc{offset} from the host register
+\cc{base}\endnote{Is this necessary when a fixed register mapping is
+used?}.
+
+\begin{verbatim}
+void set_greg_name (reg_type_t type, unsigned int index, char *name);
+\end{verbatim}
+
+Sets the name of the guest register of type \cc{type} with index
+\cc{index} to \cc{name}.  The name is only used for debugging output.
+
+\begin{verbatim}
+vreg_t* get_greg (reg_type_t type, unsigned int index);
+\end{verbatim}
+
+Returns the guest register of type \cc{type} with index \cc{index}.
+
+\subsection{User-Defined Operations}
+
+\begin{verbatim}
+user_op_t* make_user_op (int id, unsigned int num_args, int is_exit,
+                         int has_lhs, char *name);
+\end{verbatim}
+
+Introduces a new user-defined operation.  \cc{num\_args} specifies the
+number of virtual register arguments the operation receives.  This
+number must be at most \cc{4} and can be \cc{0}.  If the operation
+produces a value, \cc{has\_lhs} must be non-zero, zero otherwise.  In
+the former case, the virtual register the value is written to is
+treated as a normal argument (and hence must be included in
+\cc{num\_args}), which must be the first one.  The user-op's operation
+must not depend on the value residing in the left-hand side virtual
+register, i.e., it should only be written not, not read.  Similarly,
+the user-op must not change the values of the other (right-hand side)
+virtual registers.  \cc{is\_exit} must be non-zero iff the user-op is
+an exit.  An exit always exits a fragment and must be the last IR
+instruction in a basic block.  User-ops which call procedures which
+return to the fragment are not exits.  The values of \cc{id} and
+\cc{name} are of no consequence for code generation.  \cc{id} can be
+used by the application to easily identify a user-op and \cc{name} is
+used for debugging output.
+
+\begin{verbatim}
+void dispose_user_op (user_op_t *user_op);
+\end{verbatim}
+
+Frees the memory associated with the user-op \cc{user\_op}.  Fragments
+containing \cc{user\_op} instructions are invalidated.
+
+\begin{verbatim}
+int user_op_id (user_op_t *user_op);
+\end{verbatim}
+
+Returns the \cc{id} of \cc{user\_op}.  May be implemented as a macro.
 
 \subsection{Inspection}
 
@@ -516,8 +691,8 @@ ir_insn_t* bblock_last_insn (bblock_t *bblock);
 \end{verbatim}
 
 Returns the first/last IR instruction in \cc{bblock}\endnote{The last
-instruction is provided so that the block's successors can easily be
-determined.}.
+instruction is provided so that the block's successors can be
+determined easily.}.
 
 \begin{verbatim}
 ir_insn_t* ir_insn_next (ir_insn_t *insn);
@@ -539,7 +714,7 @@ width, if applicable.  The macros \cc{ir\_operator\_kind} and
 \cc{ir\_operator\_width} extract these two out of the compound value.
 
 \begin{verbatim}
-vreg_t ir_insn_vreg (ir_insn_t *insn, int n);
+vreg_t* ir_insn_vreg (ir_insn_t *insn, int n);
 int ir_insn_field_start (ir_insn_t *insn);
 int ir_insn_field_length (ir_insn_t *insn);
 ir_int1_t ir_insn_int1_const (ir_insn_t *insn);
@@ -575,7 +750,7 @@ instructions or adding basic blocks, for example).
 
 \begin{verbatim}
 size_t register_allocation (fragment_t *fragment,
-                            hreg_t spill_area_reg,
+                            hreg_t *spill_area_reg,
                             offset_t spill_area_offset,
                             int direction);
 \end{verbatim}
@@ -606,8 +781,6 @@ Returns the number of bytes actually emitted, or a number larger than
 \cc{code\_area\_size}, which indicates that the area was not large
 enough.  In the latter case the actual amount returned does not
 indicate how much additional space is needed.
-
-\subsection{User-Defined Operations}
 
 \begingroup
 \setlength{\parindent}{0pt}\setlength{\parskip}{2ex}
