@@ -118,6 +118,10 @@ int ppc_errnos[] = { 0,
 
 int debug = 0;
 
+#define MAX_FDS      1024
+
+fd_mapping_t fd_map[MAX_FDS];
+
 word_32
 rotl (word_32 x, word_32 i)
 {
@@ -239,6 +243,52 @@ translate_filename (char *file)
     return mangled;
 }
 
+int
+open_fd (int fd)
+{
+    int i;
+
+    for (i = 0; i < MAX_FDS; ++i)
+	if (fd_map[i].free)
+	    break;
+
+    assert(i < MAX_FDS);
+
+    fd_map[i].free = 0;
+    fd_map[i].native_fd = fd;
+
+    return i;
+}
+
+int
+lookup_fd (word_32 fd)
+{
+    assert(fd < MAX_FDS);
+    if (fd_map[fd].free)
+	return -1;
+    return fd_map[fd].native_fd;
+}
+
+int
+reverse_lookup_fd (int fd)
+{
+    int i;
+
+    for (i = 0; i < MAX_FDS; ++i)
+	if (!fd_map[i].free && fd_map[i].native_fd == fd)
+	    return i;
+
+    return -1;
+}
+
+void
+close_fd (word_32 fd)
+{
+    assert(fd < MAX_FDS);
+    assert(!fd_map[fd].free);
+    fd_map[fd].free = 1;
+}
+
 void
 convert_native_sockaddr_to_ppc (interpreter_t *intp, struct sockaddr *sa, word_32 ppc_addr, word_32 ppc_len, word_32 *used_len)
 {
@@ -264,10 +314,10 @@ convert_native_sockaddr_to_ppc (interpreter_t *intp, struct sockaddr *sa, word_3
     }
 }
 
-void
+int
 convert_ppc_fdset_to_native (interpreter_t *intp, int maxfd, fd_set *fds, word_32 addr)
 {
-    word_32 bits;
+    word_32 bits = 0;
     int i;
 
     FD_ZERO(fds);
@@ -277,23 +327,37 @@ convert_ppc_fdset_to_native (interpreter_t *intp, int maxfd, fd_set *fds, word_3
 	if ((i & 31) == 0)
 	    bits = mem_get_32(intp, addr + (i >> 3));
 	if (bits & 1)
-	    FD_SET(i, fds);
-	bits >>= 1;
+	{
+	    int fd = lookup_fd(i);
+
+	    if (fd == -1)
+		return -1;
+
+	    FD_SET(fd, fds);
+	    bits >>= 1;
+	}
     }
+
+    return 0;
 }
 
 void
 convert_native_fdset_to_ppc (interpreter_t *intp, int maxfd, word_32 addr, fd_set *fds)
 {
-    word_32 bits;
+    word_32 bits = 0;
     int i;
 
     for (i = 0; i < maxfd; ++i)
     {
+	int fd;
+
 	if ((i & 31) == 0)
 	    bits = 0;
-	if (FD_ISSET(i, fds))
+
+	fd = reverse_lookup_fd(i);
+	if (fd != -1 && FD_ISSET(fd, fds))
 	    bits |= 1 << (i & 31);
+
 	if ((i & 31) == 31 || i == maxfd - 1)
 	    mem_set_32(intp, addr + ((i & ~31) >> 3), bits);
     }
@@ -317,6 +381,7 @@ void
 handle_system_call (interpreter_t *intp)
 {
     int result;
+    int fd;
 
     switch (intp->regs_GPR[0])
     {
@@ -331,12 +396,19 @@ handle_system_call (interpreter_t *intp)
 
 	case 3 :
 	    ANNOUNCE_SYSCALL("read");
+	    fd = lookup_fd(intp->regs_GPR[3]);
+	    if (fd == -1)
+	    {
+		result = -1;
+		errno = EBADF;
+	    }
+	    else
 	    {
 		byte *mem = (byte*)malloc(intp->regs_GPR[5]);
 
 		assert(mem != 0);
 
-		result = read(intp->regs_GPR[3], mem, intp->regs_GPR[5]);
+		result = read(fd, mem, intp->regs_GPR[5]);
 
 		if (result > 0)
 		{
@@ -352,6 +424,13 @@ handle_system_call (interpreter_t *intp)
 
 	case 4 :
 	    ANNOUNCE_SYSCALL("write");
+	    fd = lookup_fd(intp->regs_GPR[3]);
+	    if (fd == -1)
+	    {
+		result = -1;
+		errno = EBADF;
+	    }
+	    else
 	    {
 		byte *mem = (byte*)malloc(intp->regs_GPR[5]);
 		word_32 i;
@@ -360,7 +439,7 @@ handle_system_call (interpreter_t *intp)
 
 		for (i = 0; i < intp->regs_GPR[5]; ++i)
 		    mem[i] = mem_get_8(intp, intp->regs_GPR[4] + i);
-		result = write(intp->regs_GPR[3], mem, intp->regs_GPR[5]);
+		result = write(fd, mem, intp->regs_GPR[5]);
 
 		free(mem);
 	    }
@@ -406,6 +485,8 @@ handle_system_call (interpreter_t *intp)
 		*/
 
 		result = open(name, flags);
+		if (result != -1)
+		    result = open_fd(result);
 
 		free(real_name);
 	    }
@@ -413,7 +494,17 @@ handle_system_call (interpreter_t *intp)
 
 	case 6 :
 	    ANNOUNCE_SYSCALL("close");
-	    result = close(intp->regs_GPR[3]);
+	    fd = lookup_fd(intp->regs_GPR[3]);
+	    if (fd == -1)
+	    {
+		result = -1;
+		errno = EBADF;
+	    }
+	    else
+	    {
+		result = close(fd);
+		close_fd(intp->regs_GPR[3]);
+	    }
 	    break;
 
 	case 13 :
@@ -479,6 +570,13 @@ handle_system_call (interpreter_t *intp)
 
 	case 54 :
 	    ANNOUNCE_SYSCALL("ioctl");
+	    fd = lookup_fd(intp->regs_GPR[3]);
+	    if (fd == -1)
+	    {
+		result = -1;
+		errno = EBADF;
+	    }
+	    else
 	    {
 		switch (intp->regs_GPR[4])
 		{
@@ -486,7 +584,7 @@ handle_system_call (interpreter_t *intp)
 			{
 			    struct termios arg;
 
-			    result = ioctl(intp->regs_GPR[3], TCGETS, &arg);
+			    result = ioctl(fd, TCGETS, &arg);
 			    if (result == 0)
 				mem_copy_to_user_32(intp, intp->regs_GPR[5], (byte*)&arg, sizeof(struct termios));
 			    else
@@ -498,7 +596,7 @@ handle_system_call (interpreter_t *intp)
 			{
 			    int arg;
 
-			    result = ioctl(intp->regs_GPR[3], FIONREAD, &arg);
+			    result = ioctl(fd, FIONREAD, &arg);
 			    if (result == 0)
 				mem_set_32(intp, intp->regs_GPR[5], (word_32)arg);
 			}
@@ -512,56 +610,63 @@ handle_system_call (interpreter_t *intp)
 
 	case 55 :
 	    ANNOUNCE_SYSCALL("fcntl");
-	    switch (intp->regs_GPR[4])
+	    fd = lookup_fd(intp->regs_GPR[3]);
+	    if (fd == -1)
 	    {
-		case PPC_F_GETFD :
-		    result = fcntl(intp->regs_GPR[3], F_GETFD);	/* we may have to translate result as well */
-		    break;
-
-		case PPC_F_SETFD :
-		    result = fcntl(intp->regs_GPR[3], F_SETFD, (intp->regs_GPR[5] & PPC_FD_CLOEXEC) ? FD_CLOEXEC : 0);
-		    break;
-
-		case PPC_F_GETFL :
-		    {
-			int native_result = fcntl(intp->regs_GPR[3], F_GETFL);
-
-			assert(0); /* all open flags are returned */
-
-			if (native_result != -1)
-			{
-			    result = 0;
-			    if (native_result & O_APPEND)
-				result |= PPC_O_APPEND;
-			    if (native_result & O_NONBLOCK)
-				result |= PPC_O_NONBLOCK;
-			    if (native_result & O_ASYNC)
-				result |= PPC_O_ASYNC;
-			}
-			else
-			    result = -1;
-		    }
-		    break;
-
-		case PPC_F_SETFL :
-		    {
-			long native_flags = 0;
-
-			if (intp->regs_GPR[5] & PPC_O_APPEND)
-			    native_flags |= O_APPEND;
-			if (intp->regs_GPR[5] & PPC_O_NONBLOCK)
-			    native_flags |= O_NONBLOCK;
-			if (intp->regs_GPR[5] & PPC_O_ASYNC)
-			    native_flags |= O_ASYNC;
-
-			result = fcntl(intp->regs_GPR[3], F_SETFD, native_flags);
-		    }
-		    break;
-
-		default :
-		    printf("unhandled fcntl %d\n", intp->regs_GPR[4]);
-		    intp->halt = 1;
+		result = -1;
+		errno = EBADF;
 	    }
+	    else
+		switch (intp->regs_GPR[4])
+		{
+		    case PPC_F_GETFD :
+			result = fcntl(fd, F_GETFD); /* we may have to translate result as well */
+			break;
+
+		    case PPC_F_SETFD :
+			result = fcntl(fd, F_SETFD, (intp->regs_GPR[5] & PPC_FD_CLOEXEC) ? FD_CLOEXEC : 0);
+			break;
+
+		    case PPC_F_GETFL :
+			{
+			    int native_result = fcntl(fd, F_GETFL);
+
+			    assert(0); /* all open flags are returned */
+
+			    if (native_result != -1)
+			    {
+				result = 0;
+				if (native_result & O_APPEND)
+				    result |= PPC_O_APPEND;
+				if (native_result & O_NONBLOCK)
+				    result |= PPC_O_NONBLOCK;
+				if (native_result & O_ASYNC)
+				    result |= PPC_O_ASYNC;
+			    }
+			    else
+				result = -1;
+			}
+			break;
+
+		    case PPC_F_SETFL :
+			{
+			    long native_flags = 0;
+
+			    if (intp->regs_GPR[5] & PPC_O_APPEND)
+				native_flags |= O_APPEND;
+			    if (intp->regs_GPR[5] & PPC_O_NONBLOCK)
+				native_flags |= O_NONBLOCK;
+			    if (intp->regs_GPR[5] & PPC_O_ASYNC)
+				native_flags |= O_ASYNC;
+
+			    result = fcntl(fd, F_SETFD, native_flags);
+			}
+			break;
+
+		    default :
+			printf("unhandled fcntl %d\n", intp->regs_GPR[4]);
+			intp->halt = 1;
+		}
 	    break;
 
 	case 78 :
@@ -608,8 +713,17 @@ handle_system_call (interpreter_t *intp)
 		    addr = mmap_anonymous(intp, len, prot_to_flags(intp->regs_GPR[5]), intp->regs_GPR[6] & PPC_MAP_FIXED, intp->regs_GPR[3]);
 		}
 		else
-		    addr = mmap_file(intp, len, prot_to_flags(intp->regs_GPR[5]), intp->regs_GPR[6] & PPC_MAP_FIXED, intp->regs_GPR[3],
-				     intp->regs_GPR[7], intp->regs_GPR[8]);
+		{
+		    fd = lookup_fd(intp->regs_GPR[7]);
+		    if (fd == -1)
+		    {
+			addr = 0;
+			result = EBADF;
+		    }
+		    else
+			addr = mmap_file(intp, len, prot_to_flags(intp->regs_GPR[5]), intp->regs_GPR[6] & PPC_MAP_FIXED, intp->regs_GPR[3],
+					 fd, intp->regs_GPR[8]);
+		}
 
 		if (addr == 0)
 		{
@@ -673,6 +787,8 @@ handle_system_call (interpreter_t *intp)
 			assert(ARG(2) == 0);
 
 			result = socket(ARG(0), type, 0);
+			if (result != -1)
+			    result = open_fd(result);
 		    }
 		    break;
 
@@ -682,48 +798,55 @@ handle_system_call (interpreter_t *intp)
 
 			ANNOUNCE_SYSCALL("connect");
 
-			switch (family)
+			fd = lookup_fd(ARG(0));
+			if (fd == -1)
 			{
-			    case AF_UNIX :
-				{
-				    struct sockaddr_un su;
-				    word_32 len = ARG(2) - 2;
-				    char *real_name = malloc(len + 1);
-				    char *name;
-
-				    assert(len <= sizeof(su.sun_path));
-
-				    mem_copy_from_user_8(intp, real_name, ARG(1) + 2, len);
-				    real_name[len] = '\0';
-				    name = translate_filename(real_name);
-				    free(real_name);
-
-				    su.sun_family = AF_UNIX;
-				    assert(strlen(name) < sizeof(su.sun_path));
-				    strcpy(su.sun_path, name);
-
-				    result = connect(ARG(0), &su, sizeof(su) - sizeof(su.sun_path) + len);
-				}
-				break;
-
-			    case AF_INET :
-				{
-				    struct sockaddr_in si;
-
-				    assert(ARG(2) == 16);
-
-				    si.sin_family = AF_INET;
-				    si.sin_port = htons(mem_get_16(intp, ARG(1) + 2));
-				    si.sin_addr.s_addr = htonl(mem_get_32(intp, ARG(1) + 4));
-				    memset(si.sin_zero, 0, sizeof(si.sin_zero));
-
-				    result = connect(ARG(0), &si, sizeof(si));
-				}
-				break;
-
-			    default :
-				assert(0);
+			    result = -1;
+			    errno = EBADF;
 			}
+			else
+			    switch (family)
+			    {
+				case AF_UNIX :
+				    {
+					struct sockaddr_un su;
+					word_32 len = ARG(2) - 2;
+					char *real_name = malloc(len + 1);
+					char *name;
+
+					assert(len <= sizeof(su.sun_path));
+
+					mem_copy_from_user_8(intp, real_name, ARG(1) + 2, len);
+					real_name[len] = '\0';
+					name = translate_filename(real_name);
+					free(real_name);
+
+					su.sun_family = AF_UNIX;
+					assert(strlen(name) < sizeof(su.sun_path));
+					strcpy(su.sun_path, name);
+
+					result = connect(fd, &su, sizeof(su) - sizeof(su.sun_path) + len);
+				    }
+				    break;
+
+				case AF_INET :
+				    {
+					struct sockaddr_in si;
+
+					assert(ARG(2) == 16);
+
+					si.sin_family = AF_INET;
+					si.sin_port = htons(mem_get_16(intp, ARG(1) + 2));
+					si.sin_addr.s_addr = htonl(mem_get_32(intp, ARG(1) + 4));
+					memset(si.sin_zero, 0, sizeof(si.sin_zero));
+
+					result = connect(fd, &si, sizeof(si));
+				    }
+				    break;
+
+				default :
+				    assert(0);
+			    }
 		    }
 		    break;
 
@@ -734,15 +857,24 @@ handle_system_call (interpreter_t *intp)
 
 			ANNOUNCE_SYSCALL("getsockname");
 
-			result = getsockname(ARG(0), (struct sockaddr*)buffer, &len);
-
-			if (result == 0)
+			fd = lookup_fd(ARG(0));
+			if (fd == -1)
 			{
-			    word_32 used_len;
+			    result = -1;
+			    errno = EBADF;
+			}
+			else
+			{
+			    result = getsockname(fd, (struct sockaddr*)buffer, &len);
 
-			    convert_native_sockaddr_to_ppc(intp, (struct sockaddr*)buffer, ARG(1), mem_get_32(intp, ARG(2)), &used_len);
+			    if (result == 0)
+			    {
+				word_32 used_len;
 
-			    mem_set_32(intp, ARG(2), used_len);
+				convert_native_sockaddr_to_ppc(intp, (struct sockaddr*)buffer, ARG(1), mem_get_32(intp, ARG(2)), &used_len);
+
+				mem_set_32(intp, ARG(2), used_len);
+			    }
 			}
 		    }
 		    break;
@@ -754,22 +886,38 @@ handle_system_call (interpreter_t *intp)
 
 			ANNOUNCE_SYSCALL("getpeername");
 
-			result = getpeername(ARG(0), (struct sockaddr*)buffer, &len);
-
-			if (result == 0)
+			fd = lookup_fd(ARG(0));
+			if (fd == -1)
 			{
-			    word_32 used_len;
+			    result = -1;
+			    errno = EBADF;
+			}
+			else
+			{
+			    result = getpeername(fd, (struct sockaddr*)buffer, &len);
 
-			    convert_native_sockaddr_to_ppc(intp, (struct sockaddr*)buffer, ARG(1), mem_get_32(intp, ARG(2)), &used_len);
+			    if (result == 0)
+			    {
+				word_32 used_len;
 
-			    mem_set_32(intp, ARG(2), used_len);
+				convert_native_sockaddr_to_ppc(intp, (struct sockaddr*)buffer, ARG(1), mem_get_32(intp, ARG(2)), &used_len);
+
+				mem_set_32(intp, ARG(2), used_len);
+			    }
 			}
 		    }
 		    break;
 
 		case SYS_SHUTDOWN :
 		    ANNOUNCE_SYSCALL("shutdown");
-		    result = shutdown(ARG(0), ARG(1));
+		    fd = lookup_fd(ARG(0));
+		    if (fd == -1)
+		    {
+			result = -1;
+			errno = EBADF;
+		    }
+		    else
+			result = shutdown(fd, ARG(1));
 		    break;
 
 		case SYS_SETSOCKOPT :
@@ -778,13 +926,22 @@ handle_system_call (interpreter_t *intp)
 
 			ANNOUNCE_SYSCALL("setsockopt");
 
-			optval = (byte*)malloc(ARG(4));
-			assert(optval != 0);
-			mem_copy_from_user_32(intp, optval, ARG(3), ARG(4));
+			fd = lookup_fd(ARG(0));
+			if (fd == -1)
+			{
+			    result = -1;
+			    errno = EBADF;
+			}
+			else
+			{
+			    optval = (byte*)malloc(ARG(4));
+			    assert(optval != 0);
+			    mem_copy_from_user_32(intp, optval, ARG(3), ARG(4));
 
-			result = setsockopt(ARG(0), ARG(1), ARG(2), optval, ARG(4));
+			    result = setsockopt(fd, ARG(1), ARG(2), optval, ARG(4));
 
-			free(optval);
+			    free(optval);
+			}
 		    }
 		    break;
 
@@ -797,10 +954,17 @@ handle_system_call (interpreter_t *intp)
 
 	case 108 :
 	    ANNOUNCE_SYSCALL("fstat");
+	    fd = lookup_fd(intp->regs_GPR[3]);
+	    if (fd == -1)
+	    {
+		result = -1;
+		errno = EBADF;
+	    }
+	    else
 	    {
 		struct stat buf;
 
-		result = fstat(intp->regs_GPR[3], &buf);
+		result = fstat(fd, &buf);
 		if (result == 0)
 		{
 		    mem_set_32(intp, intp->regs_GPR[4] + 0, buf.st_dev);
@@ -927,6 +1091,13 @@ handle_system_call (interpreter_t *intp)
 
 	case 145 :
 	    ANNOUNCE_SYSCALL("readv");
+	    fd = lookup_fd(intp->regs_GPR[3]);
+	    if (fd == -1)
+	    {
+		result = -1;
+		errno = EBADF;
+	    }
+	    else
 	    {
 		word_32 i;
 		word_32 out_len = 0;
@@ -939,7 +1110,7 @@ handle_system_call (interpreter_t *intp)
 		buf = (byte*)malloc(out_len);
 		assert(buf != 0);
 
-		result = read(intp->regs_GPR[3], buf, out_len);
+		result = read(fd, buf, out_len);
 
 		if (result > 0)
 		{
@@ -961,6 +1132,13 @@ handle_system_call (interpreter_t *intp)
 
 	case 146 :
 	    ANNOUNCE_SYSCALL("writev");
+	    fd = lookup_fd(intp->regs_GPR[3]);
+	    if (fd == -1)
+	    {
+		result = -1;
+		errno = EBADF;
+	    }
+	    else
 	    {
 		word_32 i;
 		word_32 in_len = 0;
@@ -984,7 +1162,7 @@ handle_system_call (interpreter_t *intp)
 
 		assert(num_copied == in_len);
 
-		result = write(intp->regs_GPR[3], buf, in_len);
+		result = write(fd, buf, in_len);
 
 		free(buf);
 	    }
@@ -1464,6 +1642,55 @@ debugger (interpreter_t *intp)
 
 	    delete_breakpoint(intp, num);
 	}
+	else if (strcmp(token, "file") == 0)
+	{
+	    int fd, native_fd;
+	    int flags;
+
+	    p = get_token(p, token);
+	    if (p == 0)
+	    {
+		printf("error\n");
+		continue;
+	    }
+	    fd = atoi(token);
+	    assert(fd >= 0 && fd < MAX_FDS);
+
+	    p = get_token(p, token);
+	    if (p == 0)
+	    {
+		printf("error\n");
+		continue;
+	    }
+	    if (strcmp(token, "r") == 0)
+		flags = O_RDONLY;
+	    else if (strcmp(token, "w") == 0)
+		flags = O_WRONLY;
+	    else if (strcmp(token, "rw") == 0)
+		flags = O_RDWR;
+	    else
+	    {
+		printf("error\n");
+		continue;
+	    }
+
+	    p = get_token(p, token);
+	    if (p == 0)
+	    {
+		printf("error\n");
+		continue;
+	    }
+
+	    native_fd = open(token, flags);
+	    if (native_fd == -1)
+	    {
+		printf("cannot open file: %s\n", strerror(errno));
+		continue;
+	    }
+
+	    fd_map[fd].free = 0;
+	    fd_map[fd].native_fd = native_fd;
+	}
 	else
 	    printf("error\n");
     }
@@ -1523,6 +1750,18 @@ main (int argc, char *argv[])
 #endif
 
     assert(argc >= 2);
+
+    fd_map[0].free = 0;
+    fd_map[0].native_fd = 0;
+
+    fd_map[1].free = 0;
+    fd_map[1].native_fd = 1;
+
+    fd_map[2].free = 0;
+    fd_map[2].native_fd = 2;
+
+    for (i = 3; i < MAX_FDS; ++i)
+	fd_map[i].free = 1;
 
     ppc_argv = (char**)malloc(sizeof(char*) * argc);
     ppc_argv[0] = "/bigben/home/schani/./a.out";

@@ -121,13 +121,12 @@
 
 ;;;; insns
 
-(define-insn add
+(define-rc-insn add rd
     ((opcd 31)
      (xo9 266)
-     (oe 0)
-     (rc 0))
+     (oe 0))
   ((set (reg rd gpr) (+ (reg ra gpr) (reg rb gpr))))
-  ("add r%u,r%u,r%u" rd ra rb))
+  ("~A r%u,r%u,r%u" rd ra rb))
 
 (define-rc-insn adde rd
     ((opcd 31)
@@ -761,9 +760,19 @@
 
 (define-insn lwzu
     ((opcd 33))
-  ((set (reg rd gpr) (mem (+ (reg ra gpr) (sex d))))
-   (set (reg ra gpr) (+ (reg ra gpr) (sex d))))	;FIXME: aliasing!!!!!!
+  ((let ((ea (width 32 (+ (reg ra gpr) (sex d)))))
+     (set (reg rd gpr) (mem ea))
+     (set (reg ra gpr) ea)))
   ("lwzu r%u,%d(r%u)" rd d ra))
+
+(define-insn lwzux
+    ((opcd 31)
+     (xo1 55)
+     (rc 0))
+  ((let ((ea (width 32 (+ (reg ra gpr) (reg rb gpr)))))
+     (set (reg rd gpr) (mem ea))
+     (set (reg ra gpr) ea)))
+  ("lwzux r%u,r%u,r%u" rd ra rb))
 
 (define-insn lwzx
     ((opcd 31)
@@ -793,6 +802,14 @@
      (rb 0))
   ((set (reg rd gpr) (reg cr)))
   ("mfcr r%u" rd))
+
+(define-insn mfctr
+    ((opcd 31)
+     (xo1 339)
+     (rc 0)
+     (spr 288))
+  ((set (reg rd gpr) (reg ctr)))
+  ("mfctr r%u" rd))
 
 (define-insn mflr
     ((opcd 31)
@@ -861,8 +878,8 @@
      (oe 0)
      (xo9 75)
      (rc 0))
-  ((set (reg rd gpr) (promote 32 (shiftr (*s (width 64 (sex (reg ra gpr)))
-					     (width 64 (sex (reg rb gpr))))
+  ((set (reg rd gpr) (promote 32 (shiftr (* (width 64 (sex (reg ra gpr)))
+					    (width 64 (sex (reg rb gpr))))
 					 32))))
   ("mulhw r%u,r%u,r%u" rd ra rb))
 
@@ -1139,8 +1156,10 @@
   ((set (reg ra gpr) (logxor (reg rs gpr) (shiftl (zex uimm) 16))))
   ("xoris r%u,r%u,%u" ra rs uimm))
 
-(defvar *ppc-to-alpha-register-mapping*
-  (let ((mapping '((lr gpr t)
+(defvar *ppc-to-alpha-register-mapping* '((gpr gpr t) (fpr fpr nil) (spr gpr t)))
+
+#|
+(let ((mapping '((lr gpr t)
 		   (cr gpr nil)
 		   (xer gpr nil)
 		   (ctr gpr t)
@@ -1151,5 +1170,6 @@
       (push (list (intern (format nil "GPR~A" i)) 'gpr t) mapping)
       (push (list (intern (format nil "FPR~A" i)) 'fpr nil) mapping))
     mapping))
+|#
 
 (defparameter *ppc* *this-machine*)

@@ -254,25 +254,37 @@ natively_mprotect_pages (interpreter_t *intp, word_32 addr, word_32 len, int fla
 void
 segfault (interpreter_t *intp, word_32 addr)
 {
-    printf("segmentation fault for addr 0x%08x\n", addr);
+    printf("segmentation fault for addr 0x%08x (pc=0x%08x)\n", addr, intp->pc);
     intp->halt = 1;
 }
 
 void
 emulated_mem_set_32 (interpreter_t *intp, word_32 addr, word_32 value)
 {
-    page_t *page = get_page(intp, addr);
+    if ((addr & 3) == 0)
+    {
+	page_t *page = get_page(intp, addr);
 
-    assert((addr & PPC_PAGE_MASK) + 4 <= PPC_PAGE_SIZE);
+	assert((addr & PPC_PAGE_MASK) + 4 <= PPC_PAGE_SIZE);
 
-    if (page == 0 || !(page->flags & PAGE_WRITEABLE))
-	segfault(intp, addr);
+	if (page == 0 || !(page->flags & PAGE_WRITEABLE))
+	    segfault(intp, addr);
+	else
+	{
+	    if (debug)
+		printf("mem[%x] = %x\n", addr, value);
+
+	    *(word_32*)(page->mem + (addr & PPC_PAGE_MASK)) = value;
+	}
+    }
     else
     {
-	if (debug)
-	    printf("mem[%x] = %x\n", addr, value);
+	printf("unaligned write 32 access at 0x%08x (pc=0x%08x)\n", addr, intp->pc);
 
-	*(word_32*)(page->mem + (addr & PPC_PAGE_MASK)) = value;
+	emulated_mem_set_8(intp, addr, value >> 24);
+	emulated_mem_set_8(intp, addr + 1, (value >> 16) & 0xff);
+	emulated_mem_set_8(intp, addr + 2, (value >> 8) & 0xff);
+	emulated_mem_set_8(intp, addr + 3, value & 0xff);
     }
 }
 
@@ -300,6 +312,9 @@ void
 emulated_mem_set_16 (interpreter_t *intp, word_32 addr, word_16 value)
 {
     assert((addr & PPC_PAGE_MASK) + 2 <= PPC_PAGE_SIZE);
+
+    if ((addr & 1) != 0)
+	printf("unaligned write 16 access at 0x%08x (pc=0x%08x)\n", addr, intp->pc);
 
     emulated_mem_set_8(intp, addr, value >> 8);
     emulated_mem_set_8(intp, addr + 1, value & 0xff);
@@ -359,17 +374,29 @@ mem_copy_from_user_32 (interpreter_t *intp, byte *buf, word_32 addr, word_32 len
 word_32
 emulated_mem_get_32 (interpreter_t *intp, word_32 addr)
 {
-    page_t *page = get_page(intp, addr);
-
-    assert((addr & PPC_PAGE_MASK) + 4 <= PPC_PAGE_SIZE);
-
-    if (page == 0)
+    if ((addr & 3) == 0)
     {
-	segfault(intp, addr);
-	return 0;
+	page_t *page = get_page(intp, addr);
+
+	assert((addr & PPC_PAGE_MASK) + 4 <= PPC_PAGE_SIZE);
+
+	if (page == 0)
+	{
+	    segfault(intp, addr);
+	    return 0;
+	}
+	else
+	    return *(word_32*)(page->mem + (addr & PPC_PAGE_MASK));
     }
     else
-	return *(word_32*)(page->mem + (addr & PPC_PAGE_MASK));
+    {
+	printf("unaligned read 32 access at 0x%08x (pc=0x%08x)\n", addr, intp->pc);
+
+	return ((word_32)emulated_mem_get_8(intp, addr) << 24)
+	    | ((word_32)emulated_mem_get_8(intp, addr + 1) << 16)
+	    | ((word_32)emulated_mem_get_8(intp, addr + 2) << 8)
+	    | (word_32)emulated_mem_get_8(intp, addr + 3);
+    }
 }
 
 word_8
@@ -392,7 +419,8 @@ emulated_mem_get_8 (interpreter_t *intp, word_32 addr)
 word_16
 emulated_mem_get_16 (interpreter_t *intp, word_32 addr)
 {
-    assert((addr & 1) == 0);
+    if ((addr & 1) != 0)
+	printf("unaligned write 16 access at 0x%08x (pc=0x%08x)\n", addr, intp->pc);
 
     return ((word_16)emulated_mem_get_8(intp, addr) << 8) | emulated_mem_get_8(intp, addr + 1);
 }
@@ -536,7 +564,7 @@ read_all (int fd, byte *buf, size_t count)
 word_32
 copy_file_to_mem (interpreter_t *intp, int fd, word_32 addr, word_32 len, word_32 offset, int reset)
 {
-    off_t curr_offset;
+    off_t curr_offset = 0;
     off_t seek_result;
     word_32 num_read = 0;
 

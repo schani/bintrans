@@ -65,7 +65,7 @@ indirect_dispatcher:
 
 #ifdef COMPILER
 	lda	$1,fragment_hash_table
-	lda	$2,8091*4($31)
+	ldiq	$2,16383*4
 	and	a0,$2,$2
 	s4addq	$2,$1,$1
 	ldq	$2,8($1)	# $2 = native_addr

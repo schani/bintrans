@@ -78,6 +78,12 @@ typedef struct
     page_t *pagetable[LEVEL1_SIZE];
 } interpreter_t;
 
+typedef struct
+{
+    int free;
+    int native_fd;
+} fd_mapping_t;
+
 #define DIRECT_MEM_BASE     0x000000000
 #define REAL_ADDR(a)        ((addr_t)(a) + DIRECT_MEM_BASE)
 

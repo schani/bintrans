@@ -188,7 +188,7 @@
   (mem (+ (op rb) (sex memory-disp))))
 
 (define-insn-macro set-mem (width value)
-  (set (mem (+ (sex memory-disp) (op rb)) width) value))
+  (set (mem (+ (op rb) (sex memory-disp)) width) value))
 
 ;;;; insns
 
@@ -603,10 +603,10 @@
    (fc fa)))
 
 (define-operate-insn mull #x13 #x00
-  ((set-rc (sex (*s (long-op ra) (long-op-b))))))
+  ((set-rc (sex (* (long-op ra) (long-op-b))))))
 
 (define-operate-insn mulq #x13 #x20
-  ((set-rc (*s (op ra) (op-b)))))
+  ((set-rc (* (op ra) (op-b)))))
 
 (define-float-insn muls #x16 #x082
   ((set-fc (*f (fop fa) (fop fb)))))
@@ -655,7 +655,7 @@
   ((ra 31)))
 
 (define-operate-insn sll #x12 #x39
-  ((set-rc (shiftl (op ra) (op-b)))))
+  ((set-rc (shiftl (op ra) (logand (op-b) #x3f)))))
 
 (define-float-insn sqrts #x14 #x08b
   ((set-fc (sqrt (fop fb))))
@@ -666,10 +666,10 @@
   ((fa 31)))
 
 (define-operate-insn sra #x12 #x3c
-  ((set-rc (ashiftr (op ra) (op-b)))))
+  ((set-rc (ashiftr (op ra) (logand (op-b) #x3f)))))
 
 (define-operate-insn srl #x12 #x34
-  ((set-rc (shiftr (op ra) (op-b)))))
+  ((set-rc (shiftr (op ra) (logand (op-b) #x3f)))))
 
 (define-load-store-insn stb
     ((opcd #x0e))

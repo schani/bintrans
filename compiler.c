@@ -15,10 +15,10 @@ typedef int label_t;
 
 #define MAX_UNRESOLVED_JUMPS 8192 /* should be a lot less if we actually do resolve branches */
 
-#define MAX_CODE_INSNS     300000
+#define MAX_CODE_INSNS     600000
 
-#define FRAGMENT_HASH_TABLE_SIZE   8192
-#define FRAGMENT_HASH_OVERFLOW     4096
+#define FRAGMENT_HASH_TABLE_SIZE  16384
+#define FRAGMENT_HASH_OVERFLOW     8192
 
 #define HASH_ADDR(addr)         (((addr) >> 2) & (FRAGMENT_HASH_TABLE_SIZE - 1))
 
