@@ -4,12 +4,10 @@
 #include <unistd.h>
 
 #include "bintrans.h"
+#include "compiler.h"
 
 #include "alpha_composer.h"
 #include "alpha_disassembler.c"
-
-typedef word_32 reg_t;
-typedef int label_t;
 
 #define MAX_LABELS               8
 #define MAX_BACKPATCHES          8
@@ -53,25 +51,29 @@ typedef int label_t;
 #define MOD_UNSIGNED_8_CONST       (NUM_REG_CONSTANTS + 38)
 #define MOD_SIGNED_8_CONST         (NUM_REG_CONSTANTS + 40)
 
+typedef struct
+{
+    int begin;
+    int end;
+} reg_range_t;
+
 #if defined(EMU_PPC)
-#define FIRST_INTEGER_REG       1
-#define NUM_INTEGER_REGS       15
-#define REG_TYPE_INTEGER        1
+reg_range_t integer_reg_range[] = { { 1, 16 }, { 0, 0 } };
+#define NUM_INTEGER_REGS                       15
 #elif defined(EMU_I386)
+reg_range_t integer_reg_range[] = { { 15, 16 }, { 18, 26 }, { 0, 0 } };
+#define NUM_INTEGER_REGS                        8
 #define FIRST_NATIVE_INTEGER_HOST_REG           1
-#define NUM_NATIVE_INTEGER_HOST_REGS            10 /* FIXME: this should be in the machine definition (NUM_INTEGER_EMU_REGISTERS) */
-#define FIRST_INTEGER_REG                       (FIRST_NATIVE_INTEGER_HOST_REG + NUM_NATIVE_INTEGER_HOST_REGS)
-#define NUM_INTEGER_REGS                        (15 - 10) /* FIXME: see above */
-#define REG_TYPE_INTEGER                        1
+#define NUM_NATIVE_INTEGER_HOST_REGS           14 /* FIXME: this should be in the machine definition (NUM_INTEGER_EMU_REGISTERS) */
 #endif
+
+#define REG_TYPE_INTEGER        1
 
 #define FIRST_FLOAT_REG         1
 #define NUM_FLOAT_REGS         15
 #define REG_TYPE_FLOAT          2
 
 #define MAX_ALLOC_DEPTH         4
-
-#define NEED_NATIVE        0x1000
 
 typedef struct
 {
@@ -148,7 +150,7 @@ typedef struct
 } i386_insn_t;
 
 #define MAX_BLOCK_INSNS          1024
-#define MAX_AFTER_BRANCH_INSNS     15
+#define MAX_AFTER_BRANCH_INSNS     30
 
 i386_insn_t block_insns[MAX_BLOCK_INSNS + MAX_AFTER_BRANCH_INSNS];
 int num_block_insns = 0;
@@ -469,13 +471,6 @@ ref_integer_reg (int foreign_reg, int reading, int writing)
     return reg->native_reg;
 }
 
-#define ref_integer_reg_for_reading(f)                    ref_integer_reg(f,1,0)
-#define ref_integer_reg_for_writing(f)                    ref_integer_reg(f,0,1)
-#define ref_integer_reg_for_reading_and_writing(f)        ref_integer_reg(f,1,1)
-
-#define ref_gpr_reg_for_reading                           ref_integer_reg_for_reading
-#define ref_gpr_reg_for_writing                           ref_integer_reg_for_writing
-
 void
 unref_integer_reg (reg_t reg)
 {
@@ -486,8 +481,6 @@ unref_integer_reg (reg_t reg)
 
     unref_reg(integer_regs[alloc_sp], NUM_INTEGER_REGS, reg);
 }
-
-#define unref_gpr_reg(f)                                  unref_integer_reg(f)
 
 reg_t
 ref_float_reg (int foreign_reg, int reading, int writing)
@@ -510,10 +503,6 @@ ref_float_reg (int foreign_reg, int reading, int writing)
     return reg->native_reg;
 }
 
-#define ref_float_reg_for_reading(f)                      ref_float_reg(f,1,0)
-#define ref_float_reg_for_writing(f)                      ref_float_reg(f,0,1)
-#define ref_float_reg_for_reading_and_writing(f)          ref_float_reg(f,1,1)
-
 void
 unref_float_reg (reg_t reg)
 {
@@ -523,31 +512,46 @@ unref_float_reg (reg_t reg)
 void
 emit_load_integer_32 (reg_t reg, word_32 val)
 {
-    if ((val >> 15) == 0 || (val >> 15) == (0xffffffff >> 15))
+    if ((val >> 15) == 0 || (val >> 15) == 0x1ffff)
 	emit(COMPOSE_LDA(reg, val & 0xffff, 31));
     else if ((val & 0xffff) == 0)
 	emit(COMPOSE_LDAH(reg, val >> 16, 31));
     else
     {
+#if defined(EMU_PPC)
 	assert(num_constants < MAX_CONSTANTS);
 
 	emit(COMPOSE_LDL(reg, num_constants * 4, CONSTANT_AREA_REG));
 	constant_area[num_constants++] = val;
-
-	/*
-	printf("  load $%u,%u\n", reg, val);
-	assert(0);
-	*/
+#elif defined(EMU_I386)
+	emit(COMPOSE_LDA(reg, val & 0xffff, 31));
+	if (val & 0x8000)
+	    emit(COMPOSE_ZAPNOT_IMM(reg, 3, reg));
+	emit(COMPOSE_LDAH(reg, val >> 16, reg));
+#endif
     }
 }
 
 void
 emit_load_integer_64 (reg_t reg, word_64 val)
 {
-    if ((val >> 15) == 0 || (val >> 15) == ((word_64)-1 >> 15))
-	emit(COMPOSE_LDA(reg, val & 0xffff, 31));
-    else if ((val & 0xffff) == 0 && ((val >> 31) == 0 || (val >> 31) == ((word_64)-1 >> 31)))
-	emit(COMPOSE_LDAH(reg, (val >> 16) & 0xffff, 31));
+    if ((val >> 31) == 0 || (val >> 31) == 0x1ffffffff)
+	emit_load_integer_32(reg, (word_32)val);
+#ifdef EMU_I386
+    else if ((val >> 32) == 0)
+    {
+	if ((val >> 15) == 0 || (val >> 15) == 0x1ffff)
+	{
+	    emit(COMPOSE_LDA(reg, val & 0xffff, 31));
+	    emit(COMPOSE_ZAPNOT_IMM(reg, 15, reg));
+	}
+	else
+	{
+	    emit_load_integer_32(reg, (word_32)val);
+	    emit(COMPOSE_ZAPNOT_IMM(reg, 15, reg));
+	}
+    }
+#endif
     else
     {
 	assert(num_constants + 2 < MAX_CONSTANTS);
@@ -560,7 +564,7 @@ emit_load_integer_64 (reg_t reg, word_64 val)
 	constant_area[num_constants++] = val >> 32;
 
 	/*
-	printf("  load $%u,%u\n", reg, val);
+	printf("  load $%u,0x%lx\n", reg, val);
 	assert(0);
 	*/
     }
@@ -730,9 +734,6 @@ finish_fragment (void)
 
     fragment_start = (word_64)emit_loc;
 }
-
-#define emit_store_mem_32(val,addr)    emit(COMPOSE_STL((val),0,(addr)))
-#define emit_load_mem_32(val,addr)     emit(COMPOSE_LDL((val),0,(addr)))
 
 void
 emit_store_mem_8 (reg_t value_reg, reg_t addr_reg)
@@ -1032,25 +1033,28 @@ mod_signed_8 (sword_8 a, sword_8 b)
 void
 init_compiler (interpreter_t *intp, interpreter_t *dbg_intp)
 {
-    int i;
+    int i, j, k;
 
     compiler_intp = intp;
 #ifdef CROSSDEBUGGER
     debugger_intp = dbg_intp;
 #endif
 
-    for (i = 0; i < NUM_INTEGER_REGS; ++i)
-    {
-	integer_regs[0][i].native_reg = FIRST_INTEGER_REG + i;
-	integer_regs[0][i].type = REG_TYPE_INTEGER;
-	integer_regs[0][i].free = 1;
-	integer_regs[0][i].modified = 0;
-	integer_regs[0][i].refcount = 0;
-    }
+    i = 0;
+    for (j = 0; integer_reg_range[j].end > 0; ++j)
+	for (k = integer_reg_range[j].begin; k < integer_reg_range[j].end; ++k)
+	{
+	    integer_regs[0][i].native_reg = k;
+	    integer_regs[0][i].type = REG_TYPE_INTEGER;
+	    integer_regs[0][i].free = 1;
+	    integer_regs[0][i].modified = 0;
+	    integer_regs[0][i].refcount = 0;
+	    ++i;
+	}
 
     for (i = 0; i < NUM_FLOAT_REGS; ++i)
     {
-	float_regs[0][i].native_reg = FIRST_INTEGER_REG + i;
+	float_regs[0][i].native_reg = FIRST_FLOAT_REG + i;
 	float_regs[0][i].type = REG_TYPE_FLOAT;
 	float_regs[0][i].free = 1;
 	float_regs[0][i].modified = 0;
@@ -1440,7 +1444,7 @@ print_compiler_stats (void)
 
     for (i = 0; i < NUM_INSNS; ++i)
 	if (insn_infos[i].num_translated > 0)
-	    printf("  %-10s       %10d  %10d\n", insn_names[i], insn_infos[i].num_translated, insn_infos[i].num_generated_insns);
+	    printf("  %-20s       %10d  %10d\n", insn_names[i], insn_infos[i].num_translated, insn_infos[i].num_generated_insns);
 #endif
 
 #ifdef MEASURE_TIME

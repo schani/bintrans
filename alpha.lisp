@@ -1,4 +1,4 @@
-(new-machine 'alpha)
+(new-machine 'alpha 'little nil)
 
 (setf (machine-insn-bits *this-machine*) 32)
 (setf (machine-word-bits *this-machine*) 64)

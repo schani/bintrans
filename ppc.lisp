@@ -1,4 +1,4 @@
-(new-machine 'ppc)
+(new-machine 'ppc 'big nil)
 
 (setf (machine-insn-bits *this-machine*) 32)
 (setf (machine-word-bits *this-machine*) 32)

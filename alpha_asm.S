@@ -22,7 +22,11 @@
 	ldl	$7,48(pv)	;\
 	ldl	$8,56(pv)	;\
 	ldl	$9,64(pv)	;\
-	ldl	$10,72(pv)
+	ldl	$10,72(pv)	;\
+	ldl	$11,80(pv)	;\
+	ldl	$12,88(pv)	;\
+	ldl	$13,96(pv)	;\
+	ldl	$14,104(pv)
 #define STORE_NATIVE_HOST_REGISTERS(o)	\
 	stl	$1,0(o)	;\
 	stl	$2,8(o)	;\
@@ -33,7 +37,11 @@
 	stl	$7,48(o)	;\
 	stl	$8,56(o)	;\
 	stl	$9,64(o)	;\
-	stl	$10,72(o)
+	stl	$10,72(o)	;\
+	stl	$11,80(o)	;\
+	stl	$12,88(o)	;\
+	stl	$13,96(o)	;\
+	stl	$14,104(o)
 #else
 #define LOAD_NATIVE_HOST_REGISTERS
 #define STORE_NATIVE_HOST_REGISTERS(o)

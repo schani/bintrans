@@ -3,6 +3,7 @@ typedef unsigned short word_16;
 typedef unsigned long word_64;
 typedef unsigned char word_8;
 typedef unsigned int word_1;
+typedef unsigned int word_2;
 typedef unsigned int word_3;
 typedef unsigned int word_4;
 typedef unsigned int word_5;

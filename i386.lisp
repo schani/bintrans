@@ -1,4 +1,4 @@
-(new-machine 'i386)
+(new-machine 'i386 'little t)
 
 (setf (machine-word-bits *this-machine*) 32)
 
@@ -64,8 +64,6 @@
 (define-register-class 'fspr 'integer 16
   '(fpsw))
 
-(define-register-array 'fpst 'float 64 8)
-
 (define-subregisters '((al eax 0 7)
 		       (ah eax 8 15)
 		       (ax eax 0 15)
@@ -80,6 +78,10 @@
 		       (fc2 fpsw 10 10)
 		       (top fpsw 11 13)
 		       (fc3 fpsw 14 14)))
+
+(define-subreg-registers '(cf zf sf of))
+
+(define-register-array 'fpst 'float 64 8)
 
 ;(defun asm-for-mode (insn mode &optional reg)
 ;  nil)
@@ -99,7 +101,7 @@
 (define-insn-macro sib-address ()
   (+ (case base
        ((0 1 2 3 4 6 7) (reg base gpr))
-       (5 (if (= mod (width 2 0)) disp32 (reg ebp))))
+       (5 (case mod (0 disp32) ((1 2 3) (reg ebp)))))
      (case index
        ((0 1 2 3 5 6 7) (shiftl (reg index gpr) (zex scale)))
        (4 0))
@@ -352,6 +354,27 @@ static word_32 disp32, imm32;~%")
       (princ interpreter)
       (generate-register-dumper *i386*))))
 
+(defparameter *intel-insn-matchers* '((add rm32-simm8) (add rm32-r32)
+				      (inc +r32) (inc rm32)
+				      (lea r32-rm32)
+				      (mov eax-moffs32) (mov moffs32-eax) (mov rm32-imm32) (mov rm32-r32) (mov r32-rm32)
+				      (pop +r32) (pop m32)
+				      (push imm32) (push +r32) (push simm8) (push rm32)
+				      (sub rm32-r32)
+				      (xor al-imm8) (xor ax-imm16) (xor eax-imm32) (xor rm32-imm32) (xor rm32-simm8) (xor rm32-r32) (xor r32-rm32)))
+
+(defvar *intel-generator-function-arguments* "pc, mod, reg, rm, scale, index, base, disp8, opcode_reg, imm8, imm16, disp32, imm32, to_be_killed")
+
+(defun print-generated-exprs-functions ()
+  (dolist (func *generated-exprs*)
+    (destructuring-bind (dummy1 dummy2 proto dummy3)
+	func
+      (format t "~A;~%" proto)))
+  (dolist (func *generated-exprs*)
+    (destructuring-bind ((dummy1 . expr) dummy2 proto code)
+	func
+      (format t "~A~%/*~%~A~%*/~%{~%~A}~%~%" proto (expr-to-sexp expr) code))))
+
 (defun generate-intel-compiler ()
   (with-open-file (out (format nil "i386_compiler.c") :direction :output :if-exists :supersede)
     (let ((*standard-output* out)
@@ -370,18 +393,16 @@ word_32 next_pc;
 int prefix_flags;
 void **env = 0;~%")
 		      (generate-intel-insn-recognizer *i386* #'(lambda (insn)
-								 (dolist (expr (intel-insn-effect insn))
-								   (princ (generate-compiler nil expr nil)))
+								 (let ((name (intel-insn-name insn))
+								       (mode (intel-insn-mode insn)))
+								   (if (member (list name mode) *intel-insn-matchers* :test #'equal)
+								       (format t "compile_~A_~A_insn(~A);~%"
+									       (dcs name) (dcs mode) *intel-generator-function-arguments*)
+								       (dolist (expr (intel-insn-effect insn))
+									 (princ (generate-compiler nil expr nil)))))
 								 (format t "generated_insn_index = ~A;~%" (position insn (machine-insns *i386*)))))
 		      (format t "~%#ifdef COLLECT_STATS~%++num_translated_insns;~%#endif~%intp->pc = next_pc;~%}~%")))))
-	(dolist (func *generated-exprs*)
-	  (destructuring-bind (dummy1 dummy2 proto dummy3)
-	      func
-	    (format t "~A;~%" proto)))
-	(dolist (func *generated-exprs*)
-	  (destructuring-bind ((dummy1 . expr) dummy2 proto code)
-	      func
-	    (format t "~A~%/*~%~A~%*/~%{~%~A}~%~%" proto (expr-to-sexp expr) code)))
+	(print-generated-exprs-functions)
 	(princ main)
 	(values)))))
 
@@ -487,12 +508,67 @@ can_jump_indirectly = ~:[0~;1~];~%"
 *_can_fall_through = can_fall_through;
 *_can_jump_indirectly = can_jump_indirectly;~%}~%"))))
 
+(defun generate-intel-insn-compiler-file (insn-name mode)
+  (let* ((insn (find-if #'(lambda (x) (and (eq (intel-insn-name x) insn-name) (eq (intel-insn-mode x) mode))) (machine-insns *i386*)))
+	 (*generated-effects* nil)
+	 (*generated-exprs* nil)
+	 (*analyzed-bits-register* (lookup-register 'eflags))
+	 (*generator-function-arguments* "")
+	 (main (with-output-to-string (out)
+		 (let ((*standard-output* out))
+		   (dolist (single-effect (intel-insn-effect insn))
+		     (expr-case single-effect
+		       (set (lvalue rhs)
+			    (if (all-lvalues-irrelevant-for-liveness (lookup-register 'eflags) lvalue)
+				(generate-insn-compiler (list single-effect))
+				(princ (generate-compiler nil single-effect nil))))
+		       (t
+			(error "cannot handle ~A exprs~%" (expr-kind single-effect)))))))))
+    (with-open-file (out (format nil "i386_~A_~A_compiler.c" (dcs insn-name) (dcs mode)) :direction :output :if-exists :supersede)
+      (let ((*standard-output* out)
+	    (*insn-field-accessor* #'(lambda (name begin end) (dcs name))))
+	(format t "#include <assert.h>
+#include \"bintrans.h\"
+#include \"compiler.h\"
+#include \"alpha_composer.h\"
+static word_8 mod, reg, rm, scale, index, base, disp8, opcode_reg, imm8;
+static word_16 imm16;
+static word_32 pc, disp32, imm32;~%")
+	(print-generated-exprs-functions)
+	(format t "void compile_~A_~A_insn (word_32 _pc, word_8 _mod, word_8 _reg, word_8 _rm, word_8 _scale, word_8 _index, word_8 _base, word_8 _disp8, word_8 _opcode_reg, word_8 _imm8, word_16 _imm16, word_32 _disp32, word_32 _imm32, word_32 to_be_killed) {
+void **env = 0;
+pc = _pc; mod = _mod; reg = _reg; rm = _rm; scale = _scale; index = _index; base = _base; disp8 = _disp8;
+opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 = _imm32;~%" (dcs insn-name) (dcs mode))
+	(princ main)
+	(format t "}~%")
+	(dolist (generated-effect *generated-effects*)
+	  (destructuring-bind (effect function-name num-insns text)
+	      generated-effect
+	    (let* ((lvalue (first (expr-operands effect)))
+		   (returns-reg (member (expr-kind lvalue) '(target-register target-subregister)))
+		   (return-val (if returns-reg
+				   (first (expr-operands lvalue))
+				   nil)))
+	      (format out "~:[void~;reg_t~] ~A (void) {~%~@[reg_t ~A;~%~]~A~@[return ~A;~%~]}~%"
+		      returns-reg
+		      function-name
+		      return-val
+		      text
+		      return-val))))))
+    (format t "~A generator functions~%" (length *generated-effects*))
+    (values)))
+
 (defun generate-all-intel-files ()
+  (generate-defines-file *i386*)
   (generate-intel-interpreter)
   (generate-intel-compiler)
   (generate-intel-disassembler)
   (generate-intel-livenesser)
-  (generate-intel-jump-analyzer))
+  (generate-intel-jump-analyzer)
+  (dolist (insn-matcher *intel-insn-matchers*)
+    (destructuring-bind (insn-name mode)
+	insn-matcher
+      (generate-intel-insn-compiler-file insn-name mode))))
 
 (define-std-binary-insn add
     ((al-imm8 (#x04))
@@ -716,8 +792,8 @@ can_jump_indirectly = ~:[0~;1~];~%"
      (set of cf))))
 
 (define-std-binary-insn imul
-    ((r16-rm16 (#x0f #xaf))
-     (r32-rm32 (#x0f #xaf)))
+    ((r32-rm32 (#x0f #xaf))
+     (rm32-imm32 (#x69)))
   ((let ((temp (promote 32 (width 64 (shiftr (* (sex src) (sex dst)) 32)))))
      (set cf (if (or (= temp 0) (= temp (bitneg 0))) 0 1))
      (set of cf))
@@ -1085,3 +1161,5 @@ can_jump_indirectly = ~:[0~;1~];~%"
    (set-zf dst op-width)))
 
 (defparameter *i386* *this-machine*)
+
+(defparameter *source-machine* *i386*)

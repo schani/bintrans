@@ -14,7 +14,15 @@
 
 (define-transformation
     (set (target-subregister (match reg) (match class) 0 (match w)) (match rhs))
-    (set (target-register reg class) (expand rhs)))
+    (set (target-register reg class) (zexpand rhs)))
+
+(define-transformation
+    (set (target-subregister (match reg) (match class) 0 (match w)) (match rhs))
+    (set (target-register reg class) (sexpand rhs)))
+
+(define-transformation
+    (set (target-subregister (match reg) (match class) 0 (match w)) (match rhs))
+    (set (target-register reg class) (sex rhs)))
 
 (define-transformation
     (set (target-register (match reg) (match class)) (zex (subregister (match sreg) (match sclass) (match snumber) 0 (match end) (match named))))
@@ -28,7 +36,11 @@
 
 (define-transformation
     (zex (match v :width w))
-    (logand (expand v) (mask 0 (- (zex w) 1))))
+    (logand (zexpand v) (mask 0 (- (zex w) 1))))
+
+(define-transformation
+    (zex (match v :width w))
+    (logand (sexpand v) (mask 0 (- (zex w) 1))))
 
 (define-transformation
     (zex (numbered-subregister (match reg) (match class) (match number) (match w) (match index)))
