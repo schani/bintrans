@@ -2273,6 +2273,7 @@ count_bits (word_32 x)
 unsigned long real_killed_bits = 0, killed_bits = 0;
 #endif
 
+#ifdef DYNAMO_TRACES
 word_64
 compile_dynamo_trace (word_32 *addrs, int length)
 {
@@ -2357,6 +2358,7 @@ compile_dynamo_trace (word_32 *addrs, int length)
 
     return native_addr;
 }
+#endif
 
 #ifdef CROSSDEBUGGER
 void
@@ -2718,7 +2720,8 @@ provide_fragment_and_patch (word_64 jump_addr)
 #endif
 
 #if defined(DYNAMO_TRACES) && defined(CROSSDEBUGGER)
-	native_addr = dynamo_runner(foreign_addr);
+	assert(native_addr != 0);
+	/* native_addr = dynamo_runner(foreign_addr); */
 #elif !defined(COMPILER_THRESHOLD) && !defined(DYNAMO_TRACES)
 #ifdef SYNC_BLOCKS
 	native_addr = compile_fragment_if_needed(foreign_addr, unresolved_jumps[i].alloced_integer_regs);
