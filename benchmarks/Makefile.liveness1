@@ -23,8 +23,7 @@ COMPILER_OBJS = compiler.o
 
 #DEFINES = -DUSE_HAND_TRANSLATOR -DCOLLECT_STATS -DDYNAMO_TRACES -DDYNAMO_THRESHOLD=50 -DSYNC_BLOCKS
 #-DDUMP_CODE
-DEFINES = -DUSE_HAND_TRANSLATOR -DCOLLECT_STATS
-#-DCOLLECT_LIVENESS -DLIVENESS_DEPTH=0
+DEFINES = -DUSE_HAND_TRANSLATOR -DCOLLECT_STATS -DCOLLECT_LIVENESS -DLIVENESS_DEPTH=1
 #-DDUMP_CFG
 #-DDUMP_CODE
 #-DSYNC_BLOCKS
@@ -112,28 +111,28 @@ convert_liveness : convert_liveness.c bintrans.h compiler.h
 	$(DIET) gcc $(CFLAGS) -Wall -o convert_liveness convert_liveness.c
 
 ppc.o : ppc.c ppc_interpreter.c ppc_disassembler.c alpha_types.h bintrans.h
-	$(DIET) gcc $(CFLAGS) -Wall -g -c ppc.c
+	$(DIET) gcc $(CFLAGS) -Wall -O3 -c ppc.c
 
 i386.o : i386.c i386_interpreter.c i386_disassembler.c i386_livenesser.c bintrans.h
-	$(DIET) gcc $(CFLAGS) -Wall -g -c i386.c
+	$(DIET) gcc $(CFLAGS) -Wall -c i386.c
 
 compiler.o : compiler.c alpha_composer.h ppc_to_alpha_compiler.c ppc_jump_analyzer.c i386_compiler.c i386_to_ppc_compiler.c alpha_disassembler.c alpha_types.h bintrans.h fragment_hash.h compiler.h
-	$(DIET) gcc $(CFLAGS) -Wall -g -c compiler.c
+	$(DIET) gcc $(CFLAGS) -Wall -O3 -c compiler.c
 
 mm.o : mm.c bintrans.h alpha_types.h ppc_defines.h
-	$(DIET) gcc $(CFLAGS) -Wall -g -c mm.c
+	$(DIET) gcc $(CFLAGS) -Wall -O3 -c mm.c
 
 unaligned.o : unaligned.c bintrans.h compiler.h
-	$(DIET) gcc $(CFLAGS) -Wall -g -c unaligned.c
+	$(DIET) gcc $(CFLAGS) -Wall -c unaligned.c
 
 fragment_hash.o : fragment_hash.c fragment_hash.h bintrans.h
-	$(DIET) gcc $(CFLAGS) -Wall -g -c fragment_hash.c
+	$(DIET) gcc $(CFLAGS) -Wall -O3 -c fragment_hash.c
 
 loops.o : loops.c fragment_hash.h bintrans.h compiler.h
-	$(DIET) gcc $(CFLAGS) -Wall -g -c loops.c
+	$(DIET) gcc $(CFLAGS) -Wall -O3 -c loops.c
 
 liveness.o : liveness.c bintrans.h
-	$(DIET) gcc $(CFLAGS) -Wall -g -c liveness.c
+	$(DIET) gcc $(CFLAGS) -Wall -O3 -c liveness.c
 
 lispreader.o : lispreader.c lispreader.h
 	$(DIET) gcc $(CFLAGS) -I. -Wall -g -c lispreader.c

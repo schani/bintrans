@@ -3,7 +3,7 @@
  *
  * bintrans
  *
- * Copyright (C) 2001 Mark Probst
+ * Copyright (C) 2001,2002 Mark Probst
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -210,7 +210,7 @@ indirect_dispatcher:
 
 #ifdef COMPILER
 	lda	a1,fragment_hash_table
-	ldiq	a2,16383*4
+	ldiq	a2,65535*4
 	and	a0,a2,a2
 #if defined(PROFILE_FRAGMENTS) && defined(PROFILE_LOOPS)
 	sll	a2,4,a3
