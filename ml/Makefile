@@ -1,10 +1,13 @@
-OC = ocamlc -g
-OEXT = cmo
-#OC = ocamlopt
-#OEXT = cmx
+WARN_OPTS = -w A -w e
+
+#OC = ocamlc $(WARN_OPTS)
+#OEXT = cmo
+OC = ocamlopt $(WARN_OPTS)
+OEXT = cmx
 AEXT = cma
 
-ENGINE_OBJS = monad.$(OEXT) bitmath.$(OEXT) expr.$(OEXT) cond_monad.$(OEXT) instruction.$(OEXT) matcher.$(OEXT) \
+ENGINE_OBJS = monad.$(OEXT) memoize.$(OEXT) bitmath.$(OEXT) \
+	      expr.$(OEXT) cond_monad.$(OEXT) instruction.$(OEXT) matcher.$(OEXT) \
 	      simplifiers.$(OEXT) simplify.$(OEXT) \
 	      machine.$(OEXT) pruner.$(OEXT) irmacros.$(OEXT) target_alpha.$(OEXT)
 

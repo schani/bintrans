@@ -39,21 +39,25 @@ let rec repeat_until_fixpoint fn data =
   else
     repeat_until_fixpoint fn ndata
 
-let rec simplify_and_prune_until_fixpoint prune simplify fields x =
+let rec simplify_and_prune_until_fixpoint depth print prune simplify fields x =
+  if depth >= 100 then
+    (print_int depth ; print_string " : " ; print x ; print_newline ())
+  else
+    () ;
   cm_bind (prune fields x)
     (fun px ->
-      cm_bind (simplify fields x)
+      cm_bind (simplify fields px)
 	(fun spx ->
 	  if spx = x then
 	    cm_return x
 	  else
-	    simplify_and_prune_until_fixpoint prune simplify fields spx))
+	    simplify_and_prune_until_fixpoint (depth + 1) print prune simplify fields spx))
 
 let simplify_and_prune_expr_until_fixpoint =
-  simplify_and_prune_until_fixpoint (fun f x -> prune_expr f x minus_one) simplify_expr
+  simplify_and_prune_until_fixpoint 0 print_expr (fun f x -> prune_expr f x minus_one) simplify_expr
 
 let simplify_and_prune_stmt_until_fixpoint =
-  simplify_and_prune_until_fixpoint prune_stmt simplify_stmt
+  simplify_and_prune_until_fixpoint 0 (fun _ -> ()) prune_stmt simplify_stmt
 
 let explore_all_fields stmt fields =
   let rec explore fields_so_far rest_fields stmts_so_far =
@@ -77,8 +81,8 @@ let explore_all_fields stmt fields =
 let simplify_conditions conds =
   let prune_and_simplify x =
     fst (cm_yield (simplify_and_prune_expr_until_fixpoint [] x))
-  in filter (fun x -> not (is_const x))
-       (map (fun x -> cfold_expr [] (prune_and_simplify x)) conds)
+  in map (fun x -> cfold_expr [] (prune_and_simplify x))
+    (filter (fun x -> not (is_const (cfold_expr [] x))) conds)
 
 let test_expore () =
   let r1 = (1, Int)
@@ -105,13 +109,13 @@ let main () =
   in let stmt1 = Assign (r1, Binary (BitAnd, Binary (ShiftL, Register r2, IntConst (IntField "sh")),
 				     (make_mask (int_literal_expr 0L) (int_literal_expr 15L))))
      and stmt2 = make_ppc_rlwinm r1 (Register r2) (IntConst (IntField "sh")) (IntConst (IntField "mb")) (IntConst (IntField "me"))
-     and fields = [("sh", 16L); ("mb", 16L); ("me", 31L)]
+     and fields = [("sh", 0L); ("mb", 0L); ("me", 31L)]
   in let (stmt, conds) = cm_yield (simplify_and_prune_stmt_until_fixpoint fields stmt2)
-  (* in let conds = simplify_conditions conds *)
+  in let conds = simplify_conditions conds
   in print_stmt stmt2 ; print_string "->\n" ;
     print_stmt (cfold_stmt [] stmt) ; print_string "=\n" ;
     print_stmt (cfold_stmt fields stmt) ; print_string "when\n" ;
-    iter (fun x -> print_expr x ; print_string " -> " ; print_newline () ; print_expr (cfold_expr [] (fst (cm_yield (simplify_and_prune_expr_until_fixpoint [] x)))) ; print_newline ()) conds;;
+    (* iter (fun x -> print_expr x ; print_newline ()) conds *) ;;
 
 main ();;
 exit 0;;

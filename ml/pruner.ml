@@ -2,6 +2,7 @@ open Int64
 
 open Monad
 open Bitmath
+open Memoize
 open Expr
 open Machine
 open Cond_monad
@@ -14,9 +15,11 @@ let full_mask =
 and empty_mask =
   int_literal_expr zero
 
-let rec expr_known fields expr =
-  let rec bits =
-    expr_bits fields
+let unmemoized_expr_known known_one_arg bits_one_arg fields expr =
+  let rec known expr =
+    known_one_arg (fields, expr)
+  and bits expr =
+    bits_one_arg (fields, expr)
   and cfold =
     cfold_expr fields
   and known_unary op arg =
@@ -92,7 +95,7 @@ let rec expr_known fields expr =
     | IntMulHS | IntMulHU -> empty_mask
   and known_ternary_width op width arg1 arg2 arg3 =
     empty_mask
-  and known expr =
+  and unmemoized_known expr =
     match expr with
       IntConst (IntLiteral _) -> full_mask
     | IntConst _ -> empty_mask
@@ -129,10 +132,13 @@ let rec expr_known fields expr =
   in if is_const (cfold_expr fields expr) then
     full_mask
   else
-    known expr
-and expr_bits fields expr =
-  let rec known =
-    expr_known fields
+    unmemoized_known expr
+
+let unmemoized_expr_bits bits_one_arg known_one_arg fields expr =
+  let rec known expr =
+    known_one_arg (fields, expr)
+  and bits expr =
+    bits_one_arg (fields, expr)
   and cfold =
     cfold_expr fields
   and bits_unary op arg =
@@ -216,7 +222,7 @@ and expr_bits fields expr =
     | IntMulHS | IntMulHU -> empty_mask
   and bits_ternary_width op width arg1 arg2 arg3 =
     empty_mask
-  and bits expr =
+  and unmemoized_bits expr =
     match expr with
       IntConst (IntLiteral _) -> expr
     | IntConst _ -> empty_mask
@@ -250,10 +256,24 @@ and expr_bits fields expr =
 	| Float -> empty_mask
 	| Condition -> bool_to_int_expr expr
     else
-      bits expr
+      unmemoized_bits expr
 
-let prune_expr fields expr needed =
-  let return = cm_return
+let (expr_known_one_arg, expr_bits_one_arg) =
+  memoize2
+    (fun known bits (fields, expr) ->
+       unmemoized_expr_known known bits fields expr)
+    (fun known bits (fields, expr) ->
+       unmemoized_expr_bits bits known fields expr)
+    
+let expr_known fields expr =
+  expr_known_one_arg (fields, expr)
+and expr_bits fields expr =
+  expr_bits_one_arg (fields, expr)
+
+let unmemoized_prune_expr prune_one_arg fields expr needed =
+  let prune expr needed =
+    prune_one_arg (fields, expr, needed)
+  and return = cm_return
   and let1 = cm_bind
   and let2 = (make_bind2 cm_bind)
   and let3 = (make_bind3 cm_bind)
@@ -262,7 +282,7 @@ let prune_expr fields expr needed =
     expr_bits fields expr
   and known expr =
     expr_known fields expr
-  in let rec prune expr needed =
+  in let rec unmemoized_prune expr needed =
     let prune_unary op arg =
       match op with
 	LoadByte | IntToFloat | FloatToInt | FloatSqrt | FloatNeg | FloatAbs ->
@@ -537,9 +557,15 @@ let prune_expr fields expr needed =
 		  (prune condition (int_literal_expr one))
 		  (prune cons needed)
 		  (prune alt needed)
-		  (fun pcons palt pcondition ->
+		  (fun pcondition pcons palt ->
 		     return (If (pcondition, pcons, palt)))))
-  in prune expr (int_literal_expr needed)
+  in unmemoized_prune expr needed
+
+let rec prune_expr_one_arg =
+  memoize (fun prune (fields, expr, needed) ->
+	     unmemoized_prune_expr prune fields expr needed)
+and prune_expr fields expr needed =
+  prune_expr_one_arg (fields, expr, (int_literal_expr needed))
 
 let prune_stmt fields stmt =
   match stmt with
