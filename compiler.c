@@ -77,6 +77,17 @@ typedef struct
     unsigned long timestamp;	/* timestamp of last reference */
 } register_alloc_t;
 
+#ifdef COLLECT_STATS
+typedef struct
+{
+    int num_translated;
+    int num_generated_insns;
+    int num_generated_consts;
+} insn_info_t;
+
+insn_info_t insn_infos[NUM_INSNS];
+#endif
+
 label_info_t label_infos[MAX_LABELS];
 word_32 code_area[MAX_CODE_INSNS];
 word_32 *emit_loc;
@@ -97,6 +108,7 @@ int alloc_sp = 0;
 unsigned long register_timestamp = 0;
 
 int have_jumped = 0;
+int generated_insn_index;
 
 interpreter_t *compiler_intp = 0;
 #ifdef CROSSDEBUGGER
@@ -109,6 +121,7 @@ unsigned long num_direct_and_indirect_jumps = 0;
 unsigned long num_fragment_hash_misses = 0;
 unsigned long num_translated_fragments = 0;
 unsigned long num_translated_insns = 0;
+unsigned long num_load_store_reg_insns = 0;
 unsigned long num_divisions = 0;
 #endif
 
@@ -122,6 +135,10 @@ emit (word_32 insn)
 void
 load_reg (register_alloc_t *reg)
 {
+#ifdef COLLECT_STATS
+    ++num_load_store_reg_insns;
+#endif
+
     switch (reg->type)
     {
 	case REG_TYPE_INTEGER :
@@ -141,6 +158,10 @@ void
 store_reg (register_alloc_t *reg)
 {
     assert(reg->modified);
+
+#ifdef COLLECT_STATS
+    ++num_load_store_reg_insns;
+#endif
 
     switch (reg->type)
     {
@@ -828,6 +849,15 @@ init_compiler (interpreter_t *intp, interpreter_t *dbg_intp)
     add_const_64((word_64)leading_zeros);
     add_const_64((word_64)div_unsigned_32);
     add_const_64((word_64)div_signed_32);
+
+#ifdef COLLECT_STATS
+    for (i = 0; i < NUM_INSNS; ++i)
+    {
+	insn_infos[i].num_translated = 0;
+	insn_infos[i].num_generated_insns = 0;
+	insn_infos[i].num_generated_consts = 0;
+    }
+#endif
 }
 
 word_64
@@ -835,7 +865,7 @@ compile_basic_block (word_32 addr)
 {
     word_64 start = (word_64)emit_loc;
     word_32 insnp = addr;
-#ifdef DUMP_CODE
+#if defined(DUMP_CODE) || defined(COLLECT_STATS)
     word_64 x = start;
     int old_num_constants = num_constants;
     int i;
@@ -846,6 +876,11 @@ compile_basic_block (word_32 addr)
     while (!have_jumped)
     {
 	compile_ppc_insn(mem_get_32(compiler_intp, insnp), insnp);
+
+#ifdef COLLECT_STATS
+	++insn_infos[generated_insn_index].num_translated;
+	insn_infos[generated_insn_index].num_generated_insns += ((word_64)emit_loc - x) / 4;
+#endif
 
 #ifdef DUMP_CODE
 	printf("++++++++++++++++\n%08x  ", insnp);
@@ -858,6 +893,10 @@ compile_basic_block (word_32 addr)
 	    printf("\n");
 	    x += 4;
 	}
+#endif
+
+#if defined(COLLECT_STATS) || defined(DUMP_CODE)
+	x = emit_loc;
 #endif
 
 	insnp += 4;
@@ -1000,13 +1039,21 @@ void
 print_compiler_stats (void)
 {
 #ifdef COLLECT_STATS
+    int i;
+
     printf("patched direct jumps:   %lu\n", num_direct_jumps);
     printf("indirect jumps:         %lu\n", num_direct_and_indirect_jumps - num_direct_jumps);
     printf("fragment hash misses:   %lu\n", num_fragment_hash_misses);
     printf("translated fragments:   %lu\n", num_translated_fragments);
     printf("translated insns:       %lu\n", num_translated_insns);
     printf("generated insns:        %lu\n", emit_loc - code_area);
+    printf("load/store reg insns:   %lu\n", num_load_store_reg_insns);
+    printf("constants:              %d\n", num_constants - (NUM_PPC_REGISTERS * 2 + 2));
     printf("divisions:              %lu\n", num_divisions);
+
+    for (i = 0; i < NUM_INSNS; ++i)
+	if (insn_infos[i].num_translated > 0)
+	    printf("  %-10s       %10d  %10d\n", insn_names[i], insn_infos[i].num_translated, insn_infos[i].num_generated_insns);
 #endif
 }
 

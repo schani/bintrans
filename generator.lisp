@@ -872,7 +872,25 @@
 			(values nil (list 'invalid-integer pattern expr))))
 		   ((consp pattern)
 		    (case (first pattern)
-		      ((if <s >s)
+		      (set
+		       (case (first (second pattern))
+			 (mem
+			  (if (eq (expr-kind expr) 'set-mem)
+			      (if (= (first (expr-operands expr)) (third (second pattern)))
+				  (match-multiple (rest (expr-operands expr))
+						  (list (second (second pattern))
+							(third pattern)) bindings)
+				  (values nil 'set-mem-widths-do-not-match expr))
+			      (values nil 'expr-type-not-set-mem expr)))
+			 (t
+			  (error "set ~A not supported~%" expr))))
+		      (mem
+		       (if (eq (expr-kind expr) 'mem)
+			   (if (= (expr-width expr) (third pattern))
+			       (match (first (expr-operands expr)) (second pattern) bindings)
+			       (values nil 'mem-widths-do-not-match expr))
+			   (values nil 'expr-not-mem expr)))
+		      ((if <s >s + sex)
 		       (if (eq (expr-kind expr) (first pattern))
 			   (match-multiple (expr-operands expr) (rest pattern) bindings)
 			   (values nil (list 'wrong-expr-type (first pattern) expr))))
@@ -1621,7 +1639,7 @@ else
 			       (format nil "~{~A ~A = ~A;~^
 ~}
 ~{~A~}
-~A = ref_~A_reg_for_writing(~A);
+~A
 ~{~A;~^
 ~}
 ~{~A;~^
@@ -1632,7 +1650,9 @@ else
 							(generate-compiler (third b) (fifth b) bindings)
 							nil))
 						c-bindings)
-				       target (dcs (expr-type expr)) foreign-target
+				       (if target
+					   (format nil "~A = ref_~A_reg_for_writing(~A);" target (dcs (expr-type expr)) foreign-target)
+					   "")
 				       (mapcar #'(lambda (i)
 						   (format nil "emit(COMPOSE_~A(~{~A~^, ~}))"
 							   (first i)
@@ -1757,14 +1777,17 @@ else
       (format t "}~%void compile_~A_insn (~A insn, ~A pc) {~%" (dcs *machine-name*) (c-type *insn-bits* 'integer) (c-type *word-bits* 'integer))
       (generate-insn-recognizer decision-tree #'(lambda (insn)
 						  (dolist (expr (insn-effect insn))
-						    (princ (generate-compiler nil expr nil)))))
-      (format t "~%#ifdef COLLECT_STATS~%++num_translated_insns;~%#endif~%}~%"))))
+						    (princ (generate-compiler nil expr nil)))
+						  (format t "generated_insn_index = ~A;~%" (position insn *insns*))))
+      (format t "~%#ifdef COLLECT_STATS~%++num_translated_insns;~%#endif~%}~%")
+      (format t "char *insn_names[] = { ~{\"~A\"~^, ~} };~%" (mapcar #'insn-name *insns*)))))
 
 (defun generate-defines-file ()
   (with-open-file (out (format nil "~A_defines.h" (dcs *machine-name*)) :direction :output :if-exists :supersede)
     (let ((*standard-output* out))
       (format t "typedef ~A ~A_word;~%" (c-type *word-bits* 'integer) (dcs *machine-name*))
       (format t "#define NUM_~A_REGISTERS ~A~%" *machine-name* (length *registers*))
+      (format t "#define NUM_INSNS ~A~%" (length *insns*))
       (format t "#define ~A_REGISTER_SET" *machine-name*)
       (dolist (class *register-classes*)
 	(let ((type (c-type (register-class-width class) (register-class-type class))))

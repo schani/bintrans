@@ -776,4 +776,18 @@
 	 (cmoveq_imm x eq res)
 	 (cmovgt_imm x gt res)))
 
+(define-generator
+  :inputs ((d integer (= 16) const)
+	   (b integer (= 32) reg)
+	   (rhs integer (= 32) reg))
+  :pattern (set (mem (+ b (sex d)) 32) rhs)
+  :code ((stl rhs d b)))
+
+(define-generator
+  :inputs ((d integer (= 16) const)
+	   (b integer (= 32) reg))
+  :result (res integer 32)
+  :pattern (mem (+ b (sex d)) 32)
+  :code ((ldl res d b)))
+
 (defparameter *alpha-generators* *generators*)

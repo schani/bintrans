@@ -763,7 +763,7 @@
 (define-insn lwzu
     ((opcd 33))
   ((set (reg rd gpr) (mem (+ (reg ra gpr) (sex d))))
-   (set (reg ra gpr) (+ (reg ra gpr) (sex d))))	;FIXME: aliasing!!!!!!1
+   (set (reg ra gpr) (+ (reg ra gpr) (sex d))))	;FIXME: aliasing!!!!!!
   ("lwzu r%u,%d(r%u)" rd d ra))
 
 (define-insn lwzx
