@@ -3,7 +3,7 @@
  *
  * bintrans
  *
- * Copyright (C) 2001 Mark Probst
+ * Copyright (C) 2001,2002 Mark Probst
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -26,6 +26,12 @@
 #ifdef USE_HAND_TRANSLATOR
 #undef NUM_EMU_REGISTERS
 #define NUM_EMU_REGISTERS (5 + 32 + 32 + 4 + 2)
+#define REG_INDEX_CRFB0 69
+#define REG_INDEX_CRFB1 70
+#define REG_INDEX_CRFB2 71
+#define REG_INDEX_CRFB3 72
+#define REG_INDEX_XER_SO 73
+#define REG_INDEX_XER_CA 74
 #endif
 #elif defined(EMU_I386)
 #include "i386_defines.h"

@@ -3,7 +3,7 @@
  *
  * bintrans
  *
- * Copyright (C) 2001 Mark Probst
+ * Copyright (C) 2001,2002 Mark Probst
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -21,6 +21,7 @@
  */
 
 #include <assert.h>
+#include <stdio.h>
 
 #include "bintrans.h"
 #include "fragment_hash.h"
@@ -74,37 +75,56 @@ fragment_hash_get (word_32 addr, fragment_hash_supplement_t **supplement)
 fragment_hash_entry_t*
 fragment_hash_put (word_32 foreign_addr, fragment_hash_entry_t *entry, fragment_hash_supplement_t *supplement)
 {
-    int index = HASH_ADDR(foreign_addr);
+    fragment_hash_supplement_t *table_supplement;
+    fragment_hash_entry_t *table_entry = fragment_hash_get(foreign_addr, &table_supplement);
 
-    if (fragment_hash_table[index].foreign_addr == (word_32)-1)
+    if (table_entry != 0)
     {
-	fragment_hash_table[index] = *entry;
-	fragment_hash_table[index].foreign_addr = foreign_addr;
-	fragment_hash_table[index].next = -1;
+	assert(table_entry->foreign_addr == foreign_addr);
 
-	fragment_hash_supplement[index] = *supplement;
+	/* printf("entry already in table\n"); */
 
-	return &fragment_hash_table[index];
+#ifdef NEED_COMPILER
+	table_entry->native_addr = entry->native_addr;
+#endif
+	*table_supplement = *supplement;
+
+	return table_entry;
     }
     else
     {
-	int new = first_free_overflow;
+	int index = HASH_ADDR(foreign_addr);
 
-	assert(new != -1);
-	first_free_overflow = fragment_hash_table[new].next;
+	if (fragment_hash_table[index].foreign_addr == (word_32)-1)
+	{
+	    fragment_hash_table[index] = *entry;
+	    fragment_hash_table[index].foreign_addr = foreign_addr;
+	    fragment_hash_table[index].next = -1;
 
-	fragment_hash_table[new] = *entry;
-	fragment_hash_table[new].foreign_addr = foreign_addr;
-	fragment_hash_table[new].next = -1;
+	    fragment_hash_supplement[index] = *supplement;
 
-	fragment_hash_supplement[new] = *supplement;
+	    return &fragment_hash_table[index];
+	}
+	else
+	{
+	    int new = first_free_overflow;
 
-	while (fragment_hash_table[index].next != -1)
-	    index = fragment_hash_table[index].next;
+	    assert(new != -1);
+	    first_free_overflow = fragment_hash_table[new].next;
 
-	fragment_hash_table[index].next = new;
+	    fragment_hash_table[new] = *entry;
+	    fragment_hash_table[new].foreign_addr = foreign_addr;
+	    fragment_hash_table[new].next = -1;
 
-	return &fragment_hash_table[new];
+	    fragment_hash_supplement[new] = *supplement;
+
+	    while (fragment_hash_table[index].next != -1)
+		index = fragment_hash_table[index].next;
+
+	    fragment_hash_table[index].next = new;
+
+	    return &fragment_hash_table[new];
+	}
     }
 }
 
@@ -138,6 +158,11 @@ init_fragment_hash_entry (fragment_hash_entry_t *entry, fragment_hash_supplement
     supplement->num_insns = 0;
     supplement->insn_addrs = 0;
 #endif
+#endif
+#ifdef COLLECT_LIVENESS
+    supplement->live_cr = 0xffffffff;
+    supplement->live_xer = 0xffffffff;
+    supplement->live_gpr = 0xffffffff;
 #endif
 }
 

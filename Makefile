@@ -1,6 +1,6 @@
 #EMU = I386
 EMU = PPC
-LOCATION = -DCOMPLANG
+#LOCATION = -DCOMPLANG
 
 #MODE = INTERPRETER
 MODE = COMPILER
@@ -11,9 +11,11 @@ ARCH = -DARCH_ALPHA
 #ARCH = -DARCH_I386
 ASM_OBJS = alpha_asm.o
 COMPILER_OBJS = compiler.o
-DEFINES = -DUSE_HAND_TRANSLATOR -DCOLLECT_STATS -DDYNAMO_TRACES -DDYNAMO_THRESHOLD=50 -DSYNC_BLOCKS
+#DEFINES = -DUSE_HAND_TRANSLATOR -DCOLLECT_STATS -DDYNAMO_TRACES -DDYNAMO_THRESHOLD=50 -DSYNC_BLOCKS
 #-DDUMP_CODE
-#DEFINES = -DUSE_HAND_TRANSLATOR -DCOLLECT_STATS -DSYNC_BLOCKS
+DEFINES = -DUSE_HAND_TRANSLATOR -DCOLLECT_STATS -DCOLLECT_LIVENESS
+#-DDUMP_CODE
+#-DSYNC_BLOCKS
 #-DCOUNT_INSNS
 #-DMEASURE_TIME
 #DEFINES = -DUSE_HAND_TRANSLATOR -DCOLLECT_STATS -DDUMP_CODE -DSYNC_BLOCKS
@@ -82,8 +84,13 @@ endif
 
 CFLAGS = $(MODE_DEFS) $(DEFINES) $(ARCH) $(EMU_DEFS) $(LOCATION)
 
+all : bintrans dump_liveness
+
 bintrans : ppc.o mm.o fragment_hash.o loops.o liveness.o lispreader.o $(OBJS)
 	gcc -o bintrans ppc.o mm.o fragment_hash.o loops.o liveness.o lispreader.o $(OBJS)
+
+dump_liveness : dump_liveness.c bintrans.h compiler.h
+	gcc $(CFLAGS) -Wall -o dump_liveness dump_liveness.c
 
 ppc.o : ppc.c ppc_interpreter.c ppc_disassembler.c alpha_types.h bintrans.h
 	gcc $(CFLAGS) -Wall -g -c ppc.c

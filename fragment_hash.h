@@ -3,7 +3,7 @@
  *
  * bintrans
  *
- * Copyright (C) 2001 Mark Probst
+ * Copyright (C) 2001,2002 Mark Probst
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -61,6 +61,11 @@ typedef struct
     word_32 *insn_addrs;
 #endif
 #endif
+#ifdef COLLECT_LIVENESS
+    word_32 live_cr;
+    word_32 live_xer;
+    word_32 live_gpr;
+#endif
 } fragment_hash_supplement_t;
 
 #ifdef COLLECT_STATS
@@ -74,4 +79,4 @@ void init_fragment_hash_entry (fragment_hash_entry_t *entry, fragment_hash_suppl
 void init_fragment_hash (void);
 
 extern fragment_hash_entry_t fragment_hash_table[FRAGMENT_HASH_ENTRIES];
-extern fragment_hash_supplement_t fragment_hash_supplement[FRAGMENT_HASH_TABLE_SIZE + FRAGMENT_HASH_OVERFLOW];
+extern fragment_hash_supplement_t fragment_hash_supplement[FRAGMENT_HASH_ENTRIES];

@@ -47,6 +47,7 @@
 
 #include "bintrans.h"
 #include "fragment_hash.h"
+#include "compiler.h"
 #include "lispreader.h"
 
 /* Symbolic values for the entries in the auxiliary table
@@ -2978,6 +2979,10 @@ main (int argc, char *argv[])
 #endif
 
     init_fragment_hash();
+
+#ifdef COLLECT_LIVENESS
+    load_liveness_info();
+#endif
 
 #if defined(DEBUGGER)
     debugger(&interpreter);

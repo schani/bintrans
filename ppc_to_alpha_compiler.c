@@ -301,7 +301,7 @@ static int optimize_taken_jump;
 static label_t taken_jump_label;
 static word_32 next_pc;
 
-static word_32 kill_cr, kill_xer;
+static word_32 kill_cr, kill_xer, kill_gpr;
 
 static void
 gen_rc_code (reg_t reg)
@@ -873,13 +873,15 @@ handle_b_insn (word_32 insn, word_32 pc)
 	assert(pc + (SEX32(FIELD_LI, 24) << 2) == next_pc);
     else
     {
+	word_32 target = pc + (SEX32(FIELD_LI, 24) << 2);
+
 	emit_freeze_save();
 
 	emit_start_direct_jump(1);
 
-	emit_store_regs(EMU_INSN_EPILOGUE);
+	emit_store_regs(EMU_INSN_EPILOGUE, target);
 
-	emit_direct_jump(pc + (SEX32(FIELD_LI, 24) << 2));
+	emit_direct_jump(target);
     }
 }
 
@@ -892,7 +894,7 @@ gen_indirect_branch (void)
     {
 	emit_freeze_save();
 
-	emit_store_regs(EMU_INSN_EPILOGUE);
+	emit_store_regs(EMU_INSN_EPILOGUE, NO_FOREIGN_ADDR);
 
 	emit_indirect_jump();
     }
@@ -917,7 +919,7 @@ gen_indirect_branch (void)
 	emit_label(alt_label);
 	free_label(alt_label);
 
-	emit_store_regs(EMU_INSN_EPILOGUE);
+	emit_store_regs(EMU_INSN_EPILOGUE, NO_FOREIGN_ADDR);
 
 	emit_indirect_jump();
 
@@ -955,6 +957,7 @@ gen_cond_branch (word_32 insn, word_32 pc, void (*pos_emitter) (reg_t, label_t),
     else if (NO_DYNAMO_TRACES || next_pc == NO_FOREIGN_ADDR)
     {
 	label_t end_label = alloc_label();
+	word_32 target = pc + (SEX32(FIELD_BD, 14) << 2);
 
 	emit_freeze_save();
 
@@ -965,9 +968,9 @@ gen_cond_branch (word_32 insn, word_32 pc, void (*pos_emitter) (reg_t, label_t),
 
 	emit_start_direct_jump(1);
 
-	emit_store_regs(EMU_INSN_EPILOGUE);
+	emit_store_regs(EMU_INSN_EPILOGUE, target);
 
-	emit_direct_jump(pc + (SEX32(FIELD_BD, 14) << 2));
+	emit_direct_jump(target);
 
 	emit_label(end_label);
 	free_label(end_label);
@@ -1004,7 +1007,7 @@ gen_cond_branch (word_32 insn, word_32 pc, void (*pos_emitter) (reg_t, label_t),
 
 	    emit_start_direct_jump(1);
 
-	    emit_store_regs(EMU_INSN_EPILOGUE);
+	    emit_store_regs(EMU_INSN_EPILOGUE, (next_pc == pc + 4) ? target : pc + 4);
 
 	    if (next_pc == pc + 4)
 		emit_direct_jump(target);
@@ -1146,7 +1149,7 @@ gen_bcrfblr_insn (word_32 insn, word_32 pc, int eq)
 
 	assert(!optimize_taken_jump);
 
-	emit_store_regs(EMU_INSN_EPILOGUE);
+	emit_store_regs(EMU_INSN_EPILOGUE, NO_FOREIGN_ADDR);
 
 	emit_indirect_jump();
 
@@ -1188,7 +1191,7 @@ gen_bcrfblr_insn (word_32 insn, word_32 pc, int eq)
 	{
 	    emit(COMPOSE_BIC_IMM(lr_reg, 3, JUMP_TARGET_REG));
 
-	    emit_store_regs(EMU_INSN_EPILOGUE);
+	    emit_store_regs(EMU_INSN_EPILOGUE, NO_FOREIGN_ADDR);
 
 	    emit_indirect_jump();
 	}
@@ -1196,7 +1199,7 @@ gen_bcrfblr_insn (word_32 insn, word_32 pc, int eq)
 	{
 	    emit_start_direct_jump(1);
 
-	    emit_store_regs(EMU_INSN_EPILOGUE);
+	    emit_store_regs(EMU_INSN_EPILOGUE, pc + 4);
 
 	    emit_direct_jump(pc + 4);
 	}
@@ -2253,7 +2256,7 @@ handle_icbi_insn (word_32 insn, word_32 pc)
 static void
 handle_isync_insn (word_32 insn, word_32 pc)
 {
-    emit_store_regs(EMU_INSN_CONTINUE);
+    emit_store_regs(EMU_INSN_CONTINUE, NO_FOREIGN_ADDR);
 
     emit_load_integer_32(16, pc + 4);
     emit_isync();
@@ -3720,7 +3723,7 @@ handle_sc_insn (word_32 insn, word_32 pc)
 {
     emit_freeze_save();
 
-    emit_store_regs(EMU_INSN_EPILOGUE);
+    emit_store_regs(EMU_INSN_EPILOGUE, NO_FOREIGN_ADDR);
 
     emit_system_call();
 
@@ -4922,13 +4925,14 @@ handle_xoris_insn (word_32 insn, word_32 pc)
 
 void
 compile_to_alpha_ppc_insn (word_32 insn, word_32 pc, int _optimize_taken_jump, label_t _taken_jump_label, word_32 _next_pc,
-			   word_32 _kill_cr, word_32 _kill_xer)
+			   word_32 _kill_cr, word_32 _kill_xer, word_32 _kill_gpr)
 {
     optimize_taken_jump = _optimize_taken_jump;
     taken_jump_label = _taken_jump_label;
     next_pc = _next_pc;
     kill_cr = _kill_cr;
     kill_xer = _kill_xer;
+    kill_gpr = _kill_gpr;
 
 #ifdef COLLECT_STATS
     ++num_translated_insns;

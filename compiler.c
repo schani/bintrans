@@ -3,7 +3,7 @@
  *
  * bintrans
  *
- * Copyright (C) 2001 Mark Probst
+ * Copyright (C) 2001,2002 Mark Probst
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -368,9 +368,9 @@ start_emu_insn (int type, word_32 addr)
 }
 
 void
-emit_store_regs (int follow_type)
+emit_store_regs (int follow_type, word_32 addr)
 {
-    start_emu_insn(EMU_INSN_STORE_REGS, 0);
+    start_emu_insn(EMU_INSN_STORE_REGS, addr);
     emit(0);
     start_emu_insn(follow_type, 0);
 }
@@ -446,13 +446,21 @@ dump_fragment_code (word_64 start, word_64 end, word_64 alt_start, word_64 alt_e
 		break;
 
 	    case EMU_INSN_BEGIN_ALT :
+#ifdef DYNAMO_TRACES
 		printf("begin alt");
 		in_alt = 1;
+#else
+		assert(0);
+#endif
 		break;
 
 	    case EMU_INSN_END_ALT :
+#ifdef DYNAMO_TRACES
 		printf("end alt");
 		in_alt = 0;
+#else
+		assert(0);
+#endif
 		break;
 
 	    case EMU_INSN_DIRECT_JUMP :
@@ -1205,7 +1213,9 @@ finish_fragment (unsigned char *preferred_alloced_integer_regs)
     int num_integer_regs = 0, num_float_regs = 0;
 #ifdef DUMP_CODE
     word_64 start = (word_64)emit_loc;
+#ifdef DYNAMO_TRACES
     word_64 alt_start = (word_64)alt_emit_loc;
+#endif
 #endif
     word_64 body_start;
     int jumps_index;
@@ -1381,16 +1391,56 @@ finish_fragment (unsigned char *preferred_alloced_integer_regs)
 	switch (fragment_emu_insns[i].type)
 	{
 	    case EMU_INSN_STORE_REGS :
-		assert(first + 1 == last);
+		{
+#ifdef COLLECT_LIVENESS
+		    fragment_hash_entry_t *entry;
+		    fragment_hash_supplement_t *supplement;
+		    word_32 live_cr, live_xer, live_gpr;
 
-		execute_reg_locks(&rl, first);
+		    if (fragment_emu_insns[i].addr == NO_FOREIGN_ADDR
+			|| (entry = fragment_hash_get(fragment_emu_insns[i].addr, &supplement)) == 0)
+			live_cr = live_xer = live_gpr = 0xffffffff;
+		    else
+		    {
+			live_cr = supplement->live_cr;
+			live_xer = supplement->live_xer;
+			live_gpr = supplement->live_gpr;
+		    }
+#endif
 
-		/* the dummy insn is replaced by its code_area index */
-		fragment_insns[first] = EMIT_LOC - code_area;
+		    assert(first + 1 == last);
 
-		for (j = 0; j < NUM_EMU_REGISTERS; ++j)
-		    if (emu_regs[j].used && emu_regs[j].dirty && emu_regs[j].live_at_end && emu_regs[j].native_reg != NO_REG)
-			store_reg(emu_regs[j].native_reg, j);
+		    execute_reg_locks(&rl, first);
+
+		    /* the dummy insn is replaced by its code_area index */
+		    fragment_insns[first] = EMIT_LOC - code_area;
+
+		    for (j = 0; j < NUM_EMU_REGISTERS; ++j)
+			if (emu_regs[j].used && emu_regs[j].dirty && emu_regs[j].live_at_end && emu_regs[j].native_reg != NO_REG)
+			{
+			    int live = 1;
+
+#ifdef COLLECT_LIVENESS
+			    if (j >= CLASS_FIRST_INDEX_GPR && j < CLASS_FIRST_INDEX_GPR + 32)
+				live = (live_gpr >> (j - CLASS_FIRST_INDEX_GPR)) & 1;
+			    else if (j == REG_INDEX_CRFB0)
+				live = live_cr >> 31;
+			    else if (j == REG_INDEX_CRFB1)
+				live = (live_cr >> 30) & 1;
+			    else if (j == REG_INDEX_CRFB2)
+				live = (live_cr >> 29) & 1;
+			    else if (j == REG_INDEX_CRFB3)
+				live = (live_cr >> 28) & 1;
+			    else if (j == REG_INDEX_XER_SO)
+				live = live_xer >> 31;
+			    else if (j == REG_INDEX_XER_CA)
+				live = (live_xer >> 29) & 1;
+#endif
+
+			    if (live)
+				store_reg(emu_regs[j].native_reg, j);
+			}
+		}
 		break;
 
 #ifdef SYNC_BLOCKS
@@ -1577,7 +1627,11 @@ finish_fragment (unsigned char *preferred_alloced_integer_regs)
 
     disassemble_alpha_code(start, body_start);
 
+#ifdef DYNAMO_TRACES
     dump_fragment_code(body_start, (word_64)emit_loc, alt_start, (word_64)alt_emit_loc);
+#else
+    dump_fragment_code(body_start, (word_64)emit_loc, 0, 0);
+#endif
 #endif
 }
 
@@ -1659,6 +1713,9 @@ emit_load_mem_64 (reg_t value_reg, reg_t addr_reg)
 #ifdef DYNAMO_TRACES
 #include "ppc_livenesser.c"
 #include "ppc_killer.c"
+#endif
+#ifdef COLLECT_LIVENESS
+#include "ppc_livenesser.c"
 #endif
 #elif defined(EMU_I386)
 #include "i386.h"
@@ -2006,7 +2063,7 @@ compile_until_jump (word_32 *addr, int optimize_taken_jump, label_t taken_jump_l
 	compile_ppc_insn(mem_get_32(compiler_intp, insnp), insnp, optimize_taken_jump, taken_jump_label);
 #else
 	compile_to_alpha_ppc_insn(mem_get_32(compiler_intp, insnp), insnp, optimize_taken_jump, taken_jump_label,
-				  NO_FOREIGN_ADDR, 0xffffffff, 0xffffffff);
+				  NO_FOREIGN_ADDR, 0xffffffff, 0xffffffff, 0xffffffff);
 #endif
 #elif defined(EMU_I386)
 	word_32 insn_addr = compiler_intp->pc;
@@ -2098,8 +2155,9 @@ unsigned long old_num_translated_insns;
 #endif
 
 word_64
-compile_basic_block (word_32 addr, int as_trace, unsigned char *preferred_alloced_integer_regs)
+compile_basic_block (word_32 foreign_addr, int as_trace, unsigned char *preferred_alloced_integer_regs)
 {
+    word_32 addr = foreign_addr;
     word_64 native_addr;
 #ifdef COUNT_INSNS
     word_32 *emulated_lda_insn, *native_lda_insn, *old_emit_loc;
@@ -2138,11 +2196,23 @@ compile_basic_block (word_32 addr, int as_trace, unsigned char *preferred_alloce
 
     emit_start_direct_jump(1);
 
-    emit_store_regs(EMU_INSN_EPILOGUE);
+    emit_store_regs(EMU_INSN_EPILOGUE, addr);
 
     emit_direct_jump(addr);	/* this is not necessary if the jump at the end of the basic block was unconditional */
 
     finish_fragment(preferred_alloced_integer_regs);
+
+#ifdef COLLECT_LIVENESS
+    {
+	word_32 live_cr, live_xer, live_gpr;
+
+	compute_iterative_liveness(compiler_intp, foreign_addr, &live_cr, &live_xer, &live_gpr);
+
+	fragment_entry_supplement.live_cr = live_cr;
+	fragment_entry_supplement.live_xer = live_xer;
+	fragment_entry_supplement.live_gpr = live_gpr;
+    }
+#endif
 
     flush_icache();
 
@@ -2224,7 +2294,7 @@ compile_trace (word_32 addr, int length, int bits)
 
 	    emit_start_direct_jump(1);
 
-	    emit_store_regs(EMU_INSN_INTERLUDE);
+	    emit_store_regs(EMU_INSN_INTERLUDE, addr);
 
 	    emit_direct_jump(addr);
 
@@ -2243,7 +2313,7 @@ compile_trace (word_32 addr, int length, int bits)
 
     emit_start_direct_jump(1);
 
-    emit_store_regs(EMU_INSN_EPILOGUE);
+    emit_store_regs(EMU_INSN_EPILOGUE, addr);
 
     emit_direct_jump(addr);	/* this is not necessary if the jump at the end of the basic block was unconditional */
 
@@ -2334,12 +2404,13 @@ compile_dynamo_trace (word_32 *addrs, int length)
 
 	compile_to_alpha_ppc_insn(mem_get_32(compiler_intp, addrs[i]), addrs[i], 0, 0,
 				  i + 1 < length ? addrs[i + 1] : NO_FOREIGN_ADDR,
-				  block_insns[i].killed_cr, block_insns[i].killed_xer);
+				  block_insns[i].killed_cr, block_insns[i].killed_xer,
+				  0xffffffff);
     }
 
     emit_start_direct_jump(1);
 
-    emit_store_regs(EMU_INSN_EPILOGUE);
+    emit_store_regs(EMU_INSN_EPILOGUE, addrs[length - 1] + 4);
 
     emit_direct_jump(addrs[length - 1] + 4); /* this is not necessary if the jump at the end of the basic block was unconditional */
 
@@ -2377,9 +2448,11 @@ compare_register_sets (void)
     int i;
 
 #if defined(EMU_PPC)
+    /*
     for (i = 0; i < 5; ++i)
 	if (compiler_intp->regs_SPR[i] != debugger_intp->regs_SPR[i])
 	    diff = 1;
+    */
     for (i = 0; i < 32; ++i)
     {
 	if (compiler_intp->regs_GPR[i] != debugger_intp->regs_GPR[i])
@@ -2999,6 +3072,10 @@ print_compiler_stats (void)
 
 #ifdef MEASURE_TIME
     printf("time spent in compiler: %lu\n", compiler_time);
+#endif
+
+#ifdef COLLECT_LIVENESS
+    save_liveness_info();
 #endif
 }
 

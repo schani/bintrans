@@ -3,7 +3,7 @@
  *
  * bintrans
  *
- * Copyright (C) 2001 Mark Probst
+ * Copyright (C) 2001,2002 Mark Probst
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -25,6 +25,7 @@
 
 #include "bintrans.h"
 #include "compiler.h"
+#include "fragment_hash.h"
 
 #ifdef EMU_I386
 i386_insn_t block_insns[MAX_BLOCK_INSNS + MAX_AFTER_BRANCH_INSNS];
@@ -182,7 +183,7 @@ compute_limited_liveness (interpreter_t *intp, word_32 pc, int max_depth, word_3
 void
 compute_liveness_for_trace (interpreter_t *intp, word_32 *addrs, int length)
 {
-    word_32 live_cr, live_xer, killed_cr, killed_xer;
+    word_32 live_cr, live_xer, live_gpr, killed_cr, killed_xer, killed_gpr;
     /* word_32 real_killed_cr, real_killed_xer; */
     int i;
     int num_targets;
@@ -219,7 +220,8 @@ compute_liveness_for_trace (interpreter_t *intp, word_32 *addrs, int length)
     {
 	word_32 pc = addrs[i], insn = mem_get_32(intp, pc);
 
-	liveness_ppc_insn(insn, pc, &live_cr, &killed_cr, &live_xer, &killed_xer);
+	live_gpr = 0xffffffff;
+	liveness_ppc_insn(insn, pc, &live_cr, &killed_cr, &live_xer, &killed_xer, &live_gpr, &killed_gpr);
 	/* kill_ppc_insn(insn, pc, &real_killed_cr, &real_killed_xer); */
 
 	block_insns[i].killed_cr = killed_cr;
@@ -257,4 +259,150 @@ compute_liveness_for_trace (interpreter_t *intp, word_32 *addrs, int length)
 	block_insns[i].live_xer = live_xer;
     }
 }
+#endif
+
+#if defined(EMU_PPC) && defined(COLLECT_LIVENESS)
+void
+compute_iterative_liveness (interpreter_t *intp, word_32 addr, word_32 *live_cr, word_32 *live_xer, word_32 *live_gpr)
+{
+    word_32 last_addr;
+    int can_fall_through, can_jump_indirectly;
+    int num_targets;
+    word_32 target;
+
+    last_addr = addr;
+    for (;;)
+    {
+	jump_analyze_ppc_insn(mem_get_32(intp, last_addr), last_addr, &num_targets, &target, &can_fall_through, &can_jump_indirectly);
+
+	if (num_targets > 0 || !can_fall_through || can_jump_indirectly)
+	    break;
+
+	last_addr += 4;
+    }
+
+    if (can_jump_indirectly)
+	*live_cr = *live_xer = *live_gpr = 0xffffffff;
+    else
+    {
+	fragment_hash_entry_t *entry;
+	fragment_hash_supplement_t *supplement;
+
+	if (can_fall_through)
+	{
+	    entry = fragment_hash_get(last_addr + 4, &supplement);
+	    if (entry == 0)
+		*live_cr = *live_xer = *live_gpr = 0xffffffff;
+	    else
+	    {
+		*live_cr = supplement->live_cr;
+		*live_xer = supplement->live_xer;
+		*live_gpr = supplement->live_gpr;
+	    }
+	}
+	else
+	{
+	    *live_cr = *live_xer = *live_gpr = 0;
+
+	    assert(num_targets > 0);
+	}
+
+	if (num_targets > 0)
+	{
+	    assert(num_targets == 1);
+
+	    entry = fragment_hash_get(target, &supplement);
+
+	    if (entry == 0)
+		*live_cr = *live_xer = *live_gpr = 0xffffffff;
+	    else
+	    {
+		*live_cr |= supplement->live_cr;
+		*live_xer |= supplement->live_xer;
+		*live_gpr |= supplement->live_gpr;
+	    }
+	}
+    }
+
+    for (;;)
+    {
+	word_32 killed_cr, killed_xer, killed_gpr;
+
+	liveness_ppc_insn(mem_get_32(intp, last_addr), last_addr, live_cr, &killed_cr, live_xer, &killed_xer, live_gpr, &killed_gpr);
+
+	if (last_addr == addr)	/* why don't we first decrement last_addr and then check last_addr < addr?  answer: addr might be 0.  */
+	    break;
+
+	last_addr -= 4;
+    }
+}
+
+typedef struct
+{
+    word_32 foreign_addr;
+    word_32 live_cr;
+    word_32 live_xer;
+    word_32 live_gpr;
+} ppc_liveness_info_t;
+
+void
+load_liveness_info (void)
+{
+    FILE *in = fopen("liveness.out", "r");
+    ppc_liveness_info_t info;
+
+    if (in == 0)
+	return;
+
+    while (fread(&info, sizeof(ppc_liveness_info_t), 1, in) == 1)
+    {
+	fragment_hash_entry_t entry;
+	fragment_hash_supplement_t supplement;
+
+	init_fragment_hash_entry(&entry, &supplement);
+	entry.foreign_addr = info.foreign_addr;
+	supplement.live_cr = info.live_cr;
+	supplement.live_xer = info.live_xer;
+	supplement.live_gpr = info.live_gpr;
+
+	fragment_hash_put(info.foreign_addr, &entry, &supplement);
+    }
+
+    fclose(in);
+}
+
+void
+save_liveness_info (void)
+{
+    FILE *out = fopen("liveness.out", "w");
+    int i;
+
+    assert(out != 0);
+
+    for (i = 0; i < FRAGMENT_HASH_ENTRIES; ++i)
+	if (fragment_hash_table[i].foreign_addr != (word_32)-1
+	    && (fragment_hash_supplement[i].live_cr != 0xffffffff
+		|| fragment_hash_supplement[i].live_xer != 0xffffffff
+		|| fragment_hash_supplement[i].live_gpr != 0xffffffff))
+	{
+	    ppc_liveness_info_t info;
+
+	    info.foreign_addr = fragment_hash_table[i].foreign_addr;
+	    info.live_cr = fragment_hash_supplement[i].live_cr;
+	    info.live_xer = fragment_hash_supplement[i].live_xer;
+	    info.live_gpr = fragment_hash_supplement[i].live_gpr;
+
+	    assert(fwrite(&info, sizeof(ppc_liveness_info_t), 1, out) == 1);
+	}
+
+    fclose(out);
+
+    /*
+      for (i = 0; i < FRAGMENT_HASH_ENTRIES; ++i)
+      if (fragment_hash_table[i].foreign_addr != (word_32)-1)
+      printf("%08x  cr: %08x xer: %08x gpr: %08x\n", fragment_hash_table[i].foreign_addr,
+      fragment_hash_supplement[i].live_cr, fragment_hash_supplement[i].live_xer, fragment_hash_supplement[i].live_gpr);
+    */
+}
+
 #endif
