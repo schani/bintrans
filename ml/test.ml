@@ -42,6 +42,7 @@ open Uncertainty
 
 exception Not_guest_register
 exception Width_not_supported
+exception If_stmt_not_generated
 
 (*
 let rec repeat_until_fixpoint fn data =
@@ -176,6 +177,12 @@ let print_c_func reg_type result_passed printers name stmt fields =
 	  print_string "{\n" ;
 	  handle_stmt sub2 ;
 	  print_string "}\n"
+      | IfStmt (cond, cons, alt) ->
+	  print_string ("if (" ^ (expr_to_c [] cond) ^ ") {\n") ;
+	  handle_stmt cons ;
+	  print_string "} else {\n" ;
+	  handle_stmt alt ;
+	  print_string "}\n"
   in
     if result_passed then
       print_string "void"
@@ -224,6 +231,7 @@ let rec alpha_wrap stmt =
     | Store (bo, width, addr, rhs) -> Store (other_byte_order bo, width, wrap_addr width (wrap_expr addr), wrap_expr rhs)
     | Let (name, width, rhs, sub) -> Let (name, width, wrap_expr rhs, alpha_wrap sub)
     | Seq (sub1, sub2) -> Seq (alpha_wrap sub1, alpha_wrap sub2)
+    | IfStmt (expr, sub1, sub2) -> IfStmt (wrap_expr expr, alpha_wrap sub1, alpha_wrap sub2)
 
 let print_gen machine_insn =
   print_gen_func alpha_gen_gens machine_insn.machine_insn_name (alpha_wrap machine_insn.insn_stmt) machine_insn.explore_fields

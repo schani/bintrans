@@ -136,6 +136,8 @@ let rec stmt_to_c allocation stmt =
 	"{ word_64 let_reg_" ^ name ^ " = " ^ (expr_to_c allocation rhs) ^ ";\n" ^ (stmt_to_c allocation sub) ^ "\n}"
     | Seq (sub1, sub2) ->
 	"{ " ^ (stmt_to_c allocation sub1) ^ "\n" ^ (stmt_to_c allocation sub2) ^ "\n}"
+    | IfStmt (cond, cons, alt) ->
+	"if (" ^ (expr_to_c allocation cond) ^ ")\n" ^ (stmt_to_c allocation cons) ^ "\nelse\n" ^ (stmt_to_c allocation alt)
 
 (*** generating generators ***)
 

@@ -167,127 +167,138 @@
 
 ;; a binding is a list of the form (lisp-name ml-name type) where type can be
 ;; int or expr
-(defun convert-expr (expr bindings)
-  (labels ((lookup-expr (name)
-	     (let ((binding (assoc name bindings)))
-	       (if binding
-		   (destructuring-bind (name ml-name type)
-		       binding
-		     (case type
-		       (expr
-			ml-name)
-		       (int
-			(format nil "int_literal_expr (~A)" ml-name))
-		       (int-const
-			ml-name)
-		       (t
-			(error "variable ~A is of wrong type (~A)" name type))))
+(labels ((lookup-expr (bindings name)
+	   (let ((binding (assoc name bindings)))
+	     (if binding
+		 (destructuring-bind (name ml-name type)
+		     binding
+		   (case type
+		     (expr
+		      ml-name)
+		     (int
+		      (format nil "int_literal_expr (~A)" ml-name))
+		     (int-const
+		      ml-name)
+		     (t
+		      (error "variable ~A is of wrong type (~A)" name type))))
 		 (error "unbound symbol ~A" name))))
-	   (convert-int-const (int-const)
-	     (case-match expr
-	       ((field ?name)
-		(format nil "IntField \"~A\"" (dcs name)))
-	       (t
-		(cond ((integerp int-const)
-		       (format nil "IntLiteral (~AL)" int-const))
-		      ((symbolp int-const)
-		       (if (assoc int-const *fields*)
-			   (format nil "IntField \"~A\"" (dcs int-const))
+	 (convert-int-const (bindings int-const)
+	   (case-match int-const
+	     ((field ?name)
+	      (format nil "IntField \"~A\"" (dcs name)))
+	     (t
+	      (cond ((integerp int-const)
+		     (format nil "IntLiteral (~AL)" int-const))
+		    ((symbolp int-const)
+		     (if (assoc int-const *fields*)
+			 (format nil "IntField \"~A\"" (dcs int-const))
 			 (format nil "IntLiteral ~A" (lookup-int bindings int-const))))
-		      (t
-		       (error "illegal int const ~A" int-const))))))
-	   (convert-width (width)
-			  (cond ((integerp width)
-				 (format nil "~A" width))
-				((symbolp width)
-				 (format nil "(to_int ~A)" (lookup-int bindings width)))
-				(t
-				 (error "illegal width ~A" width))))
-	   (convert (expr)
-	     (case-match expr
-	       ((const int ?expr)
-		(convert expr))
-	       ((register ?reg)
-		(format nil "Register (GuestRegister (~A, Int))"
-			(convert-int-const reg)))
-	       ((load ?byte-order ?width ?addr)
-		(format nil "LoadBO (~A, ~A, ~A)"
-			(convert-byte-order byte-order)
-			(convert-width width)
-			(convert addr)))
-	       ((extract ?arg ?start ?length)
-		(format nil "Extract (~A, ~A, ~A)"
-			(convert arg)
-			(convert start)
-			(convert length)))
-	       ((insert ?arg1 ?arg2 ?start ?length)
-		(format nil "Insert (~A, ~A, ~A, ~A)"
-			(convert arg1)
-			(convert arg2)
-			(convert-int-const start)
-			(convert-int-const length)))
-	       ((if ?condition ?consequent ?alternative)
-		(format nil "If (~A, ~A, ~A)"
-			(convert condition)
-			(convert consequent)
-			(convert alternative)))
-	       ((user-op ?name . ?args)
-		(format nil "UserOp (\"~A\", [~{~A~^ ; ~}])"
-			name (mapcar #'convert args)))
-	       ((set ?reg ?value)
-		(format nil "Assign (GuestRegister (~A, Int), ~A)"
-			(convert-int-const reg)
-			(convert value)))
-	       ((store ?byte-order ?width ?addr ?value)
-		(format nil "Store (~A, ~A, ~A, ~A)"
-			(convert-byte-order byte-order)
-			(convert-width width)
-			(convert addr)
-			(convert value)))
-	       ((let (?name ?width ?rhs) ?stmt)
-		(format nil "Let (\"~A\", ~A, ~A, ~A)"
-			(dcs name) width (convert rhs)
-			(convert-expr stmt
-				      (cons (list name ;FIXME: handle other types than Int as well!
-						  (format nil "Register (LetRegister (\"~A\", Int, ~A))" (dcs name) width)
-						  'expr)
-					    bindings))))
-	       ((seq ?stmt1 ?stmt2)
-		(format nil "Seq (~A, ~A)"
-			(convert stmt1) (convert stmt2)))
-	       ((?op . ?args)
-		(multiple-value-bind (ml-name kind-ml-name num-args need-width)
-		    (lookup-operator op)
-		  (if ml-name
-		      (let ((width-string (if need-width (convert-width (car args)) nil))
-			    (args (if need-width (cdr args) args)))
-			(if (and (or (not need-width) width-string)
-				 (= num-args (length args)))
-			    (if kind-ml-name
-				(format nil "~A (~A, ~A~{~A~^, ~})"
-					kind-ml-name ml-name (if need-width (format nil "~A, " width-string) "")
-					(mapcar #'convert args))
-			      (format nil "make_~A ~A~{(~A)~^ ~}"
-				      ml-name (if need-width (format nil "~A " width-string) "")
-				      (mapcar #'convert args)))
-			  (error "illegal expression ~A" expr)))
-		    (error "unknown operator ~A" op))))
-	       (?expr
-		(cond ((integerp expr)
-		       (format nil "int_literal_expr (~AL)" expr))
-		      ((floatp expr)
-		       (format nil "FloatConst ~A" expr))
-		      ((eql expr 't)
-		       "ConditionConst true")
-		      ((eql expr 'nil)
-		       "ConditionConst false")
-		      ((symbolp expr)
-		       (if (assoc expr *fields*)
-			   (format nil "IntConst (IntField \"~A\")" (dcs expr))
-			 (lookup-expr expr)))
-		      (t
-		       (error "illegal expression ~A" expr)))))))
-    (convert expr)))
+		    (t
+		     (error "illegal int const ~A" int-const))))))
+	 (convert-width (bindings width)
+	   (cond ((integerp width)
+		  (format nil "~A" width))
+		 ((symbolp width)
+		  (format nil "(to_int ~A)" (lookup-int bindings width)))
+		 (t
+		  (error "illegal width ~A" width)))))
+  (defun convert-expr (expr bindings)
+    (labels ((convert (expr)
+	       (case-match expr
+		 ((const int ?expr)
+		  (convert expr))
+		 ((register ?reg)
+		  (format nil "Register (GuestRegister (~A, Int))"
+			  (convert-int-const bindings reg)))
+		 ((load ?byte-order ?width ?addr)
+		  (format nil "LoadBO (~A, ~A, ~A)"
+			  (convert-byte-order byte-order)
+			  (convert-width bindings width)
+			  (convert addr)))
+		 ((extract ?arg ?start ?length)
+		  (format nil "Extract (~A, ~A, ~A)"
+			  (convert arg)
+			  (convert start)
+			  (convert length)))
+		 ((insert ?arg1 ?arg2 ?start ?length)
+		  (format nil "Insert (~A, ~A, ~A, ~A)"
+			  (convert arg1)
+			  (convert arg2)
+			  (convert-int-const bindings start)
+			  (convert-int-const bindings length)))
+		 ((if ?condition ?consequent ?alternative)
+		  (format nil "If (~A, ~A, ~A)"
+			  (convert condition)
+			  (convert consequent)
+			  (convert alternative)))
+		 ((user-op ?name . ?args)
+		  (format nil "UserOp (\"~A\", [~{~A~^ ; ~}])"
+			  name (mapcar #'convert args)))
+		 ((?op . ?args)
+		  (multiple-value-bind (ml-name kind-ml-name num-args need-width)
+		      (lookup-operator op)
+		    (if ml-name
+			(let ((width-string (if need-width (convert-width bindings (car args)) nil))
+			      (args (if need-width (cdr args) args)))
+			  (if (and (or (not need-width) width-string)
+				   (= num-args (length args)))
+			      (if kind-ml-name
+				  (format nil "~A (~A, ~A~{~A~^, ~})"
+					  kind-ml-name ml-name (if need-width (format nil "~A, " width-string) "")
+					  (mapcar #'convert args))
+				  (format nil "make_~A ~A~{(~A)~^ ~}"
+					  ml-name (if need-width (format nil "~A " width-string) "")
+					  (mapcar #'convert args)))
+			      (error "illegal expression ~A" expr)))
+			(error "unknown operator ~A" op))))
+		 (?expr
+		  (cond ((integerp expr)
+			 (format nil "int_literal_expr (~AL)" expr))
+			((floatp expr)
+			 (format nil "FloatConst ~A" expr))
+			((eql expr 't)
+			 "ConditionConst true")
+			((eql expr 'nil)
+			 "ConditionConst false")
+			((symbolp expr)
+			 (if (assoc expr *fields*)
+			     (format nil "IntConst (IntField \"~A\")" (dcs expr))
+			     (lookup-expr bindings expr)))
+			(t
+			 (error "illegal expression ~A" expr)))))))
+      (convert expr)))
+  (defun convert-stmt (stmt bindings)
+    (labels ((convert (stmt)
+	       (case-match stmt
+		 ((set ?reg ?value)
+		  (format nil "Assign (GuestRegister (~A, Int), ~A)"
+			  (convert-int-const bindings reg)
+			  (convert-expr value bindings)))
+		 ((store ?byte-order ?width ?addr ?value)
+		  (format nil "Store (~A, ~A, ~A, ~A)"
+			  (convert-byte-order byte-order)
+			  (convert-width bindings width)
+			  (convert-expr addr bindings)
+			  (convert-expr value bindings)))
+		 ((let (?name ?width ?rhs) ?stmt)
+		  (format nil "Let (\"~A\", ~A, ~A, ~A)"
+			  (dcs name) width (convert-expr rhs bindings)
+			  (convert-expr stmt
+					(cons (list name ;FIXME: handle other types than Int as well!
+						    (format nil "Register (LetRegister (\"~A\", Int, ~A))" (dcs name) width)
+						    'expr)
+					      bindings))))
+		 ((seq ?stmt1 ?stmt2)
+		  (format nil "Seq (~A, ~A)"
+			  (convert stmt1) (convert stmt2)))
+		 ((if ?condition ?consequent ?alternative)
+		  (format nil "IfStmt (~A, ~A, ~A)"
+			  (convert-expr condition bindings)
+			  (convert consequent)
+			  (convert alternative)))
+		 (?stmt
+		  (error "illegal statement ~A" stmt)))))
+      (convert stmt))))
 
 (defmacro let-bindings (bindings-name let-bindings &rest body)
   (let ((let-syms (mapcar #'(lambda (x) (gensym)) let-bindings))
@@ -303,7 +314,7 @@
       (generate let-bindings let-syms binding-syms))))
 
 ;; returns the ML string and a list of bindings.  the in-bindings have
-;; the same format as in convert-expr.
+;; the same format as in convert-expr and convert-stmt.
 (defun convert-pattern (pattern in-bindings)
   (labels ((lookup-expr-pattern (name)
 	     (let ((binding (assoc name in-bindings)))
@@ -642,7 +653,7 @@
       (destructuring-bind (name field-ranges stmt)
 	  insn
 	(format out "  { machine_insn_name = \"~A\" ;~%    insn_stmt = ~A ;~%    explore_fields = [ ~{~A~^ ; ~} ] } ;~%"
-		(dcs name) (convert-expr stmt '())
+		(dcs name) (convert-stmt stmt '())
 		(mapcar #'(lambda (r)
 			    (case-match r
 			      ((?name ?begin ?end)

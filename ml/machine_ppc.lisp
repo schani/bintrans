@@ -275,10 +275,14 @@
 			  (+i (register ra) (sex 2 d)))
 	 (register srs)))
 
-(definsn stbu ((d (0)))
-  (seq
-   (store big-endian 1 (+i (register ra) (sex 2 d)) (register srs))
-   (set ra (+i (register ra) (sex 2 d)))))
+(definsn stbu ((ra 0 32) (srs 0 32) (d (0)))
+  (if (=i 8 ra srs)
+      (seq
+       (store big-endian 1 (+i (register ra) (sex 2 d)) (register srs))
+       (set ra (+i (register ra) (sex 2 d))))
+      (seq
+       (set ra (+i (register ra) (sex 2 d)))
+       (store big-endian 1 (register ra) (register srs)))))
 
 ;; stbux
 
@@ -296,11 +300,15 @@
 
 ;; sthbrx
 
-(definsn sthu ((d (0)))
-  (seq
-   (store big-endian 2 (+i (register ra) (sex 2 d)) (register srs))
-   (set ra (+i (register ra) (sex 2 d)))))
-
+(definsn sthu ((ra 0 32) (srs 0 32) (d (0)))
+  (if (=i 8 ra srs)
+      (seq
+       (store big-endian 2 (+i (register ra) (sex 2 d)) (register srs))
+       (set ra (+i (register ra) (sex 2 d))))
+      (seq
+       (set ra (+i (register ra) (sex 2 d)))
+       (store big-endian 2 (register ra) (register srs)))))
+      
 ;; sthux
 
 (definsn sthx ((ra 0 32))
@@ -317,15 +325,23 @@
 
 ;; stwbrx
 
-(definsn stwu ((d (0)))
-  (seq
-   (store big-endian 4 (+i (register ra) (sex 2 d)) (register srs))
-   (set ra (+i (register ra) (sex 2 d)))))
+(definsn stwu ((ra 0 32) (srs 0 32) (d (0)))
+  (if (=i 8 ra srs)
+      (seq
+       (store big-endian 4 (+i (register ra) (sex 2 d)) (register srs))
+       (set ra (+i (register ra) (sex 2 d))))
+      (seq
+       (set ra (+i (register ra) (sex 2 d)))
+       (store big-endian 4 (register ra) (register srs)))))
 
-(definsn stwux ()
-  (seq
-   (store big-endian 4 (+i (register ra) (register rb)) (register srs))
-   (set ra (+i (register ra) (register rb)))))
+(definsn stwux ((ra 0 32) (srs 0 32))
+  (if (=i 8 ra srs)
+      (seq
+       (store big-endian 4 (+i (register ra) (register rb)) (register srs))
+       (set ra (+i (register ra) (register rb))))
+      (seq
+       (set ra (+i (register ra) (register rb)))
+       (store big-endian 4 (register ra) (register srs)))))
 
 (definsn stwx ((ra 0 32))
   (store big-endian 4 (if (int-zero-p 8 ra)

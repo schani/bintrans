@@ -664,3 +664,7 @@ let rec prune_stmt mapping fields stmt =
 	(prune_stmt mapping fields sub2)
 	(fun psub1 psub2 ->
 	   cm_return (Seq (psub1, psub2)))
+  | IfStmt (cond, cons, alt) ->
+      cm_if fields cond
+	(fun _ -> prune_stmt mapping fields cons)
+	(fun _ -> prune_stmt mapping fields alt)

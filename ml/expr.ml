@@ -212,6 +212,7 @@ type stmt =
   | Assign of register * expr
   | Let of input_name * width * expr * stmt
   | Seq of stmt * stmt
+  | IfStmt of expr * stmt * stmt
 
 type stmt_or_expr =
     Stmt of stmt
@@ -305,6 +306,7 @@ let rec stmt_sub_exprs stmt =
   | Assign (register, sub) -> [ sub ]
   | Let (name, _, expr, sub) -> expr :: (stmt_sub_exprs sub)
   | Seq (sub1, sub2) -> (stmt_sub_exprs sub1) @ (stmt_sub_exprs sub2)
+  | IfStmt (expr, sub1, sub2) -> expr :: ((stmt_sub_exprs sub1) @ (stmt_sub_exprs sub2))
 
 (* returns a list of tuples (reg, read, write) where reg is a GuestRegister,
    read is true if the register is read from, write is true if the register is
@@ -537,6 +539,13 @@ let apply_to_stmt_subs_with_monad return bind modify stmt =
 	    (apply sub2)
 	    (fun msub1 msub2 ->
 	       return (Stmt (Seq (get_stmt msub1, get_stmt msub2))))
+      | IfStmt (expr, sub1, sub2) ->
+	  (make_bind3 bind bind bind)
+	    (modify expr)
+	    (apply sub1)
+	    (apply sub2)
+	    (fun mexpr msub1 msub2 ->
+	       return (Stmt (IfStmt (get_expr mexpr, get_stmt msub1, get_stmt msub2))))
   in apply stmt
 
 let apply_to_stmt_subs modify stmt =
@@ -820,6 +829,8 @@ let rec print_stmt stmt =
       print_string (name ^ " :=") ; print_int width ; print_string " " ;
       print_expr expr ; print_string ";\n" ; print_stmt sub
   | Seq (sub1, sub2) -> print_stmt sub1 ; print_string ";\n" ; print_stmt sub2
+  | IfStmt (expr, sub1, sub2) -> print_string "If " ; print_expr expr ; print_string " then\n" ; print_stmt sub1 ;
+      print_string "else\n" ; print_stmt sub2 ; print_string "endif\n"
 
 (*** patterns ***)
 
