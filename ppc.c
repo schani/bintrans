@@ -43,6 +43,7 @@
 #include <errno.h>
 #include <sys/un.h>
 #include <sys/utsname.h>
+#include <sys/resource.h>
 
 #include "bintrans.h"
 #include "fragment_hash.h"
@@ -101,6 +102,10 @@
 #define PPC_SOCK_RDM		4
 #define PPC_SOCK_SEQPACKET	5
 #define PPC_SOCK_PACKET		10
+
+#define EMU_RLIMIT_STACK        3
+
+#define EMU_RUSAGE_SELF         0
 
 #if defined(EMU_PPC)
 #define EMU_O_ACCMODE	  0003
@@ -195,6 +200,7 @@ int emu_errnos[] = { 0,
 #define SYSCALL_WRITE              4
 #define SYSCALL_OPEN               5
 #define SYSCALL_CLOSE              6
+#define SYSCALL_UNLINK            10
 #define SYSCALL_TIME              13
 #define SYSCALL_GETPID            20
 #define SYSCALL_GETUID            24
@@ -205,6 +211,9 @@ int emu_errnos[] = { 0,
 #define SYSCALL_GETEGID           50
 #define SYSCALL_IOCTL             54
 #define SYSCALL_FCNTL             55
+#define SYSCALL_SETRLIMIT         75
+#define SYSCALL_GETRLIMIT         76
+#define SYSCALL_GETRUSAGE         77
 #define SYSCALL_GETTIMEOFDAY      78
 #define SYSCALL_MMAP              90
 #define SYSCALL_MUNMAP            91
@@ -830,6 +839,27 @@ convert_native_stat_to_emu (interpreter_t *intp, word_32 addr, struct stat *buf)
 #endif
 }
 
+void
+convert_native_rusage_to_ppc (interpreter_t *intp, word_32 addr, struct rusage *ru)
+{
+    convert_native_timeval_to_ppc(intp, addr + 0, &ru->ru_utime);
+    convert_native_timeval_to_ppc(intp, addr + 8, &ru->ru_stime);
+    mem_set_32(intp, addr + 16, ru->ru_maxrss);
+    mem_set_32(intp, addr + 20, ru->ru_ixrss);
+    mem_set_32(intp, addr + 24, ru->ru_idrss);
+    mem_set_32(intp, addr + 28, ru->ru_isrss);
+    mem_set_32(intp, addr + 32, ru->ru_minflt);
+    mem_set_32(intp, addr + 36, ru->ru_majflt);
+    mem_set_32(intp, addr + 40, ru->ru_nswap);
+    mem_set_32(intp, addr + 44, ru->ru_inblock);
+    mem_set_32(intp, addr + 48, ru->ru_oublock);
+    mem_set_32(intp, addr + 52, ru->ru_msgsnd);
+    mem_set_32(intp, addr + 56, ru->ru_msgrcv);
+    mem_set_32(intp, addr + 60, ru->ru_nsignals);
+    mem_set_32(intp, addr + 64, ru->ru_nvcsw);
+    mem_set_32(intp, addr + 68, ru->ru_nivcsw);
+}
+
 int
 process_system_call (interpreter_t *intp, word_32 number,
 		     word_32 arg1, word_32 arg2, word_32 arg3, word_32 arg4, word_32 arg5, word_32 arg6)
@@ -970,6 +1000,18 @@ process_system_call (interpreter_t *intp, word_32 number,
 	    {
 		result = close(fd);
 		close_fd(intp, arg1);
+	    }
+	    break;
+
+	case SYSCALL_UNLINK :
+	    ANNOUNCE_SYSCALL("unlink");
+	    {
+		char *real_name = strdup_from_user(intp, arg1);
+		char *name = translate_filename(real_name);
+
+		result = unlink(name);
+
+		free(real_name);
 	    }
 	    break;
 
@@ -1154,6 +1196,33 @@ process_system_call (interpreter_t *intp, word_32 number,
 			printf("unhandled fcntl %d\n", arg2);
 			intp->halt = 1;
 		}
+	    break;
+
+	case SYSCALL_SETRLIMIT :
+	    ANNOUNCE_SYSCALL("setrlimit");
+	    result = -1;
+	    errno = EPERM;
+	    break;
+
+	case SYSCALL_GETRLIMIT :
+	    ANNOUNCE_SYSCALL("getrlimit");
+	    assert(arg1 == EMU_RLIMIT_STACK);
+	    mem_set_32(intp, arg2 + 0, STACK_SIZE * 1024);
+	    mem_set_32(intp, arg2 + 4, STACK_SIZE * 1024);
+	    result = 0;
+	    break;
+
+	case SYSCALL_GETRUSAGE :
+	    ANNOUNCE_SYSCALL("getrusage");
+	    {
+		struct rusage ru;
+
+		assert(arg1 == EMU_RUSAGE_SELF);
+
+		result = getrusage(RUSAGE_SELF, &ru);
+		if (result == 0)
+		    convert_native_rusage_to_ppc(intp, arg2, &ru);
+	    }
 	    break;
 
 	case SYSCALL_GETTIMEOFDAY :
@@ -1781,6 +1850,7 @@ handle_system_call (interpreter_t *intp)
 	{ SYSCALL_WRITE, 3 },
 	{ SYSCALL_OPEN, 2 },
 	{ SYSCALL_CLOSE, 1 },
+	{ SYSCALL_UNLINK, 1 },
 	{ SYSCALL_TIME, 1 },
 	{ SYSCALL_GETPID, 0 },
 	{ SYSCALL_GETUID, 0 },
@@ -1791,6 +1861,9 @@ handle_system_call (interpreter_t *intp)
 	{ SYSCALL_GETEGID, 0 },
 	{ SYSCALL_IOCTL, 3 },
 	{ SYSCALL_FCNTL, 3 },
+	{ SYSCALL_SETRLIMIT, 2 },
+	{ SYSCALL_GETRLIMIT, 2 },
+	{ SYSCALL_GETRUSAGE, 2 },
 	{ SYSCALL_GETTIMEOFDAY, 2 },
 	{ SYSCALL_MMAP, 6 },
 	{ SYSCALL_MUNMAP, 2 },
@@ -2741,7 +2814,7 @@ main (int argc, char *argv[])
 	{
 	    elf_interpreter = (char*)malloc(phdrs[i].p_filesz);
 	    read_all_at(exec_fd, elf_interpreter, phdrs[i].p_filesz, phdrs[i].p_offset);
-	    printf("elf interpreter is %s\n", elf_interpreter);
+	    /* printf("elf interpreter is %s\n", elf_interpreter); */
 	    continue;
 	}
 
@@ -2757,7 +2830,7 @@ main (int argc, char *argv[])
 	    if (load_addr == (word_32)-1)
 	    {
 		load_addr = phdrs[i].p_vaddr & ~PPC_PAGE_MASK;
-		printf("load addr is 0x%08x\n", load_addr);
+		/* printf("load addr is 0x%08x\n", load_addr); */
 	    }
 	}
     }

@@ -551,10 +551,7 @@ handle_addi_insn (word_32 insn, word_32 pc)
 	{
 	    rd_reg = ref_ppc_gpr_w(FIELD_RD);
 
-	    if ((FIELD_SIMM & 0xff00) == 0)
-		emit(COMPOSE_ADDL_IMM(31, FIELD_SIMM, rd_reg));
-	    else
-		emit(COMPOSE_LDA(rd_reg, FIELD_SIMM, 31));
+	    emit(COMPOSE_LDA(rd_reg, FIELD_SIMM, 31));
 
 	    unref_integer_reg(rd_reg);
 	}
@@ -567,6 +564,8 @@ handle_addi_insn (word_32 insn, word_32 pc)
 
 	    if ((FIELD_SIMM & 0xff00) == 0)
 		emit(COMPOSE_ADDL_IMM(ra_reg, FIELD_SIMM, rd_reg));
+	    else if ((FIELD_SIMM & 0xff00) == 0xff00 && (FIELD_SIMM & 0x00ff) != 0)
+		emit(COMPOSE_SUBL_IMM(ra_reg, (~(FIELD_SIMM & 0xff) & 0xff) + 1, rd_reg));
 	    else
 	    {
 		emit(COMPOSE_LDA(rd_reg, FIELD_SIMM, ra_reg));
@@ -2484,13 +2483,7 @@ handle_lha_insn (word_32 insn, word_32 pc)
 }
 
 static void
-handle_lhz_insn (word_32 insn, word_32 pc)
-{
-    gen_load_half_imm_insn(insn, 0);
-}
-
-static void
-handle_lhzu_insn (word_32 insn, word_32 pc)
+gen_load_half_update_insn (word_32 insn, int sex)
 {
     assert(FIELD_RD != FIELD_RA);
 
@@ -2511,8 +2504,12 @@ handle_lhzu_insn (word_32 insn, word_32 pc)
 
 	emit(COMPOSE_LDWU(rd_reg, 0, addr_reg));
 
-	unref_integer_reg(rd_reg);
 	unref_integer_reg(addr_reg);
+
+	if (sex)
+	    emit(COMPOSE_SEXTW(rd_reg, rd_reg));
+
+	unref_integer_reg(rd_reg);
     }
     else if (KILL_GPR(FIELD_RA))
     {
@@ -2527,7 +2524,13 @@ handle_lhzu_insn (word_32 insn, word_32 pc)
 }
 
 static void
-handle_lhzx_insn (word_32 insn, word_32 pc)
+handle_lhau_insn (word_32 insn, word_32 pc)
+{
+    gen_load_half_update_insn(insn, 1);
+}
+
+static void
+gen_load_half_indexed_insn (word_32 insn, int sex)
 {
     if (KILL_GPR(FIELD_RD))
     {
@@ -2546,8 +2549,12 @@ handle_lhzx_insn (word_32 insn, word_32 pc)
 
 	    emit(COMPOSE_LDWU(rd_reg, 0, addr_reg));
 
-	    unref_integer_reg(rd_reg);
 	    unref_integer_reg(addr_reg);
+
+	    if (sex)
+		emit(COMPOSE_SEXTW(rd_reg, rd_reg));
+
+	    unref_integer_reg(rd_reg);
 	}
 	else
 	{
@@ -2567,10 +2574,38 @@ handle_lhzx_insn (word_32 insn, word_32 pc)
 
 	    emit(COMPOSE_LDWU(rd_reg, 0, addr_reg));
 
-	    unref_integer_reg(rd_reg);
 	    unref_integer_reg(addr_reg);
+
+	    if (sex)
+		emit(COMPOSE_SEXTW(rd_reg, rd_reg));
+
+	    unref_integer_reg(rd_reg);
 	}
     }
+}
+
+static void
+handle_lhax_insn (word_32 insn, word_32 pc)
+{
+    gen_load_half_indexed_insn(insn, 1);
+}
+
+static void
+handle_lhz_insn (word_32 insn, word_32 pc)
+{
+    gen_load_half_imm_insn(insn, 0);
+}
+
+static void
+handle_lhzu_insn (word_32 insn, word_32 pc)
+{
+    gen_load_half_update_insn(insn, 0);
+}
+
+static void
+handle_lhzx_insn (word_32 insn, word_32 pc)
+{
+    gen_load_half_indexed_insn(insn, 0);
 }
 
 static void
@@ -3476,11 +3511,41 @@ handle_rlwinm_insn (word_32 insn, word_32 pc)
 	rs_reg = ref_ppc_gpr_r(FIELD_RS);
 	ra_reg = ref_ppc_gpr_w(FIELD_RA);
 
-	if (FIELD_SH == 0)
+	if (FIELD_MB == 24 && FIELD_ME == 31 && (FIELD_SH & 7) == 0)
+	{
+	    emit(COMPOSE_EXTBL_IMM(rs_reg, FIELD_SH == 0 ? 0 : 4 - (FIELD_SH >> 3), ra_reg));
+
+	    unref_integer_reg(rs_reg);
+	}
+	else if (FIELD_MB == 16 && FIELD_ME == 31 && (FIELD_SH & 7) == 0 && FIELD_SH != 8)
+	{
+	    emit(COMPOSE_EXTWL_IMM(rs_reg, FIELD_SH == 0 ? 0 : 4 - (FIELD_SH >> 3), ra_reg));
+
+	    unref_integer_reg(rs_reg);
+	}
+	else if (FIELD_SH == 0)
 	{
 	    gen_and_with_const(rs_reg, ra_reg, mask);
 
 	    unref_integer_reg(rs_reg);
+	}
+	else if (FIELD_MB == 0 && FIELD_ME + FIELD_SH == 31)
+	{
+	    emit(COMPOSE_SLL_IMM(rs_reg, FIELD_SH, ra_reg));
+
+	    unref_integer_reg(rs_reg);
+
+	    emit(COMPOSE_ADDL(ra_reg, 31, ra_reg));
+	}
+	else if (FIELD_ME == 31 && (32 - FIELD_MB) <= FIELD_SH)
+	{
+	    assert(FIELD_MB != 0);
+
+	    emit(COMPOSE_SLL_IMM(rs_reg, 32 + FIELD_SH - (32 - FIELD_MB), ra_reg));
+
+	    unref_integer_reg(rs_reg);
+
+	    emit(COMPOSE_SRL_IMM(ra_reg, 32 + FIELD_MB, ra_reg));
 	}
 	else
 	{
@@ -3819,6 +3884,12 @@ handle_srw_insn (word_32 insn, word_32 pc)
 
 	unref_integer_reg(ra_reg);
     }
+}
+
+static void
+handle_srwd_insn (word_32 insn, word_32 pc)
+{
+    handle_srw_insn(insn, pc);
 }
 
 static void
@@ -4620,7 +4691,6 @@ handle_subfic_insn (word_32 insn, word_32 pc)
 static void
 handle_sync_insn (word_32 insn, word_32 pc)
 {
-    printf("sync compiled!!!!!!!!!!!\n");
 }
 
 static void
@@ -4787,6 +4857,11 @@ compile_to_alpha_ppc_insn (word_32 insn, word_32 pc, int _optimize_taken_jump, l
 		    assert((insn & 0xFC0007FF) == 0x7C0001AE);
 		    handle_stbx_insn(insn, pc);
 		    break;
+		case 1073:
+		    /* SRW. */
+		    assert((insn & 0xFC0007FF) == 0x7C000431);
+		    handle_srwd_insn(insn, pc);
+		    break;
 		case 1072:
 		    /* SRW */
 		    assert((insn & 0xFC0007FF) == 0x7C000430);
@@ -4948,6 +5023,11 @@ compile_to_alpha_ppc_insn (word_32 insn, word_32 pc, int _optimize_taken_jump, l
 		    /* LHZX */
 		    assert((insn & 0xFC0007FF) == 0x7C00022E);
 		    handle_lhzx_insn(insn, pc);
+		    break;
+		case 686:
+		    /* LHAX */
+		    assert((insn & 0xFC0007FF) == 0x7C0002AE);
+		    handle_lhax_insn(insn, pc);
 		    break;
 		case 1070:
 		    /* LFSX */
@@ -5390,6 +5470,11 @@ compile_to_alpha_ppc_insn (word_32 insn, word_32 pc, int _optimize_taken_jump, l
 	    /* LHZ */
 	    assert((insn & 0xFC000000) == 0xA0000000);
 	    handle_lhz_insn(insn, pc);
+	    break;
+	case 43:
+	    /* LHAU */
+	    assert((insn & 0xFC000000) == 0xAC000000);
+	    handle_lhau_insn(insn, pc);
 	    break;
 	case 42:
 	    /* LHA */

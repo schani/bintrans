@@ -200,6 +200,8 @@
 			 (+ (reg ra gpr) (shiftl (zex simm) 16)))))
   ("addis r%u,r%u,%d" rd ra simm))
 
+;addme
+
 (define-insn addze
     ((opcd 31)
      (rb 0)
@@ -453,6 +455,9 @@
   ((set (reg ra gpr) (leading-zeros (reg rs gpr))))
   ("cntlzw r%u,r%u" ra rs))
 
+;crand
+;crandc
+
 (define-insn creqv
     ((opcd 19)
      (xo1 289)
@@ -462,6 +467,8 @@
 			(numbered-subreg 1 (- (width 5 31) crbb) cr))
 		1)))
   ("creqv crb%u,crb%u,crb%u" crbd crba crbb))
+
+;crnand
 
 (define-insn crnor
     ((opcd 19)
@@ -482,6 +489,8 @@
 	       (numbered-subreg 1 (- (width 5 31) crbb) cr))))
   ("cror crb%u,crb%u,crb%u" crbd crba crbb))
 
+;crorc
+
 (define-insn crxor
     ((opcd 19)
      (xo1 193)
@@ -491,6 +500,10 @@
 		(numbered-subreg 1 (- (width 5 31) crbb) cr))))
   ("crxor crb%u,crb%u,crb%u" crbd crba crbb))
 
+;dcba (data cache block allocate)
+;dcbf (data cache block flush)
+;dcbi (data cache block invalidate)
+
 (define-insn dcbst			;data cache block store
     ((opcd 31)
      (xo1 54)
@@ -498,6 +511,9 @@
      (rd 0))
   ((ignore (+ (reg ra gpr) (reg rb gpr)))) ;FIXME
   ("dcbst r%u,r%u" ra rb))
+
+;dcbt (data cache block touch)
+;dcbtst (data cache block touch for store)
 
 (define-insn dcbz			;data cache block clear to zero
     ((opcd 31)
@@ -530,6 +546,8 @@
      (oe 0))
   ((set (reg rd gpr) (/ (reg ra gpr) (reg rb gpr))))
   ("divwu r%u,r%u,r%u" rd ra rb))
+
+;eieio (enforce in-order execution of i/o)
 
 (define-rc-insn eqv ra
   ((opcd 31)
@@ -576,6 +594,8 @@
   ((set (reg frd fpr) (+f (reg fra fpr) (reg frb fpr))))
   ("fadds fr%u,fr%u,fr%u" frd fra frb))
 
+;fcmpo (floating compare ordered)
+
 (define-insn fcmpu
     ((opcd 63)
      (crdz 0)
@@ -589,7 +609,9 @@
 		2))))
   ("fcmpu cr%u,fr%u,fr%u" crfd fra frb))
 
-(define-insn fctiwz
+;fctiw (floating convert to word)
+
+(define-insn fctiwz			;floating convert to word with round toward zero
     ((opcd 63)
      (fra 0)
      (xo1 15)
@@ -665,6 +687,8 @@
   ((set (reg frd fpr) (*f (reg fra fpr) (reg frc fpr))))
   ("fmuls fr%u,fr%u,fr%u" frd fra frc))
 
+;fnabs
+
 (define-insn fneg
     ((opcd 63)
      (fra 0)
@@ -673,6 +697,9 @@
   ((set (reg frd fpr) (fneg (reg frb fpr))))
   ("fneg fr%u,fr%u" frd frb))
 
+;fnmadd
+;fnmadds
+
 (define-insn fnmsub
     ((opcd 63)
      (xo5 30)
@@ -680,13 +707,21 @@
   ((set (reg frd fpr) (fneg (-f (*f (reg fra fpr) (reg frc fpr)) (reg frb fpr)))))
   ("fnmsub fr%u,fr%u,fr%u,fr%u" frd fra frc frb))
 
-(define-insn frsp
+;fnmsubs
+;fres (floating reciprocal estimate single)
+
+(define-insn frsp			;floating round to single
     ((opcd 63)
      (fra 0)
      (xo1 12)
      (rc 0))
   ((set (reg frd fpr) (reg frb fpr)))
   ("frsp fr%u,fr%u" frd frb))
+
+;frsqrte (floating reciprocal square root estimate)
+;fsel
+;fsqrt
+;fsqrts
 
 (define-insn fsub
     ((opcd 63)
@@ -761,6 +796,9 @@
 					       (+ (reg ra gpr) (sex d)))))))
   ("lfd fr%u,%d(r%u)" frd d ra))
 
+;lfdu
+;lfdux
+
 (define-insn lfdx
     ((opcd 31)
      (xo1 599)
@@ -776,6 +814,9 @@
 								 (sex d)
 								 (+ (reg ra gpr) (sex d))))))))
   ("lfs fr%u,%d(r%u)" frd d ra))
+
+;lfsu
+;lfsux
 
 (define-insn lfsx
     ((opcd 31)
@@ -793,6 +834,26 @@
 					     (+ (reg ra gpr) (sex d))))))))
   ("lha r%u,%d(r%u)" rd d ra))
 
+(define-insn lhau
+    ((opcd 43))
+  ((let ((ea (width 32 (+ (reg ra gpr) (sex d)))))
+     (set (reg rd gpr) (sex (width 16 (mem ea))))
+     (set (reg ra gpr) ea)))
+  ("lhau r%u,%d(r%u)" rd d ra))
+
+;lhaux
+
+(define-insn lhax
+    ((opcd 31)
+     (xo1 343)
+     (rc 0))
+  ((set (reg rd gpr) (sex (width 16 (mem (if (= ra (width 5 0))
+					     (reg rb gpr)
+					     (+ (reg ra gpr) (reg rb gpr))))))))
+  ("lhax r%u,r%u,r%u" rd ra rb))
+
+;lhbrx (load half word byte-reversed indexed)
+
 (define-insn lhz
     ((opcd 40))
   ((set (reg rd gpr) (zex (width 16 (mem (if (= ra (width 5 0))
@@ -807,6 +868,8 @@
      (set (reg ra gpr) ea)))
   ("lhzu r%u,%d(r%u)" rd d ra))
 
+;lhzux
+
 (define-insn lhzx
     ((opcd 31)
      (xo1 279)
@@ -815,6 +878,12 @@
 					     (reg rb gpr)
 					     (+ (reg ra gpr) (reg rb gpr))))))))
   ("lhzx r%u,r%u,r%u" rd ra rb))
+
+;lmw (load multiple word)
+;lswi (load string word immediate)
+;lswx (load string word indexed)
+;lwarx (load word and reserve indexed)
+;lwbrx (load word byte-reversed indexed)
 
 (define-insn lwz
     ((opcd 32))
@@ -858,6 +927,9 @@
   ((set (numbered-subreg 4 (- (width 3 7) crfd) cr)
 	(numbered-subreg 4 (- (width 3 7) crfs) cr)))
   ("mcrf cr%u,cr%u" crfd crfs))
+
+;mcrfs (move to condition register from fpscr)
+;mcrxr (move to condition register from xer)
 
 (define-insn mfcr
     ((opcd 31)
@@ -927,6 +999,8 @@
      (rc 0))
   ((set (numbered-subreg 1 (- (width 5 31) crbd) fpscr) 0))
   ("mtfsb0 crb%u" crbd))
+
+;mtfsb1
 
 (define-insn mtfsf
     ((opcd 63)
@@ -1043,6 +1117,8 @@
   ((set (reg ra gpr) (logand (rotl (reg rs gpr) (zex sh)) (mask (- 31 (zex me)) (- 31 (zex mb))))))
   ("~A r%u,r%u,%u,%u,%u" ra rs sh mb me))
 
+;rlwnm (rotate left word then AND with mask)
+
 (define-insn sc
     ((opcd 17)
      (rs 0)
@@ -1084,12 +1160,11 @@
    (set (reg ra gpr) (ashiftr (reg rs gpr) (zex sh))))
   ("~A r%u,r%u,%u" ra rs sh))
 
-(define-insn srw
+(define-rc-insn srw ra
     ((opcd 31)
-     (xo1 536)
-     (rc 0))
+     (xo1 536))
   ((set (reg ra gpr) (shiftr (reg rs gpr) (logand (reg rb gpr) #x1f))))
-  ("srw r%u,r%u,r%u" ra rs rb))
+  ("~A r%u,r%u,r%u" ra rs rb))
 
 (define-insn stb
     ((opcd 38))
@@ -1104,6 +1179,8 @@
   ((set (width 8 (mem (+ (reg ra gpr) (sex d)))) (subreg 0 7 rs gpr))
    (set (reg ra gpr) (+ (reg ra gpr) (sex d))))
   ("stbu r%u,%d(r%u)" rs d ra))
+
+;stbux
 
 (define-insn stbx
     ((opcd 31)
@@ -1123,6 +1200,8 @@
    (set (reg ra gpr) (+ (reg ra gpr) (sex d))))
   ("stfdu fr%u,%d(r%u)" frs d ra))
 
+;stfdux
+
 (define-insn stfdx
     ((opcd 31)
      (xo1 727)
@@ -1130,10 +1209,15 @@
   ((set (width 64 (mem (+ (if (= ra (width 5 0)) 0 (reg ra gpr)) (reg rb gpr)))) (double-to-bits (reg frs fpr))))
   ("stfdx fr%u,r%u,r%u" frs ra rb))
 
+;stfiwx (store floating-point as integer word indexed)
+
 (define-insn stfs
     ((opcd 52))
   ((set (mem (+ (if (= ra (width 5 0)) 0 (reg ra gpr)) (sex d))) (single-to-bits (double-to-single (reg frs fpr)))))
   ("stfs fr%u,%d(r%u)" rs d ra))
+
+;stfsu
+;stfsux
 
 (define-insn stfsx
     ((opcd 31)
@@ -1150,11 +1234,15 @@
 	(subreg 0 15 rs gpr)))
   ("sth r%u,%d(r%u)" rs d ra))
 
+;sthbrx (store half byte-reversed indexed)
+
 (define-insn sthu
     ((opcd 45))
   ((set (width 16 (mem (+ (reg ra gpr) (sex d)))) (subreg 0 15 rs gpr))
    (set (reg ra gpr) (+ (reg ra gpr) (sex d))))
   ("sthu r%u,%d(r%u)" rs d ra))
+
+;sthux
 
 (define-insn sthx
     ((opcd 31)
@@ -1163,10 +1251,17 @@
   ((set (width 16 (mem (+ (if (= ra (width 5 0)) 0 (reg ra gpr)) (reg rb gpr)))) (subreg 0 15 rs gpr)))
   ("sthx r%u,r%u,r%u" rs ra rb))
 
+;stmw (store multiple word)
+;stswi (store string word immediate)
+;stswx (store string word indexed)
+
 (define-insn stw
     ((opcd 36))
   ((set (mem (+ (if (= ra (width 5 0)) 0 (reg ra gpr)) (sex d))) (reg rs gpr)))
   ("stw r%u,%d(r%u)" rs d ra))
+
+;stwbrx (store word byte-reversed indexed)
+;stwcx. (store word conditional indexed)
 
 (define-insn stwu
     ((opcd 37))
@@ -1224,6 +1319,9 @@
    (set (reg rd gpr) (- (sex simm) (reg ra gpr))))
   ("subfic r%u,r%u,%d" rd ra simm))
 
+;subfme
+;subfze
+
 (define-insn sync
     ((opcd 31)
      (xo1 598)
@@ -1233,6 +1331,9 @@
      (rc 0))
   ((nop))
   ("sync"))
+
+;tw (trap word)
+;twi (trap word immediate)
 
 (define-rc-insn xor ra
     ((opcd 31)

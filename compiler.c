@@ -144,6 +144,8 @@ insn_info_t insn_infos[NUM_INSNS];
 #ifdef COLLECT_PPC_FPR_STATS
 unsigned int fpr_uses[32];
 #endif
+
+int regs_used_in_fragment[NUM_EMU_REGISTERS];
 #endif
 
 label_info_t label_infos[MAX_LABELS];
@@ -186,6 +188,7 @@ unsigned long num_load_store_reg_insns = 0;
 unsigned long num_stub_calls = 0;
 unsigned long num_loop_profiler_calls = 0;
 unsigned long num_const_adds = 0;
+unsigned long num_isyncs = 0;
 #endif
 
 void (*branch_profile_func) (void) = 0;
@@ -487,6 +490,11 @@ ref_integer_reg (int foreign_reg, int reading, int writing)
 	assert(foreign_reg < NUM_NATIVE_INTEGER_HOST_REGS);
 	return foreign_reg + FIRST_NATIVE_INTEGER_HOST_REG;
     }
+#endif
+
+#ifdef COLLECT_STATS
+    if (foreign_reg >= 0)
+	regs_used_in_fragment[foreign_reg] = 1;
 #endif
 
     reg = ref_reg(integer_regs[alloc_sp], NUM_INTEGER_REGS, foreign_reg, writing, &newly_allocated);
@@ -1332,6 +1340,15 @@ compile_basic_block (word_32 addr, int as_trace)
     old_num_translated_insns = num_translated_insns;
 #endif
 
+#ifdef COLLECT_STATS
+    {
+	int i;
+
+	for (i = 0; i < NUM_EMU_REGISTERS; ++i)
+	    regs_used_in_fragment[i] = 0;
+    }
+#endif
+
     start_timer();
 
     while (((emit_loc - code_area) & 3) != 0)
@@ -1381,6 +1398,18 @@ compile_basic_block (word_32 addr, int as_trace)
 	++num_translated_traces;
     else
 	++num_translated_blocks;
+
+    /*
+    {
+	int i, used = 0;
+
+	for (i = 0; i < NUM_EMU_REGISTERS; ++i)
+	    if (regs_used_in_fragment[i])
+		++used;
+
+	printf("regs used in block: %d\n", used);
+    }
+    */
 #endif
 
 #ifdef COUNT_INSNS
@@ -1724,7 +1753,9 @@ isync_handler (word_32 addr)
 {
     int i;
 
-    printf("isync!!!!!!!!!!!!!!!!\n");
+#ifdef COLLECT_STATS
+    ++num_isyncs;
+#endif
 
     num_constants = num_constants_init;
     emit_loc = code_area;
@@ -1760,6 +1791,7 @@ print_compiler_stats (void)
     printf("constants:                     %d\n", num_constants - (NUM_EMU_REGISTERS * 2 + 2));
     printf("stub calls:                    %lu\n", num_stub_calls);
     printf("loop profiler calls:           %lu\n", num_loop_profiler_calls);
+    printf("isyncs:                        %lu\n", num_isyncs);
 
 #ifdef COLLECT_PPC_FPR_STATS
     for (i = 0; i < 32; ++i)

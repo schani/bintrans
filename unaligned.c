@@ -157,17 +157,17 @@ sigbus_handler (int signo, siginfo_t *si, struct ucontext *uc)
 	    break;
 
 	case 0x0d :		/* STW */
-	    printf("stw\n");
+	    /* printf("stw\n"); */
 	    store_unaligned_16_bigendian(uc->uc_mcontext.sc_traparg_a0 ^ 2, uc->uc_mcontext.sc_regs[target_reg]);
 	    break;
 
 	case 0x2c :		/* STL */
-	    printf("stl\n");
+	    /* printf("stl\n"); */
 	    store_unaligned_32_bigendian(uc->uc_mcontext.sc_traparg_a0, uc->uc_mcontext.sc_regs[target_reg]);
 	    break;
 
 	case 0x26 :		/* STS */
-	    printf("sts\n");
+	    /* printf("sts\n"); */
 	    store_unaligned_32_bigendian(uc->uc_mcontext.sc_traparg_a0, convert_float_64_to_32(uc->uc_mcontext.sc_fpregs[target_reg]));
 	    break;
 
