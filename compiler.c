@@ -81,6 +81,14 @@ interpreter_t *compiler_intp = 0;
 interpreter_t *debugger_intp = 0;
 #endif
 
+#ifdef COLLECT_STATS
+unsigned long num_direct_jumps = 0;
+unsigned long num_direct_and_indirect_jumps = 0;
+unsigned long num_fragment_hash_misses = 0;
+unsigned long num_translated_fragments = 0;
+unsigned long num_translated_insns = 0;
+#endif
+
 reg_t
 alloc_integer_reg (void)
 {
@@ -413,6 +421,10 @@ lookup_fragment (word_32 addr)
     if (fragment_hash_table[index].foreign_addr == addr)
 	return fragment_hash_table[index].native_addr;
 
+#ifdef COLLECT_STATS
+    ++num_fragment_hash_misses;
+#endif
+
     index = fragment_hash_table[index].next;
     while (index != -1)
     {
@@ -421,6 +433,10 @@ lookup_fragment (word_32 addr)
 	index = fragment_hash_table[index].next;
     }
 
+#ifdef COLLECT_STATS
+    --num_fragment_hash_misses;
+#endif
+
     return 0;
 }
 
@@ -428,6 +444,10 @@ void
 enter_fragment (word_32 foreign_addr, word_64 native_addr)
 {
     int index = HASH_ADDR(foreign_addr);
+
+#ifdef COLLECT_STATS
+    ++num_translated_fragments;
+#endif
 
     if (fragment_hash_table[index].native_addr == 0)
     {
@@ -560,6 +580,9 @@ compare_register_sets (void)
 
     if (diff)
     {
+	printf("*** compiler\n");
+	dump_ppc_registers(compiler_intp);
+	printf("*** interpreter\n");
 	dump_ppc_registers(debugger_intp);
 	assert(0);
     }
@@ -577,11 +600,16 @@ provide_fragment (word_32 addr)
     dump_ppc_registers(compiler_intp);
     */
 
+#ifdef COLLECT_STATS
+    ++num_direct_and_indirect_jumps;
+#endif
+
 #ifdef CROSSDEBUGGER
     debugger_intp->have_jumped = 0;
     while (!debugger_intp->have_jumped)
 	interpret_ppc_insn(debugger_intp);
     assert(debugger_intp->pc == addr);
+    move_ppc_regs_compiler_to_interpreter(compiler_intp);
     compare_register_sets();
 #endif
 
@@ -599,6 +627,10 @@ provide_fragment_and_patch (word_64 jump_addr)
     sword_64 disp;
     word_32 field;
 
+#ifdef COLLECT_STATS
+    ++num_direct_jumps;
+#endif
+
     for (i = 0; i < MAX_UNRESOLVED_JUMPS; ++i)
 	if (unresolved_jump_addrs[i] == jump_addr)
 	    break;
@@ -607,6 +639,7 @@ provide_fragment_and_patch (word_64 jump_addr)
 
     native_addr = provide_fragment(unresolved_jump_targets[i]);
 
+#ifndef CROSSDEBUGGER
     jump_addr -= 8;
 
     disp = native_addr - jump_addr - 4;
@@ -618,6 +651,7 @@ provide_fragment_and_patch (word_64 jump_addr)
     unresolved_jump_addrs[i] = 0;
 
     flush_icache();
+#endif
 
     return native_addr;
 }
@@ -629,6 +663,19 @@ start_compiler (word_32 addr)
 
     move_ppc_regs_interpreter_to_compiler(compiler_intp);
     start_execution(native_addr); /* this call never returns */
+}
+
+void
+print_compiler_stats (void)
+{
+#ifdef COLLECT_STATS
+    printf("patched direct jumps:   %lu\n", num_direct_jumps);
+    printf("indirect jumps:         %lu\n", num_direct_and_indirect_jumps - num_direct_jumps);
+    printf("fragment hash misses:   %lu\n", num_fragment_hash_misses);
+    printf("translated fragments:   %lu\n", num_translated_fragments);
+    printf("translated insns:       %lu\n", num_translated_insns);
+    printf("generated insns:        %lu\n", emit_loc - code_area);
+#endif
 }
 
 void

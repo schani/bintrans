@@ -1432,7 +1432,7 @@ emit(COMPOSE_MOV(0, ~A));
       (generate-insn-recognizer decision-tree #'(lambda (insn)
 						  (dolist (expr (insn-effect insn))
 						    (princ (generate-compiler nil expr nil)))))
-      (format t "}~%"))))
+      (format t "++num_translated_insns;~%}~%"))))
 
 (defun generate-defines-file ()
   (with-open-file (out (format nil "~A_defines.h" (dcs *machine-name*)) :direction :output :if-exists :supersede)

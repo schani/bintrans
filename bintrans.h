@@ -53,7 +53,7 @@ typedef struct
     segment_t segments[MAX_SEGMENTS];
     segment_t *data_segment;
     int num_segments;
-    long insn_count;
+    unsigned long insn_count;
     int halt;
     int have_jumped;
     int trace;
@@ -97,6 +97,7 @@ void handle_system_call (interpreter_t *intp);
 
 void init_compiler (interpreter_t *intp, interpreter_t *dbg_intp);
 void start_compiler (word_32 addr);
+void print_compiler_stats (void);
 
 /* these come from ppc_compiler.c */
 void move_ppc_regs_interpreter_to_compiler (interpreter_t *intp);

@@ -155,5 +155,6 @@ c_stub:
 	ldt	$f3,64(sp)
 	ldt	$f4,72(sp)
 	ldt	$f5,80(sp)
+	lda	sp,96(sp)
 	ret	$31,(ra)
 	.end	c_stub

@@ -411,6 +411,9 @@ handle_system_call (interpreter_t *intp)
 	case 1 :
 	    printf("exit (%d)\n", intp->regs_GPR[3]);
 	    printf("%ld insn executed\n", intp->insn_count);
+#ifdef COMPILER
+	    print_compiler_stats();
+#endif
 	    exit(intp->regs_GPR[3]);
 	    break;
 
