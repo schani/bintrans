@@ -132,88 +132,211 @@ print_liveness (interpreter_t *intp, word_32 *addrs, int num_block_insns)
 
 ppc_insn_t block_insns[MAX_TRACE_INSNS];
 
-int
-compute_iterative_liveness (interpreter_t *intp, word_32 addr, word_32 *addrs, word_32 *live_cr, word_32 *live_xer, word_32 *live_gpr)
+#ifdef COLLECT_LIVENESS
+static void
+compute_liveness_for_block (interpreter_t *intp, word_32 first_addr, word_32 last_addr, word_32 *addrs, int length,
+			    word_32 *live_cr, word_32 *live_xer, word_32 *live_gpr)
+{
+    word_32 addr;
+    int i;
+
+    if (addrs == 0)
+    {
+	addr = last_addr - 4;
+	assert(last_addr > first_addr);
+    }
+    else
+	i = length - 1;
+
+    for (;;)
+    {
+	word_32 killed_cr, killed_xer, killed_gpr;
+
+	if (addrs != 0)
+	    addr = addrs[i];
+
+	liveness_ppc_insn(mem_get_32(intp, addr), addr,
+			  live_cr, &killed_cr,
+			  live_xer, &killed_xer,
+			  live_gpr, &killed_gpr);
+
+	if (addrs != 0)
+	{
+	    block_insns[i].live_cr = *live_cr;
+	    block_insns[i].live_xer = *live_xer;
+	    block_insns[i].live_gpr = *live_gpr;
+	    block_insns[i].killed_cr = killed_cr;
+	    block_insns[i].killed_xer = killed_xer;
+	    block_insns[i].killed_gpr = killed_gpr;
+	}
+
+	if ((addrs == 0 && addr == first_addr)
+	    || (addrs != 0 && i == 0))
+	    break;
+
+	if (addrs == 0)
+	    addr -= 4;
+	else
+	    --i;
+    }
+}
+#endif
+
+static int
+discover_block (interpreter_t *intp, word_32 addr, word_32 *addrs, word_32 *_last_addr, int *can_jump_indirectly, int *num_targets, word_32 *targets)
 {
     word_32 last_addr;
-    int can_fall_through, can_jump_indirectly;
-    int num_targets;
-    word_32 target;
-    int length, i;
+    int length;
+    int can_fall_through;
+
+    *num_targets = 0;
 
     last_addr = addr;
     length = 0;
     for (;;)
     {
-	jump_analyze_ppc_insn(mem_get_32(intp, last_addr), last_addr, &num_targets, &target, &can_fall_through, &can_jump_indirectly);
+	jump_analyze_ppc_insn(mem_get_32(intp, last_addr), last_addr, num_targets, targets, &can_fall_through, can_jump_indirectly);
 
-	assert(length < MAX_TRACE_INSNS);
+	if (addrs != 0)
+	{
+	    assert(length < MAX_TRACE_INSNS);
 
-	addrs[length++] = last_addr;
+	    addrs[length++] = last_addr;
+	}
+
 	last_addr += 4;
 
-	if (num_targets > 0 || !can_fall_through || can_jump_indirectly)
+	if (*num_targets > 0 || !can_fall_through || *can_jump_indirectly)
 	    break;
     }
 
-#ifdef COLLECT_LIVENESS
-    if (can_jump_indirectly)
-	*live_cr = *live_xer = *live_gpr = 0xffffffff;
-    else
-    {
-	fragment_hash_entry_t *entry;
-	fragment_hash_supplement_t *supplement;
+    *_last_addr = last_addr;
 
-	if (can_fall_through)
+    if (can_fall_through)
+    {
+	assert(*num_targets <= 1);
+
+	targets[(*num_targets)++] = last_addr;
+    }
+
+    return length;
+}
+
+#ifdef COLLECT_LIVENESS
+static int
+compute_depth_liveness (interpreter_t *intp, word_32 addr, word_32 *addrs, word_32 *live_cr, word_32 *live_xer, word_32 *live_gpr, int depth)
+{
+    fragment_hash_entry_t *entry;
+    fragment_hash_supplement_t *supplement;
+
+    if (addrs == 0)
+    {
+	entry = fragment_hash_get(addr, &supplement);
+	if (entry != 0)
 	{
-	    entry = fragment_hash_get(last_addr, &supplement);
-	    if (entry == 0)
-		*live_cr = *live_xer = *live_gpr = 0xffffffff;
-	    else
+#if LIVENESS_DEPTH > 0
+	    if (supplement->depth >= depth)
+#endif
 	    {
 		*live_cr = supplement->live_cr;
 		*live_xer = supplement->live_xer;
 		*live_gpr = supplement->live_gpr;
+
+		return 0;
 	    }
 	}
+    }
+
+    if (depth < 0)
+    {
+	assert(addrs == 0);
+
+	*live_cr = *live_xer = *live_gpr = 0xffffffff;
+
+	return 0;
+    }
+    else
+    {
+	word_32 last_addr;
+	int can_jump_indirectly;
+	int num_targets;
+	word_32 targets[2];
+	int length;
+
+	length = discover_block(intp, addr, addrs, &last_addr, &can_jump_indirectly, &num_targets, targets);
+
+	if (can_jump_indirectly)
+	    *live_cr = *live_xer = *live_gpr = 0xffffffff;
 	else
 	{
+	    int i;
+
 	    *live_cr = *live_xer = *live_gpr = 0;
 
-	    assert(num_targets > 0);
-	}
-
-	if (num_targets > 0)
-	{
-	    assert(num_targets == 1);
-
-	    entry = fragment_hash_get(target, &supplement);
-
-	    if (entry == 0)
-		*live_cr = *live_xer = *live_gpr = 0xffffffff;
-	    else
+	    for (i = 0; i < num_targets; ++i)
 	    {
-		*live_cr |= supplement->live_cr;
-		*live_xer |= supplement->live_xer;
-		*live_gpr |= supplement->live_gpr;
+		word_32 add_live_cr, add_live_xer, add_live_gpr;
+
+		compute_depth_liveness(intp, targets[i], 0, &add_live_cr, &add_live_xer, &add_live_gpr, depth - 1);
+
+		*live_cr |= add_live_cr;
+		*live_xer |= add_live_xer;
+		*live_gpr |= add_live_gpr;
 	    }
 	}
-    }
 
-    for (i = length - 1; i >= 0; --i)
-    {
-	liveness_ppc_insn(mem_get_32(intp, addrs[i]), addrs[i],
-			  live_cr, &block_insns[i].killed_cr,
-			  live_xer, &block_insns[i].killed_xer,
-			  live_gpr, &block_insns[i].killed_gpr);
+	compute_liveness_for_block(intp, addr, last_addr, addrs, length,
+				   live_cr, live_xer, live_gpr);
 
-	block_insns[i].live_cr = *live_cr;
-	block_insns[i].live_xer = *live_xer;
-	block_insns[i].live_gpr = *live_gpr;
+	/* printf("liveness for %08x: %08x %08x %08x\n", addr, *live_cr, *live_xer, *live_gpr); */
+
+	if (addrs == 0)
+	{
+	    if (entry != 0)
+	    {
+#if LIVENESS_DEPTH > 0
+		supplement->depth = depth;
+#endif
+		supplement->live_cr = *live_cr;
+		supplement->live_xer = *live_xer;
+		supplement->live_gpr = *live_gpr;
+	    }
+	    else
+	    {
+		fragment_hash_entry_t entry;
+		fragment_hash_supplement_t supplement;
+
+		init_fragment_hash_entry(&entry, &supplement);
+		entry.foreign_addr = addr;
+#if LIVENESS_DEPTH > 0
+		supplement.depth = depth;
+#endif
+		supplement.live_cr = *live_cr;
+		supplement.live_xer = *live_xer;
+		supplement.live_gpr = *live_gpr;
+
+		fragment_hash_put(addr, &entry, &supplement);
+	    }
+	}
+
+	return length;
     }
+}
 #endif
 
-    return length;
+int
+compute_iterative_liveness (interpreter_t *intp, word_32 addr, word_32 *addrs, word_32 *live_cr, word_32 *live_xer, word_32 *live_gpr)
+{
+#ifdef COLLECT_LIVENESS
+    return compute_depth_liveness(intp, addr, addrs, live_cr, live_xer, live_gpr, LIVENESS_DEPTH);
+#else
+    word_32 last_addr;
+    int can_jump_indirectly;
+    int num_targets;
+    word_32 targets[2];
+
+    return discover_block(intp, addr, addrs, &last_addr, &can_jump_indirectly, &num_targets, targets);
+#endif
 }
 #endif
 
@@ -356,6 +479,7 @@ compute_liveness_for_trace (interpreter_t *intp, word_32 *addrs, int length)
 typedef struct
 {
     word_32 foreign_addr;
+    int depth;
     word_32 live_cr;
     word_32 live_xer;
     word_32 live_gpr;
@@ -377,6 +501,9 @@ load_liveness_info (void)
 
 	init_fragment_hash_entry(&entry, &supplement);
 	entry.foreign_addr = info.foreign_addr;
+#if LIVENESS_DEPTH > 0
+	supplement.depth = info.depth;
+#endif
 	supplement.live_cr = info.live_cr;
 	supplement.live_xer = info.live_xer;
 	supplement.live_gpr = info.live_gpr;
@@ -404,6 +531,11 @@ save_liveness_info (void)
 	    ppc_liveness_info_t info;
 
 	    info.foreign_addr = fragment_hash_table[i].foreign_addr;
+#if LIVENESS_DEPTH > 0
+	    info.depth = fragment_hash_supplement[i].depth;
+#else
+	    info.depth = 0;
+#endif
 	    info.live_cr = fragment_hash_supplement[i].live_cr;
 	    info.live_xer = fragment_hash_supplement[i].live_xer;
 	    info.live_gpr = fragment_hash_supplement[i].live_gpr;

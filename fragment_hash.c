@@ -160,6 +160,9 @@ init_fragment_hash_entry (fragment_hash_entry_t *entry, fragment_hash_supplement
 #endif
 #endif
 #ifdef COLLECT_LIVENESS
+#if LIVENESS_DEPTH > 0
+    supplement->depth = -1;
+#endif
     supplement->live_cr = 0xffffffff;
     supplement->live_xer = 0xffffffff;
     supplement->live_gpr = 0xffffffff;

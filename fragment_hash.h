@@ -62,6 +62,9 @@ typedef struct
 #endif
 #endif
 #ifdef COLLECT_LIVENESS
+#if LIVENESS_DEPTH > 0
+    int depth;
+#endif
     word_32 live_cr;
     word_32 live_xer;
     word_32 live_gpr;

@@ -1287,7 +1287,7 @@ alloc_native_reg_for_emu_reg (reg_t emu_reg, int current_insn_num, int insn_inde
 
     if (emu_regs[l].dirty
 #ifdef COLLECT_LIVENESS
-	/* && emu_reg_live(l, block_insns[insn_index].live_cr, block_insns[insn_index].live_xer, block_insns[insn_index].live_gpr) */
+	&& emu_reg_live(l, block_insns[insn_index].live_cr, block_insns[insn_index].live_xer, block_insns[insn_index].live_gpr)
 #endif
 	)
     {
@@ -2390,6 +2390,9 @@ compile_basic_block (word_32 foreign_addr, int as_trace, unsigned char *preferre
     */
 
 #ifdef COLLECT_LIVENESS
+#if LIVENESS_DEPTH > 0
+    fragment_entry_supplement.depth = LIVENESS_DEPTH;
+#endif
     fragment_entry_supplement.live_cr = live_cr;
     fragment_entry_supplement.live_xer = live_xer;
     fragment_entry_supplement.live_gpr = live_gpr;
@@ -2605,7 +2608,7 @@ compare_register_sets (word_32 addr)
     word_32 live_cr, live_xer, live_gpr;
 
 #ifdef COLLECT_LIVENESS
-    fragment_hash_supplement_t *supplement;
+    fragment_hash_supplement_t *supplement = 0;
     fragment_hash_entry_t *entry = fragment_hash_get(addr, &supplement);
 
     if (entry != 0)
@@ -2615,9 +2618,8 @@ compare_register_sets (word_32 addr)
 	live_gpr = supplement->live_gpr;
     }
     else
-#else
-	live_cr = live_xer = live_gpr = 0xffffffff;
 #endif
+	live_cr = live_xer = live_gpr = 0xffffffff;
 
     for (i = 0; i < 5; ++i)
     {
