@@ -129,22 +129,23 @@ let combine_bindings cm1 cm2 =
 
 let make_some x = Some x
 
-let match_int_const int_const pattern =
-  match (int_const, pattern) with
-    (IntLiteral const, AnyInt input_name) -> cm_return [ ConstBinding (input_name, IntConst int_const) ]
-  | (IntLiteral const1, TheInt const2) when const1 = const2 -> cm_return []
-  | _ -> raise Expression_not_const
-
 let match_expr fields expr pattern =
   let return = cm_return
   and fail = cm_fail
   and when_cfold = cm_when fields
-  in let rec match_rec expr pattern =
+  in let rec match_int_const int_const pattern =
+      match (int_const, pattern) with
+	  (IntLiteral const, AnyInt input_name) -> return [ ConstBinding (input_name, IntConst int_const) ]
+	| (IntLiteral const1, TheInt const2) ->
+	    when_cfold (BinaryWidth (IntEqual, 8, IntConst int_const, const2))
+	      (fun _ -> return [])
+	| _ -> raise Expression_not_const
+  and match_rec expr pattern =
     match (cfold_expr fields expr, pattern) with
 	(IntConst (IntLiteral const), IntPattern (AnyInt input_name)) ->
 	  return [ ConstBinding (input_name, expr) ]
       | (IntConst (IntLiteral const1), IntPattern (TheInt const2)) ->
-	  when_cfold (BinaryWidth (IntEqual, 8, expr, int_literal_expr const2))
+	  when_cfold (BinaryWidth (IntEqual, 8, expr, const2))
 	    (fun _ -> (return []))
       | (FloatConst const, FloatPattern (AnyFloat input_name)) ->
 	  return [ ConstBinding (input_name, expr) ]

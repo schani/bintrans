@@ -16,6 +16,7 @@ typedef unsigned long long word_64;
 
 #define binary_IntAdd(x,y)           ((x)+(y))
 #define binary_IntSub(x,y)           ((x)-(y))
+#define binary_IntMul(x,y)           ((x)*(y))
 
 #define binary_ShiftL(x,y)           ((x)<<(y))
 #define binary_LShiftR_4(x,y)        ((word_64)((word_32)(x)>>(word_32)(y)))
@@ -38,10 +39,13 @@ ashiftr8 (word_64 x, word_64 a)
 word_64
 bitmask (word_64 s, word_64 l)
 {
+    if (l == 0LL)
+	return 0LL;
+
     if (s + l >= 64)
 	return (word_64)-1LL << s;
     else
-	return ((word_64)-1LL >> (64LL - l)) << s;
+	return (((word_64)-1LL) >> (64LL - l)) << s;
 }
 
 word_64
@@ -68,7 +72,7 @@ test_func (word_64 field_sh, word_64 field_mb, word_64 field_me, word_64 guest_r
     word_64 guest_reg_1;
     word_64 interm_reg_1, interm_reg_2, interm_reg_3, interm_reg_4;
 
-#include "test.h"
+#include "test.new.h"
 
     return guest_reg_1;
 }

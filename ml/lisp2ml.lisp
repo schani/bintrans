@@ -1,3 +1,24 @@
+;; lisp2ml.lisp
+
+;; bintrans
+
+;; Copyright (C) 2004 Mark Probst
+
+;; This program is free software; you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation; either version 2, or (at your option)
+;; any later version.
+
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU General Public License for more details.
+
+;; You should have received a copy of the GNU General Public License
+;; along with this program; if not, you can either send email to this
+;; program's maintainer or write to: The Free Software Foundation,
+;; Inc.; 675 Massachusetts Avenue; Cambridge, MA 02139, USA.
+
 (load "let-match.lisp")
 (load "utils.lisp")
 
@@ -22,6 +43,9 @@
     (float-sqrt "FloatSqrt" unary)
     (float-neg "FloatNeg" unary)
     (float-abs "FloatAbs" unary)
+    (low-one-bits "LowOneBits" unary)
+    (low-mask "LowMask" unary)
+    (high-mask "HighMask" unary)
 
     (int-zero-p "IntZero" unary-width)
     (int-parity-even-p "IntParityEven" unary-width)
@@ -45,6 +69,8 @@
     (-f "FloatSub" binary)
     (*f "FloatMul" binary)
     (/f "FloatDiv" binary)
+    (both-low-one-bits "BothLowOneBits" binary)
+    (bit-mask "BitMask" binary)
 
     (=i "IntEqual" binary-width)
     (<iu "LessU" binary-width)
@@ -107,19 +133,20 @@
     (little-endian "LittleEndian")
     (t (error "illegal byte order ~A" byte-order))))
 
+(defun lookup-int (bindings name)
+  (let ((binding (assoc name bindings)))
+    (if binding
+	(destructuring-bind (name ml-name type)
+	    binding
+	  (if (eql type 'int)
+	      ml-name
+	      (error "variable ~A is of wrong type (should be int, but is ~A)" name type)))
+	(error "unbound symbol ~A" name))))
+
 ;; a binding is a list of the form (lisp-name ml-name type) where type can be
 ;; int or expr
 (defun convert-expr (expr bindings)
-  (labels ((lookup-int (name)
-	     (let ((binding (assoc name bindings)))
-	       (if binding
-		   (destructuring-bind (name ml-name type)
-		       binding
-		     (if (eql type 'int)
-			 ml-name
-		       (error "variable ~A is of wrong type (should be int, but is ~A)" name type)))
-		 (error "unbound symbol ~A" name))))
-	   (lookup-expr (name)
+  (labels ((lookup-expr (name)
 	     (let ((binding (assoc name bindings)))
 	       (if binding
 		   (destructuring-bind (name ml-name type)
@@ -128,7 +155,7 @@
 		       (expr
 			ml-name)
 		       (int
-			(format nil "int_literal_expr ~A" ml-name))
+			(format nil "int_literal_expr (~A)" ml-name))
 		       (int-const
 			ml-name)
 		       (t
@@ -142,18 +169,20 @@
 		(cond ((integerp int-const)
 		       (format nil "IntLiteral (~AL)" int-const))
 		      ((symbolp int-const)
-		       (format nil "IntLiteral ~A" (lookup-int int-const)))
+		       (format nil "IntLiteral ~A" (lookup-int bindings int-const)))
 		      (t
 		       (error "illegal int const ~A" int-const))))))
 	   (convert-width (width)
 			  (cond ((integerp width)
 				 (format nil "~A" width))
 				((symbolp width)
-				 (format nil "(to_int ~A)" (lookup-int width)))
+				 (format nil "(to_int ~A)" (lookup-int bindings width)))
 				(t
 				 (error "illegal width ~A" width))))
 	   (convert (expr)
 	     (case-match expr
+	       ((const int ?expr)
+		(convert expr))
 	       ((load ?byte-order ?width ?addr)
 		(format nil "LoadBO (~A, ~A, ~A)"
 			(convert-byte-order byte-order)
@@ -220,17 +249,35 @@
 		     ,(generate (cdr rest-let-bindings) (cdr rest-let-syms) (cdr rest-binding-syms))))))
       (generate let-bindings let-syms binding-syms))))
 
-;; returns the ML string and a list of bindings
-(defun convert-pattern (pattern)
-  (labels ((convert-int-const (int-const)
+;; returns the ML string and a list of bindings.  the in-bindings have
+;; the same format as in convert-expr.
+(defun convert-pattern (pattern in-bindings)
+  (labels ((lookup-expr-pattern (name)
+	     (let ((binding (assoc name in-bindings)))
+	       (if binding
+		   (destructuring-bind (name ml-name type)
+		       binding
+		     (case type
+		       (expr
+			ml-name)
+		       (int
+			(format nil "IntPattern (TheInt (int_literal_expr (~A)))" ml-name))
+		       (int-const
+			ml-name)
+		       (t
+			(error "variable ~A is of wrong type (~A)" name type))))
+		 (error "unbound symbol ~A" name))))
+	   (convert-int-const (int-const)
 	     (cond ((integerp int-const)
-		    (format nil "TheInt (~AL)" int-const))
+		    (format nil "TheInt (int_literal_expr (~AL))" int-const))
 		   ((dont-care-symbol-p int-const)
 		    "AnyInt \"__dummy__\"")
 		   ((var-symbol-p int-const)
 		    (let ((name (symbol-for-var-symbol int-const)))
 		      (values (format nil "AnyInt \"~A\"" (dcs name))
 			      (list (list name 'int-const)))))
+		   ((symbolp int-const)
+		    (format nil "TheInt (int_literal_expr (~A))" (lookup-int in-bindings int-const)))
 		   (t
 		    (error "illegal int const pattern ~A" int-const))))
 	   (convert-width (width)
@@ -242,6 +289,8 @@
 		    (let ((width (symbol-for-var-symbol width)))
 		      (values (format nil "([1; 2; 4; 8], \"~A\")" (dcs width))
 			      (list (list width 'int)))))
+		   ((symbolp width)
+		    (format nil "([to_int ~A], \"__dummy__\")" (lookup-int in-bindings width)))
 		   (t
 		    (let-match (((?name ?widths) width))
 		      (progn
@@ -253,6 +302,9 @@
 		      (error "illegal width pattern ~A" width)))))
 	   (convert (pattern)
 	     (case-match pattern
+	       ((const int ?expr)
+		(values (format nil "IntPattern (TheInt (~A))" (convert-expr expr in-bindings))
+			'()))
 	       ((any-int ?name)
 		(if (var-symbol-p name)
 		    (let ((name (symbol-for-var-symbol name)))
@@ -308,7 +360,16 @@
 		  (if ml-name
 		      (multiple-value-bind (width-string width-bindings)
 			  (if need-width
-			      (convert-width (car args))
+			      (let ((width (car args)))
+				(if kind-ml-name
+				    (convert-width width)
+				    (values (cond ((integerp width)
+						   (format nil "~A" width))
+						  ((symbolp width)
+						   (format nil "(to_int ~A)" (lookup-int in-bindings (car args))))
+						  (t
+						   (error "illegal pattern width argument ~A" width)))
+					    nil)))
 			      (values nil nil))
 			(let ((args (if need-width (cdr args) args)))
 			  (if (and (or (not need-width) width-string)
@@ -318,15 +379,19 @@
 									  (convert arg)
 									(cons string bindings)))
 								  args)))
-				(values (format nil "~APattern (~A, ~A~{~A~^, ~})"
-						kind-ml-name ml-name (if need-width (format nil "~A, " width-string) "")
-						(mapcar #'car strings-and-bindings))
-					(apply #'append width-bindings (mapcar #'cdr strings-and-bindings))))
+				    (values (if kind-ml-name
+						(format nil "~APattern (~A, ~A~{~A~^, ~})"
+							kind-ml-name ml-name (if need-width (format nil "~A, " width-string) "")
+							(mapcar #'car strings-and-bindings))
+						(format nil "make_~A_pattern ~A~{(~A)~^ ~}"
+							ml-name (if need-width (format nil "~A " width-string) "")
+							(mapcar #'car strings-and-bindings)))
+					    (apply #'append width-bindings (mapcar #'cdr strings-and-bindings))))
 			      (error "illegal expression ~A" expr))))
 		    (error "unknown operator ~A" op))))
 	       (?pattern
 		(cond ((integerp pattern)
-		       (format nil "IntPattern (TheInt (~AL))" pattern))
+		       (format nil "IntPattern (TheInt (int_literal_expr (~AL)))" pattern))
 		      ((floatp pattern)
 		       (format nil "FloatPattern (TheFloat (~AL))" pattern))
 		      ((dont-care-symbol-p pattern)
@@ -339,6 +404,8 @@
 		       "ConditionConstPattern (TheBool true)")
 		      ((eql pattern 'nil)
 		       "ConditionConstPattern (TheBool false)")
+		      ((symbolp pattern)
+		       (lookup-expr-pattern pattern))
 		      (t
 		       (error "illegal pattern ~A" pattern)))))))
     (convert pattern)))
@@ -404,9 +471,12 @@
 	       (bindings (if needs-width
 			     (cons '(width "(of_int width)" int) arg-bindings)
 			   arg-bindings)))
-	  (format out "let make_~A~A~{ ~A~} = ~%  ~A~%~%"
+	  (format out "let make_~A~A~{ ~A~} = ~%  ~A~%"
 		  (dcs name) (if needs-width " width" "") (mapcar #'dcs args)
-		  (convert-expr body bindings)))))))
+		  (convert-expr body bindings))
+	  (format out "let make_~A_pattern~A~{ ~A~} = ~%  ~A~%~%"
+		  (dcs name) (if needs-width " width" "") (mapcar #'dcs args)
+		  (convert-pattern body bindings)))))))
 
 (defun make-simplifies ()
   (with-open-file (out "simplifiers.ml" :direction :output :if-exists :supersede)
@@ -417,7 +487,7 @@
       (destructuring-bind (pattern expr)
 	  simplify
 	(multiple-value-bind (pattern-string bindings)
-	    (convert-pattern pattern)
+	    (convert-pattern pattern '())
 	  (format out "    { pattern = ~A ;~%      apply = fun e bindings ->~%        ~A } ;~%"
 		  pattern-string
 		  (if (null bindings)
@@ -442,7 +512,7 @@
       (destructuring-bind (name pattern cost-expr format)
 	  matcher
 	(multiple-value-bind (pattern-string bindings)
-	    (convert-pattern pattern)
+	    (convert-pattern pattern '())
 	  (let* ((binding-names (mapcar #'first bindings))
 		 (binding-ml-names (mapcar #'dcs binding-names))
 		 (binding-types (mapcar #'second bindings)))
@@ -455,7 +525,7 @@
 				       "and ~A_printer =~%"
 				       "  (\"~A\", (fun alloc bindings ->~%"
 				       "              let~{ ~A = ~A~^ and~}~%"
-				       "              in ~A))~%~%")
+				       "              in \"/* ~A */ \" ^ ~A))~%~%")
 		    (dcs name) (dcs name)
 		    pattern-string
 		    (mappend #'(lambda (type name)
@@ -474,6 +544,6 @@
 					 (reg (format nil "get_register_binding bindings alloc \"~A\"" name))
 					 (t (error "binding of type ~A is not allowed in matcher pattern" type)))))
 			     binding-types binding-ml-names)
-		    (convert-format (car format) (cdr format) bindings))))))
+		    (dcs name) (convert-format (car format) (cdr format) bindings))))))
     (format out "let ~A = [ ~{~A_matcher~^ ; ~} ]~%" matchers-name (mapcar #'dcs (mapcar #'first (reverse *matchers*))))
     (format out "let ~A = [ ~{~A_printer~^ ; ~} ]~%" printers-name (mapcar #'dcs (mapcar #'first (reverse *matchers*))))))

@@ -49,15 +49,30 @@
   1
   ("~A = ~~~A;" rs rb))
 
+(defmatcher sll
+  (set ?rs (shiftl (register ?ra) (register ?rb)))
+  1
+  ("~A = ~A << ~A;" rs ra rb))
+
 (defmatcher sll-imm
   (set ?rs (shiftl (register ?ra) (any-int ?a)))
   1
   ("~A = ~A << ~A;" rs ra a))
 
+(defmatcher zapnot-imm-srl
+  (set ?rs (lshiftr (?width (1 2 4)) (register ?ra) (register ?rb)))
+  2
+  ("~A = (~A & width_mask(~A)) >> ~A;" rs ra width rb))
+
 (defmatcher zapnot-imm-srl-imm
   (set ?rs (lshiftr (?width (1 2 4)) (register ?ra) (any-int ?a)))
   2
   ("~A = (~A & width_mask(~A)) >> ~A;" rs ra width a))
+
+(defmatcher srl
+  (set ?rs (lshiftr 8 (register ?ra) (register ?rb)))
+  1
+  ("~A = ~A >> ~A;" rs ra rb))
 
 (defmatcher srl-imm
   (set ?rs (lshiftr 8 (register ?ra) (any-int ?a)))
@@ -91,3 +106,13 @@
 	     (int-zero-p 8 (lshiftr 8 a 5)))
     1)
   ("~A = (~A >> ~A) & 0xffff;" rs ra a))
+
+(defmatcher subq
+  (set ?rs (-i (register ?ra) (register ?rb)))
+  1
+  ("~A = ~A - ~A;" rs ra rb))
+
+(defmatcher zapnot-imm-sll-srl-bis
+  (set ?rs (rotl 4 (register ?ra) (register ?rb)))
+  4
+  ("do { word_64 tmp = (~A & 0xffffffff) << ~A; ~A = tmp | (tmp >> 32); }" ra rb rs))

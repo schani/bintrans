@@ -368,7 +368,7 @@ let unmemoized_prune_expr prune_one_arg fields expr needed =
 					 (prune arg1 (bitand_expr needed (bitneg_expr (bitand_expr karg2 barg2))))
 					 (prune arg2 (bitand_expr needed (bitneg_expr (bitand_expr karg1 barg1))))
 					 (fun parg1 parg2 ->
-					    (return (Binary (BitOr, parg1, parg2))))))))
+					    (return (Binary (op, parg1, parg2))))))))
       | BitXor | ConditionXor->
 	  let karg1 = known arg1
 	  and karg2 = known arg2
@@ -384,7 +384,7 @@ let unmemoized_prune_expr prune_one_arg fields expr needed =
 					 (prune arg1 needed)
 					 (prune arg2 needed)
 					 (fun parg1 parg2 ->
-					    (return (Binary (BitXor, parg1, parg2))))))))
+					    (return (Binary (op, parg1, parg2))))))))
       | ShiftL ->
 	  let karg2 = known arg2
 	  and barg2 = bits arg2
@@ -394,12 +394,12 @@ let unmemoized_prune_expr prune_one_arg fields expr needed =
 			    (fun _ -> (prune arg1 needed))
 			    (fun _ -> (let2
 					 (prune arg1 (BinaryWidth (LShiftR, 8, needed, bitand_expr barg2 mask)))
-					 (prune arg2 mask)
+					 (prune arg2 full_mask)
 					 (fun parg1 parg2 ->
 					    (return (Binary (ShiftL, parg1, parg2))))))))
 	       (fun _ -> (let2
 			    (prune arg1 (low_mask_expr needed))
-			    (prune arg2 mask)
+			    (prune arg2 full_mask)
 			    (fun parg1 parg2 ->
 			       (return (Binary (ShiftL, parg1, parg2))))))
       | BitMask | BothLowOneBits ->
@@ -427,12 +427,12 @@ let unmemoized_prune_expr prune_one_arg fields expr needed =
 			    (fun _ -> (prune arg1 (bitand_expr needed mask)))
 			    (fun _ -> (let2
 					 (prune arg1 (bitand_expr (shiftl_expr needed (bitand_expr barg2 shift_mask)) mask))
-					 (prune arg2 shift_mask)
+					 (prune arg2 full_mask)
 					 (fun parg1 parg2 ->
 					    (return (BinaryWidth (LShiftR, width, parg1, parg2))))))))
 	       (fun _ -> (let2
 			    (prune arg1 (bitand_expr (high_mask_expr needed) mask))
-			    (prune arg2 shift_mask)
+			    (prune arg2 full_mask)
 			    (fun parg1 parg2 ->
 			       (return (BinaryWidth (LShiftR, width, parg1, parg2))))))
       | AShiftR ->

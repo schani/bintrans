@@ -636,7 +636,7 @@ type width_pattern = (int list) * input_name
 
 type int_pattern =
     AnyInt of input_name
-  | TheInt of int64
+  | TheInt of expr
 
 type float_pattern =
     AnyFloat of input_name
@@ -660,6 +660,7 @@ type pattern =
   | TernaryWidthPattern of ternary_width_op * width_pattern * pattern * pattern * pattern
   | ExtractPattern of pattern * int_pattern * int_pattern
   | InsertPattern of pattern * pattern * int_pattern * int_pattern
+  | IfPattern of pattern * pattern * pattern
 
 type stmt_pattern =
     StorePattern of byte_order * width_pattern * pattern * pattern
@@ -673,7 +674,7 @@ let print_width_pattern (widths, input_name) =
 let print_int_pattern pattern =
   match pattern with
       AnyInt input_name -> print_input_name input_name
-    | TheInt int64 -> print_string (to_string int64)
+    | TheInt expr -> print_expr expr
 
 let print_float_pattern pattern =
   match pattern with
@@ -715,6 +716,9 @@ let rec print_pattern pattern =
   | InsertPattern (arg1, arg2, start, length) ->
       print_string "Insert(" ; print_pattern arg1 ; print_string ", " ; print_pattern arg2 ;
       print_string ", " ; print_int_pattern start ; print_string ", " ; print_int_pattern length ; print_string ")"
+  | IfPattern (cond, cons, alt) ->
+      print_string "If(" ; print_pattern cond ; print_string ", " ; print_pattern cons ;
+      print_string ", " ; print_pattern alt ; print_string ")"
 
 let print_stmt_pattern pattern =
   match pattern with

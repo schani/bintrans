@@ -69,7 +69,7 @@ let explore_all_fields stmt fields target_insns =
 	[] ->
 	  let (stmt_match, best_sub_matches, conditions) = recursively_match_stmt fields stmt target_insns
 	  in [{ match_data = stmt_match.stmt_match_data ;
-		match_conditions = conditions ;
+		match_conditions = simplify_conditions conditions ;
 		best_sub_matches = best_sub_matches }]
       | { match_data = match_data ;
 	  match_conditions = conditions ;
@@ -86,7 +86,7 @@ let explore_all_fields stmt fields target_insns =
 	[] ->
 	  let (new_stmt, new_conds) = cm_yield (simplify_and_prune_stmt_until_fixpoint fields stmt)
 	  in [{ stmt = new_stmt ;
-		form_conditions = fast_simplify_conditions new_conds ;
+		form_conditions = simplify_conditions new_conds ;
 		matches = add_stmt_form_match fields new_stmt [] }]
       | { stmt = stmt ;
 	  form_conditions = conds ;
