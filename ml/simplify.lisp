@@ -2,10 +2,10 @@
 
 ;; arithmetic
 
-(defsimplify (+i ?x 0)
-    x)
+(defsimplify (int-neg (int-neg ?x))
+  x)
 
-(defsimplify (-i ?x 0)
+(defsimplify (+i ?x 0)
     x)
 
 (defsimplify (*i ?x 1)

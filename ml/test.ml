@@ -145,7 +145,7 @@ let print_c_func reg_type result_passed printers name stmt fields =
 		   let allocation = make_allocation form_match.best_sub_matches form_match.match_datas
 		   in let interm_reg_strings = (map0_int (fun i -> "interm_reg_" ^ (string_of_int i))
 						  1 (length allocation))
-		   in print_string "{\n" ;
+		   in print_string "{ /* " ; print_stmt form.stmt ; print_string " */\n" ;
 		     if allocation <> [] then
 		       (print_string (reg_type ^ " " ^ (join_strings ", " interm_reg_strings) ^ ";\n") ;
 			print_string ("int " ^ (join_strings ", " (map (fun r -> r ^ "_set = 0") interm_reg_strings)) ^ ";\n\n"))

@@ -56,7 +56,6 @@
     (=f "FloatEqual" binary)
     (<f "FloatLess" binary)
     (+i "IntAdd" binary)
-    (-i "IntSub" binary)
     (*i "IntMul" binary)
     (bit-and "BitAnd" binary)
     (bit-or "BitOr" binary)
@@ -219,8 +218,8 @@
 	       ((extract ?arg ?start ?length)
 		(format nil "Extract (~A, ~A, ~A)"
 			(convert arg)
-			(convert-int-const start)
-			(convert-int-const length)))
+			(convert start)
+			(convert length)))
 	       ((insert ?arg1 ?arg2 ?start ?length)
 		(format nil "Insert (~A, ~A, ~A, ~A)"
 			(convert arg1)

@@ -190,6 +190,12 @@
   ("~A = (~A >> ~A) & 0xff;" rs ra i)
   ("emit(COMPOSE_EXTBL_IMM(~A, ~A >> 3, ~A));" ra i rs))
 
+(defmatcher extbl-imm-4-3
+  (set ?rs (lshiftr 4 (register ?ra) 24))
+  1
+  ("~A = (~A >> 24) & 0xff;" rs ra)
+  ("emit(COMPOSE_EXTBL_IMM(~A, 3, ~A));" ra rs))
+
 (defmatcher extwl-imm-8
   (set ?rs (bit-and (lshiftr 8 (register ?ra) (any-int ?i)) #xffff))
   (when (and (int-zero-p 8 (bit-and i 7))
@@ -205,6 +211,12 @@
     1)
   ("~A = (~A >> ~A) & 0xffff;" rs ra i)
   ("emit(COMPOSE_EXTWL_IMM(~A, ~A >> 3, ~A));" ra i rs))
+
+(defmatcher extwl-imm-4-2
+  (set ?rs (lshiftr 4 (register ?ra) 16))
+  1
+  ("~A = (~A >> 16) & 0xffff;" rs ra)
+  ("emit(COMPOSE_EXTWL_IMM(~A, 2, ~A));" ra rs))
 
 (defldmatcher ldbu
   (load-byte ea)
@@ -248,6 +260,19 @@
   ("~A = sex_16(~A);" rs rb)
   ("emit(COMPOSE_SEXTW(~A, ~A));" rb rs))
 
+(defmatcher subl
+  (set ?rs (sex 4 (-i (register ?ra) (register ?rb))))
+  1
+  ("~A = sex_32(~A - ~A);" ra ra rb)
+  ("emit(COMPOSE_SUBL(~A, ~A, ~A));" ra rb rs))
+
+(defmatcher subl-imm
+    (set ?rs (sex 4 (+i (register ?ra) (any-int ?i))))
+  (when (int-zero-p 8 (lshiftr 8 (int-neg i) 8))
+    1)
+  ("~A = sex_32(~A + ~A);" rs ra i)
+  ("emit(COMPOSE_SUBL_IMM(~A, -~A, ~A));" ra i rs))
+
 (defopmatcher subq (-i a b) "~A - ~A")
 
 (defopmatcher xor (bit-xor a b) "~A ^ ~A")
@@ -285,3 +310,51 @@
    rs rb rs				;sll
    rs					;srl
    rs rs))				;bis
+
+;;; extract
+
+(defmatcher extract-and-imm
+  (set ?rs (extract (register ?ra) 0 ?l))
+  (when (<iu 8 l 8)
+    1)
+  ("~A = bit_extract(~A, 0, ~A);" rs ra l)
+  ("emit(COMPOSE_AND_IMM(~A, (1 << ~A) - 1, ~A));" ra l rs))
+
+(defmatcher extract-zapnot-imm
+  (set ?rs (extract (register ?ra) 0 ?l))
+  (when (int-zero-p 8 (bit-and l 7))
+    1)
+  ("~A = bit_extract(~A, 0, ~A);" rs ra l)
+  ("emit(COMPOSE_ZAPNOT_IMM(~A, (1 << (~A >> 3)) - 1, ~A));" ra l rs))
+
+(defmatcher extract-srl
+  (set ?rs (extract (register ?ra) ?s ?l))
+  (when (=i 8 (+i s l) 64)
+    1)
+  ("~A = bit_extract(~A, ~A, ~A);" rs ra s l)
+  ("emit(COMPOSE_SRL_IMM(~A, 64 - ~A, ~A));" ra s rs))
+
+(defmatcher extract-extbl-imm
+  (set ?rs (extract (register ?ra) ?s 8))
+  (when (int-zero-p 8 (bit-and s 7))
+    1)
+  ("~A = bit_extract(~A, ~A, 8);" rs ra s)
+  ("emit(COMPOSE_EXTBL_IMM(~A, ~A >> 3, ~A));" ra s rs))
+
+(defmatcher extract-extwl-imm
+  (set ?rs (extract (register ?ra) ?s 16))
+  (when (int-zero-p 8 (bit-and s 7))
+    1)
+  ("~A = bit_extract(~A, ~A, 16);" rs ra s)
+  ("emit(COMPOSE_EXTWL_IMM(~A, ~A >> 3, ~A));" ra s rs))
+
+(defmatcher extract-sll-srl
+  (set ?rs (extract (register ?ra) ?s ?l))
+  2
+  ("~A = bit_extract(~A, ~A, ~A);" rs ra s l)
+  ("{ reg_t tmp = alloc_tmp_integer_reg();
+      emit(COMPOSE_SLL_IMM(~A, 64 - ~A - ~A, tmp));
+      emit(COMPOSE_SRL_IMM(tmp, 64 - ~A, ~A));
+      free_tmp_integer_reg(tmp); }"
+   ra s l				;sll
+   l rs))				;srl

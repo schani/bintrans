@@ -1,16 +1,32 @@
-implement alpha insns:
-   subl for subtraction and addition(!)
-   lda for 64 bit subtraction
+* sex optimizer must not only try either all registers with zero or all with
+  one but all combinations!
 
- ++++++++++++++++
- rlwinm r0,r0,5,31,31
- - - - - - - - - 
--sll $9,36,$9
--srl $9,63,$9
-+zapnot $9,15,$1
-+srl $1,27,$1
-+and $1,1,$9
- ++++++++++++++++
+* add a matcher to alpha target which matches Sex(w,Extract(x,s,l)) with l ==
+  w * 8 to generate sll->sra
+
+* when accessing ppc memory on the alpha, we need to sex or zex the address.
+  we can do this by making the pruner prune addresses to alpha width (i.e. 8
+  bytes) and making the alpha wrapper sex or zex the address.  note: the hand
+  coded generator does not do this to improve efficiency, in the hope that it
+  will not cause problems.
+
+* add conditions to simplifiers, so that for example the sex(ashiftr(x))
+  simplification can be made more generic.
+
+* ask on comp.lang.functional about user op monad problem.
+
+* include fields in source machine description.  bits known to be zero should
+  be communicated to known and bits.
+
+* sometimes we use width ops in bits and known.  the upper parts of the
+  results of these are undefined, but known and bits need them defined!  apply
+  a mask.
+
+
+DONE:
+
+   subl for subtraction and addition(!)
+
  ++++++++++++++++
  rlwinm r0,r0,8,24,31
  - - - - - - - - 
@@ -19,24 +35,21 @@ implement alpha insns:
 +srl $9,24,$9
  ++++++++++++++++
 
+remove IntSub and implement it with IntAdd/IntNeg.
 
+* add an optimization that turns several different patterns into Extract and
+  Insert:
 
-sex optimizer must not only try either all registers with zero or all
-with one but all combinations!
+     ++++++++++++++++
+     rlwinm r0,r0,5,31,31
+     - - - - - - - - 
+    -sll $9,36,$9
+    -srl $9,63,$9
+    +zapnot $9,15,$1
+    +srl $1,27,$1
+    +and $1,1,$9
+     ++++++++++++++++
 
-when accessing ppc memory on the alpha, we need to sex or zex the address.  we
-can do this by making the pruner prune addresses to alpha width (i.e. 8 bytes)
-and making the alpha wrapper sex or zex the address.  note: the hand coded
-generator does not do this to improve efficiency, in the hope that it will not
-cause problems.
+OBSOLETE:
 
-add conditions to simplifiers, so that for example the sex(ashiftr(x))
-simplification can be made more generic.
-
-ask on comp.lang.functional about user op monad problem.
-
-include fields in source machine description.  bits known to be zero should be
-communicated to known and bits.
-
-sometimes we use width ops in bits and known.  the upper parts of the results
-of these are undefined, but known and bits need them defined!  apply a mask.
+   lda for 64 bit subtraction (we don't have IntSub any more)

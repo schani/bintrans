@@ -121,7 +121,7 @@ let unary_width_op_name unary_width_op =
 
 type binary_op =
     FloatEqual | FloatLess
-  | IntAdd | IntSub | IntMul | BitAnd | BitOr | BitXor
+  | IntAdd | IntMul | BitAnd | BitOr | BitXor
   | ShiftL
   | ConditionAnd | ConditionOr | ConditionXor
   | FloatAdd | FloatSub | FloatMul | FloatDiv
@@ -130,7 +130,7 @@ type binary_op =
 let binary_op_value_type op =
   match op with
     FloatEqual -> Condition | FloatLess -> Condition
-  | IntAdd -> Int | IntSub -> Int | IntMul -> Int
+  | IntAdd -> Int | IntMul -> Int
   | BitAnd -> Int | BitOr -> Int | BitXor -> Int
   | ShiftL -> Int
   | ConditionAnd -> Condition | ConditionOr -> Condition | ConditionXor -> Condition
@@ -140,7 +140,7 @@ let binary_op_value_type op =
 let binary_op_name binary_op =
   match binary_op with
     FloatEqual -> "FloatEqual" | FloatLess -> "FloatLess"
-  | IntAdd -> "IntAdd" | IntSub -> "IntSub" | IntMul -> "IntMul"
+  | IntAdd -> "IntAdd" | IntMul -> "IntMul"
   | BitAnd -> "BitAnd" | BitOr -> "BitOr" | BitXor -> "BitXor"
   | ShiftL -> "ShiftL"
   | ConditionAnd -> "ConditionAnd" | ConditionOr -> "ConditionOr" | ConditionXor -> "ConditionXor"
@@ -202,7 +202,7 @@ and expr =
   | Binary of binary_op * expr * expr
   | BinaryWidth of binary_width_op * width * expr * expr
   | TernaryWidth of ternary_width_op * width * expr * expr * expr
-  | Extract of expr * int_const * int_const
+  | Extract of expr * expr * expr	(* the last two exprs must be constant *)
   | Insert of expr * expr * int_const * int_const
   | If of expr * expr * expr
   | UserOp of string * (expr list)
@@ -239,7 +239,15 @@ let user_ops = [
   { op_name = "IsMaskMask" ;
     num_args = 2 ;
     result_type = Condition ;
-    apply_op = (function [m ; w] -> ConditionConst (is_mask_mask m (to_int w)) | _ -> raise User_op_called_incorrectly) }
+    apply_op = (function [m ; w] -> ConditionConst (is_mask_mask m (to_int w)) | _ -> raise User_op_called_incorrectly) } ;
+  { op_name = "IsLowMask" ;
+    num_args = 1 ;
+    result_type = Condition ;
+    apply_op = (function [m] -> ConditionConst (is_low_mask m) | _ -> raise User_op_called_incorrectly) } ;
+  { op_name = "LowMaskLength" ;
+    num_args = 1 ;
+    result_type = Int ;
+    apply_op = (function [m] -> IntConst (IntLiteral (low_mask_length m)) | _ -> raise User_op_called_incorrectly) }
 ]
 
 let lookup_user_op name =
@@ -285,7 +293,7 @@ let expr_sub_exprs expr =
   | Binary (binary_op, sub1, sub2) -> [ sub1 ; sub2 ]
   | BinaryWidth (binary_width_op, width, sub1, sub2) -> [ sub1 ; sub2 ]
   | TernaryWidth (ternary_width_op, width, sub1, sub2, sub3) -> [ sub1 ; sub2 ; sub3 ]
-  | Extract (sub, start, length) -> [ sub ]
+  | Extract (sub, start, length) -> [ sub ; start ; length ]
   | Insert (sub1, sub2, start, length) -> [ sub1 ; sub2 ]
   | If (sub1, sub2, sub3) -> [ sub1 ; sub2 ; sub3 ]
   | UserOp (_, subs) -> subs
@@ -406,7 +414,7 @@ let add_expr a b =
   Binary (IntAdd, a, b)
 
 let sub_expr a b =
-  Binary (IntSub, a, b)
+  Binary (IntAdd, a, Unary (IntNeg, b))
 
 let mul_expr a b =
   Binary (IntMul, a, b)
@@ -439,7 +447,7 @@ let instantiate_expr expr fields_alist =
       | TernaryWidth (op, width, arg1, arg2, arg3) ->
 	  TernaryWidth (op, width, instantiate arg1, instantiate arg2, instantiate arg3)
       | Extract (arg, start, length) ->
-	  Extract (instantiate arg, instantiate_int_const start, instantiate_int_const length)
+	  Extract (instantiate arg, instantiate start, instantiate length)
       | Insert (arg1, arg2, start, length) ->
 	  Insert (instantiate arg1, instantiate arg2, instantiate_int_const start, instantiate_int_const length)
       | If (arg1, arg2, arg3) ->
@@ -479,8 +487,8 @@ let apply_to_expr_subs_with_monad return bind modify expr =
 	  bind3 (modify arg1) (modify arg2) (modify arg3)
 	    (fun marg1 marg2 marg3 -> return (TernaryWidth (op, width, marg1, marg2, marg3)))
       | Extract (arg, start, length) ->
-	  bind (modify arg)
-	    (fun marg -> return (Extract (marg, start, length)))
+	  bind3 (modify arg) (modify start) (modify length)
+	    (fun marg mstart mlength -> return (Extract (marg, mstart, mlength)))
       | Insert (arg1, arg2, start, length) ->
 	  bind2 (modify arg1) (modify arg2)
 	    (fun marg1 marg2 -> return (Insert (marg1, marg2, start, length)))
@@ -573,7 +581,6 @@ let cfold_expr fields expr =
   and apply_int_binary op arg1 arg2 =
     match op with
 	IntAdd -> IntConst (IntLiteral (add arg1 arg2))
-      | IntSub -> IntConst (IntLiteral (sub arg1 arg2))
       | IntMul -> IntConst (IntLiteral (mul arg1 arg2))
       | BitAnd -> IntConst (IntLiteral (logand arg1 arg2))
       | BitOr -> IntConst (IntLiteral (logor arg1 arg2))
@@ -675,7 +682,7 @@ let cfold_expr fields expr =
 	| _ -> fexpr)
     | Extract (arg, start, length) ->
 	(match (arg, start, length) with
-	  (IntConst (IntLiteral int), IntLiteral start_int, IntLiteral length_int) ->
+	  (IntConst (IntLiteral int), IntConst (IntLiteral start_int), IntConst (IntLiteral length_int)) ->
 	    IntConst (IntLiteral (extract_bits int start_int length_int))
 	| _ -> fexpr)
     | Insert (arg1, arg2, start, length) ->
@@ -792,8 +799,8 @@ let rec print_expr expr =
 	print_string (ternary_width_op_name op) ; print_width width ; print_string "(" ; print_expr arg1 ;
 	print_string ", " ; print_expr arg2 ; print_string ", " ; print_expr arg3 ; print_string ")"
     | Extract (expr, start, length) ->
-	print_string "Extract(" ; print_expr expr ; print_string ", " ; print_int_const start ;
-	print_string ", " ; print_int_const length ; print_string ")"
+	print_string "Extract(" ; print_expr expr ; print_string ", " ; print_expr start ;
+	print_string ", " ; print_expr length ; print_string ")"
     | Insert (arg1, arg2, start, length) ->
 	print_string "Insert(" ; print_expr arg1 ; print_string ", " ; print_expr arg2 ;
 	print_string ", " ; print_int_const start ; print_string ", " ; print_int_const length ; print_string ")"

@@ -30,6 +30,7 @@ open Uncertainty
 
 exception No_match
 exception Wrong_binding
+exception Wrong_pattern
 
 (*** bindings ***)
 
@@ -163,16 +164,22 @@ let match_expr_generic register_const_func fields expr pattern =
 	    when_cfold (BinaryWidth (IntEqual, 8, IntConst int_const, const2))
 	      (fun _ -> return [])
 	| _ -> raise Expression_not_const
-  and match_rec expr pattern =
-      let cexpr = cfold_expr fields expr
-      in match (cexpr, pattern) with
-	  (_, IntPattern (AnyInt input_name)) when is_register_const fields expr ->
+     and match_expr_int_const expr cexpr pattern =
+      match (cexpr, pattern) with
+	  (_, AnyInt input_name) when is_register_const fields expr ->
 	    return [ ConstBinding (input_name, expr) ]
-	| (IntConst (IntLiteral const1), IntPattern (TheInt const2)) ->
+	| (IntConst (IntLiteral const1), TheInt const2) ->
 	    when_cfold (BinaryWidth (IntEqual, 8, expr, const2))
 	      (fun _ -> (return []))
-	| (_, IntPattern (TheInt const2)) when is_register_const fields expr ->
+	| (_, TheInt const2) when is_register_const fields expr ->
 	    register_const_func fields expr const2
+	| _ ->
+	    fail
+     and match_rec expr pattern =
+      let cexpr = cfold_expr fields expr
+      in match (cexpr, pattern) with
+	  (_, IntPattern int_const_pattern) ->
+	    match_expr_int_const expr cexpr int_const_pattern
 	| (FloatConst const, FloatPattern (AnyFloat input_name)) ->
 	    return [ ConstBinding (input_name, expr) ]
 	| (FloatConst const1, FloatPattern (TheFloat const2)) ->
@@ -224,7 +231,9 @@ let match_expr_generic register_const_func fields expr pattern =
 	      | (Extract (arg, start, length),
 		 ExtractPattern (arg_pattern, start_pattern, length_pattern)) ->
 		  combine_bindings (match_rec arg arg_pattern)
-		    (combine_bindings (match_int_const start start_pattern) (match_int_const length length_pattern))
+		    (combine_bindings
+		       (match_expr_int_const start (cfold_expr fields start) start_pattern)
+		       (match_expr_int_const length (cfold_expr fields length) length_pattern))
 	      | (Insert (arg1, arg2, start, length),
 		 InsertPattern (arg_pattern1, arg_pattern2, start_pattern, length_pattern)) ->
 		  combine_bindings

@@ -6,6 +6,9 @@
 ;	      (lshiftr 8 -1 (-i 63 end-bit)))
 ;    (shiftl (lshiftr 8 -1 (-i 63 (-i end-bit begin-bit))) begin-bit)))
 
+(defirmacro -i (a b)
+  (+i a (int-neg b)))
+
 (defirmacro simple-mask (begin-bit end-bit)
   (bit-mask begin-bit (+i (-i end-bit begin-bit) 1)))
 

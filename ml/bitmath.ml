@@ -83,6 +83,19 @@ let rec low_mask int =
   else
     logor (shift_left (low_mask (shift_right_logical int 1)) 1) one
 
+let low_mask_length int =
+  let rec count int acc =
+    if int = zero then
+      of_int acc
+    else if (logand int one) = one then
+      count (shift_right_logical int 1) (acc + 1)
+    else
+      zero
+  in count int 0
+
+let is_low_mask int =
+  (low_mask_length int) <> zero
+
 let rec high_mask int =
   if int = zero then
     zero

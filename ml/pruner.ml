@@ -68,7 +68,7 @@ let unmemoized_expr_known known_one_arg bits_one_arg mapping fields expr =
   and known_binary op arg1 arg2 =
     match op with
 	FloatEqual | FloatLess -> empty_mask
-      | IntAdd | IntSub | IntMul -> both_low_one_bits_expr (known arg1) (known arg2)
+      | IntAdd | IntMul -> both_low_one_bits_expr (known arg1) (known arg2)
       | BitAnd | ConditionAnd ->
 	  let karg1 = known arg1
 	  and karg2 = known arg2
@@ -134,12 +134,14 @@ let unmemoized_expr_known known_one_arg bits_one_arg mapping fields expr =
     | TernaryWidth (op, width, arg1, arg2, arg3) -> known_ternary_width op width arg1 arg2 arg3
     | Extract (arg, start, length) ->
 	(let karg = known arg
-	in match (start, length) with
-	  (IntLiteral _, IntLiteral _) ->
-	    (bitor_expr (Extract (karg, start, length))
-	       (bitmask_expr (IntConst length) (sub_expr (int_literal_expr 64L) (IntConst length))))
-	| (_, IntLiteral _) -> bitmask_expr (IntConst length) (sub_expr (int_literal_expr 64L) (IntConst length))
-	| _ -> empty_mask)
+	 in match (is_const (cfold_expr fields start), is_const (cfold_expr fields length)) with
+	     (true, true) ->
+	       bitor_expr (Extract (karg, start, length))
+	       (bitmask_expr length (sub_expr (int_literal_expr 64L) length))
+	   | (false, true) ->
+	       bitmask_expr length (sub_expr (int_literal_expr 64L) length)
+	   | (_, false) ->
+	       empty_mask)
     | Insert (arg1, arg2, start, length) ->
 	(let karg1 = known arg1
 	and karg2 = known arg2
@@ -190,9 +192,9 @@ let unmemoized_expr_bits bits_one_arg known_one_arg mapping fields expr =
     | IntParityEven -> bool_to_int_expr (Binary (ConditionAnd, is_bit_set_expr (known expr) (int_literal_expr zero),
 						 UnaryWidth (IntParityEven, width, bits arg)))
     | IntSign ->
-	let sign_bit = IntLiteral (of_int (width * 8 - 1))
-	in If (is_bit_set_expr (known arg) (IntConst sign_bit),
-	       Extract (bits arg, sign_bit, IntLiteral 1L),
+	let sign_bit = int_literal_expr (of_int (width * 8 - 1))
+	in If (is_bit_set_expr (known arg) sign_bit,
+	       Extract (bits arg, sign_bit, int_literal_expr 1L),
 	       empty_mask)
     | Sex -> UnaryWidth (Sex, width, bits arg)
     | Zex -> UnaryWidth (Zex, width, bits arg)
@@ -201,8 +203,6 @@ let unmemoized_expr_bits bits_one_arg known_one_arg mapping fields expr =
       FloatEqual | FloatLess -> empty_mask
     | IntAdd ->
 	bitand_expr (add_expr (bits arg1) (bits arg2)) (both_low_one_bits_expr (known arg1) (known arg2))
-    | IntSub ->
-	bitand_expr (sub_expr (bits arg1) (bits arg2)) (both_low_one_bits_expr (known arg1) (known arg2))
     | IntMul ->
 	bitand_expr (mul_expr (bits arg1) (bits arg2)) (both_low_one_bits_expr (known arg1) (known arg2))
     | BitAnd | ConditionAnd -> bitand_expr (bits arg1) (bits arg2)
@@ -261,11 +261,9 @@ let unmemoized_expr_bits bits_one_arg known_one_arg mapping fields expr =
     | BinaryWidth (op, width, arg1, arg2) -> bits_binary_width op width arg1 arg2
     | TernaryWidth (op, width, arg1, arg2, arg3) -> bits_ternary_width op width arg1 arg2 arg3
     | Extract (arg, start, length) ->
-	(match (start, length) with
-	  (IntLiteral _, IntLiteral _) ->
-	    Extract (bits arg, start, length)
-	| (_, IntLiteral length) -> empty_mask
-	| _ -> empty_mask)
+	(match (is_const (cfold_expr fields start), is_const (cfold_expr fields length)) with
+	     (true, true) -> Extract (bits arg, start, length)
+	   | _ -> empty_mask)
     | Insert (arg1, arg2, start, length) ->
 	(match (start, length) with
 	  (IntLiteral _, IntLiteral _) ->
@@ -383,7 +381,7 @@ let unmemoized_prune_expr prune_one_arg mapping fields expr needed =
 	  let2 (prune arg1 full_mask) (prune arg2 full_mask)
 	    (fun parg1 parg2 ->
 	      return (Binary (op, parg1, parg2)))
-      | IntAdd | IntSub | IntMul ->
+      | IntAdd | IntMul ->
 	  let2 (prune arg1 (low_mask_expr needed)) (prune arg2 (low_mask_expr needed))
 	    (fun parg1 parg2 ->
 	      return (Binary (op, parg1, parg2)))
@@ -555,20 +553,19 @@ let unmemoized_prune_expr prune_one_arg mapping fields expr needed =
 	    | BinaryWidth (op, width, arg1, arg2) -> prune_binary_width op width arg1 arg2
 	    | TernaryWidth (op, width, arg1, arg2, arg3) -> prune_ternary_width op width arg1 arg2 arg3
 	    | Extract (arg, start, length) ->
-		(match (start, length) with
-		     (IntLiteral _, IntLiteral _) ->
-		       let upper_mask = shiftl_expr (int_literal_expr minus_one) (add_expr (IntConst start) (IntConst length))
+		(match (is_const (cfold_expr fields start), is_const (cfold_expr fields length)) with
+		     (true, true) ->
+		       let upper_mask = shiftl_expr (int_literal_expr minus_one) (add_expr start length)
 		       in let1
-			    (prune arg (bitand_expr (shiftl_expr needed (IntConst start))
-					  (bitmask_expr (IntConst start) (IntConst length))))
+			    (prune arg (bitand_expr (shiftl_expr needed start) (bitmask_expr start length)))
 			    (fun parg ->
 			       if_prune (Binary (ConditionAnd, UnaryWidth (IntZero, 8, bitxor_expr upper_mask (known arg)),
 						 UnaryWidth (IntZero, 8, bitand_expr upper_mask (bits arg))))
-			         (fun _ -> (return (BinaryWidth (LShiftR, 8, parg, IntConst start))))
-			         (fun _ -> (return (Extract (parg, start, length)))))
-		   | (IntLiteral _, _) ->
+			       (fun _ -> (return (BinaryWidth (LShiftR, 8, parg, start))))
+			       (fun _ -> (return (Extract (parg, start, length)))))
+		   | (true, false) ->
 		       let1
-			 (prune arg (shiftl_expr needed (IntConst start)))
+			 (prune arg (shiftl_expr needed start))
 			 (fun parg ->
 			    return (Extract (parg, start, length)))
 		   | _ ->
@@ -579,11 +576,11 @@ let unmemoized_prune_expr prune_one_arg mapping fields expr needed =
 	    | Insert (arg1, arg2, start, length) ->
 		(match (start, length) with
 		     (IntLiteral _, IntLiteral _) ->
-		       if_prune (UnaryWidth (IntZero, 8, (Extract (needed, start, length))))
+		       if_prune (UnaryWidth (IntZero, 8, (Extract (needed, IntConst start, IntConst length))))
 		         (fun _ -> (prune arg1 (Insert (needed, int_literal_expr zero, start, length))))
 		         (fun _ ->
 			    (let1
-			       (prune arg2 (Extract (needed, start, length)))
+			       (prune arg2 (Extract (needed, IntConst start, IntConst length)))
 			       (fun parg2 ->
 				  (if_prune (UnaryWidth (IntZero, 8,
 							 (bitand_expr needed
@@ -667,21 +664,3 @@ let rec prune_stmt mapping fields stmt =
 	(prune_stmt mapping fields sub2)
 	(fun psub1 psub2 ->
 	   cm_return (Seq (psub1, psub2)))
-
-(*** sex optimization ***)
-
-let rec optimize_sex_expr mapping fields expr =
-  cm_bind (apply_to_expr_subs_with_monad cm_return cm_bind (optimize_sex_expr mapping fields) expr)
-    (fun expr ->
-       match expr with
-	   UnaryWidth (Sex, width, Binary (BitAnd, arg1, arg2)) when is_const (cfold_expr fields arg2) ->
-	     cm_if fields (make_zero_or_full_p 8 (BinaryWidth (AShiftR, 8, expr_known mapping fields arg1,
-							       int_literal_expr (of_int (width * 8 - 1)))))
-	       (fun _ ->
-		  cm_return (bitand_expr arg1 (bitor_expr arg2 (int_literal_expr (lognot (width_mask width))))))
-	       (fun _ ->
-		  cm_return expr)
-	 | _ -> cm_return expr)
-
-let optimize_sex_stmt mapping fields stmt =
-  apply_to_stmt_subs_with_cond_monad (optimize_sex_expr mapping fields) stmt

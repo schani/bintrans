@@ -79,7 +79,7 @@ let lookup_intermediate_reg allocation expr =
 let int_const_to_c int_const =
   match int_const with
       IntLiteral const -> (to_string const) ^ "LL"
-    | IntField input_name -> "PPC_FIELD_" ^ (uppercase input_name)
+    | IntField input_name -> "((word_64)PPC_FIELD_" ^ (uppercase input_name) ^ ")"
 
 let register_to_c allocation reg =
   match reg with
@@ -115,9 +115,9 @@ let expr_to_c allocation expr =
 	| BinaryWidth (op, width, arg1, arg2) -> binary_width_to_c op width (expr_to_c arg1) (expr_to_c arg2)
 	| TernaryWidth (op, width, arg1, arg2, arg3) -> ternary_width_to_c op width (expr_to_c arg1) (expr_to_c arg2) (expr_to_c arg3)
 	| Extract (expr, start, length) ->
-	    "extract(" ^ (expr_to_c expr) ^ "," ^ (int_const_to_c start) ^ "," ^ (int_const_to_c length) ^ ")"
+	    "bit_extract(" ^ (expr_to_c expr) ^ "," ^ (expr_to_c start) ^ "," ^ (expr_to_c length) ^ ")"
 	| Insert (arg1, arg2, start, length) ->
-	    "insert(" ^ (expr_to_c arg1) ^ "," ^ (expr_to_c arg2) ^ "," ^ (int_const_to_c start) ^ "," ^ (int_const_to_c length) ^ ")"
+	    "bit_insert(" ^ (expr_to_c arg1) ^ "," ^ (expr_to_c arg2) ^ "," ^ (int_const_to_c start) ^ "," ^ (int_const_to_c length) ^ ")"
 	| If (condition, cons, alt) ->
 	    "(" ^ (expr_to_c condition) ^ "?" ^ (expr_to_c cons) ^ ":" ^ (expr_to_c alt) ^ ")"
 	| UserOp (name, args) ->

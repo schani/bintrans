@@ -31,6 +31,7 @@ open Matcher
 open Pruner
 open Simplify
 open Normal_form
+open Simple_opts
 open Mapping
 open Machine
 
@@ -38,7 +39,7 @@ exception Hell
 
 (*** simplifying expressions and statements ***)
 
-let rec simplify_and_prune_until_fixpoint depth print prune simplify fields x =
+let rec simplify_and_prune_until_fixpoint depth print prune simplify optimize fields x =
   if depth >= 100 then
     (print_int depth ; print_string " : " ; print x ; print_newline ())
   else
@@ -47,16 +48,18 @@ let rec simplify_and_prune_until_fixpoint depth print prune simplify fields x =
     (fun px ->
       cm_bind (simplify fields px)
 	(fun spx ->
-	  if spx = x then
-	    cm_return x
-	  else
-	    simplify_and_prune_until_fixpoint (depth + 1) print prune simplify fields spx))
+	   cm_bind (optimize fields spx)
+	     (fun ospx ->
+		if ospx = x then
+		  cm_return x
+		else
+		  simplify_and_prune_until_fixpoint (depth + 1) print prune simplify optimize fields ospx)))
 
 let simplify_and_prune_expr_until_fixpoint mapping =
-  simplify_and_prune_until_fixpoint 0 print_expr (fun f x -> prune_expr mapping f x minus_one) simplify_expr
+  simplify_and_prune_until_fixpoint 0 print_expr (fun f x -> prune_expr mapping f x minus_one) simplify_expr simple_optimize_expr
 
 let simplify_and_prune_stmt_until_fixpoint mapping =
-  simplify_and_prune_until_fixpoint 0 (fun _ -> ()) (prune_stmt mapping) simplify_stmt
+  simplify_and_prune_until_fixpoint 0 (fun _ -> ()) (prune_stmt mapping) simplify_stmt simple_optimize_stmt
 
 (*** simplifying the conditions ***)
 
@@ -95,7 +98,7 @@ let fast_simplify_conditions conds =
 let rec sex_simplify_expr mapping fields expr =
   let optimize_and_simplify one expr =
     let mapping = make_sex_mapping mapping one
-    in cm_bind (optimize_sex_expr mapping fields expr)
+    in cm_bind (sex_optimize_expr mapping fields expr)
 	 (fun expr ->
 	    simplify_and_prune_expr_until_fixpoint mapping fields expr)
   in if is_const (cfold_expr fields expr) then
@@ -116,7 +119,7 @@ let rec sex_simplify_expr mapping fields expr =
 let sex_simplify_stmt mapping fields stmt =
   let optimize_and_simplify one stmt =
     let mapping = make_sex_mapping mapping one
-    in cm_bind (optimize_sex_stmt mapping fields stmt)
+    in cm_bind (sex_optimize_stmt mapping fields stmt)
 	 (fun stmt ->
 	    simplify_and_prune_stmt_until_fixpoint mapping fields stmt)
   in cm_bind (apply_to_stmt_subs_with_cond_monad (sex_simplify_expr mapping fields) stmt)
