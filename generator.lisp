@@ -4635,6 +4635,55 @@ save_live = live;~%"
     (dolist (class classes)
       (meta-generate (register-class-name class) #'(lambda (expr) (generate-used-class-bits class expr)) 32))))
 
+(defun generate-gen-kill (regs classes exprs)
+  (let ((names (append (mapcar #'register-name regs) (mapcar #'register-class-name classes))))
+    (labels ((std-handler (expr)
+	       (format t "~{consumed_~A = 0;~%~}~:*~{killed_~A = 0;~%~}" names)
+	       (generate-consumed regs classes (list expr))
+	       (generate-killed regs classes (list expr))
+	       (format t "~{gen_~A |= consumed_~:*~A & ~~kill_~:*~A;~%kill_~:*~A |= killed_~:*~A;~%~}"
+		       names))
+	     (generate-gen-for-expr (expr)
+	       (format t "~{gen_~A |= ~~kill_~:*~A & ~A;~%~}"
+		       (append
+			(mappend #'(lambda (reg) (list (register-name reg)
+						       (generate-used-reg-bits reg expr)))
+				 regs)
+			(mappend #'(lambda (class) (list (register-class-name class)
+							 (generate-used-class-bits class expr)))
+				 classes)))))
+      (dolist (expr exprs)
+	(expr-case expr
+	  (let (let-bindings body)
+	    (let ((args (append
+			 (mappend #'(lambda (reg)
+				      (list (register-name reg)
+					    (mapcar #'(lambda (b)
+							(generate-used-reg-bits reg (cdr b)))
+						    let-bindings)))
+				  regs)
+			 (mappend #'(lambda (class)
+				      (list (register-class-name class)
+					    (mapcar #'(lambda (b)
+							(generate-used-class-bits class (cdr b)))
+						    let-bindings)))
+				  classes))))
+	      (format t "~{gen_~A |= ~~kill_~:*~A & (0 ~{| ~A~});~%~}" args)
+	      (generate-gen-kill regs classes body)))
+	  (if (cond cons alt)
+	      (if (expr-constp cond)
+		  (std-handler expr)
+		  (progn
+		    (generate-gen-for-expr cond)
+		    (format t "~{gen_~A_save = gen_~:*~A;~%kill_~:*~A_save = kill_~:*~A;~%~}" names)
+		    (generate-gen-killed regs classes (list cons))
+		    (format t "~{SWAP(gen_~A_save, gen_~:*~A);~%SWAP(kill_~:*~A_save, kill_~:*~A);~%~}"
+			    names)
+		    (generate-gen-killed regs classes (list alt))
+		    (format t "~{gen_~A |= gen_~:*~A_save;~%kill_~:*~A |= kill_~:*~A_save;~%~}" names))))
+	  (t
+	   (std-handler expr)))))))
+
 (defun can-fall-through-p (exprs)
   (cond ((eq (expr-kind (car exprs)) 'jump)
 	 nil)
@@ -4851,6 +4900,26 @@ unrecognized:
       (format t "~{*_consumed_~A = consumed_~:*~A;~%~}return;
 unrecognized:
 ~:*~{*_consumed_~A = 0xffffffff;~%~}}~%"	;FIXME: this constant should be dependent on the register width
+	      (append (mapcar #'register-name registers) class-names)))))
+
+(defun generate-gen-kill-file (machine registers classes)
+  (with-open-file (out (format nil "~A_gen_kill.c" (dcs (machine-name machine))) :direction :output :if-exists :supersede)
+    (let ((*standard-output* out)
+	  (decision-tree (build-decision-tree (machine-insns machine)))
+	  (class-names (mapcar #'register-class-name classes)))
+      (format t "void gen_kill_~A_insn (~A insn, ~A pc~{, ~A *_gen_~A, ~:*~:*~A *_kill_~A~}~{, word_32 *_gen_~A, word_32 *_kill_~:*~A~}) {
+~:*~:*~{~A gen_~A = *_gen_~:*~A, kill_~:*~A = *_kill_~:*~A, gen_~:*~A_save, kill_~:*~A_save, consumed_~:*~A, killed_~:*~A;~%~}
+~{word_32 gen_~A = *_gen_~:*~A, kill_~:*~A = *_kill_~:*~A, gen_~:*~A_save, kill_~:*~A_save, consumed_~:*~A, killed_~:*~A;~%~}"
+	      (dcs (machine-name machine))
+	      (c-type (machine-insn-bits machine) 'integer) (c-type (machine-word-bits machine) 'integer)
+	      (mappend #'(lambda (r) (list (c-type (register-width r) 'integer) (register-name r))) registers)
+	      class-names)
+      (generate-insn-recognizer decision-tree #'(lambda (insn)
+						  (generate-gen-kill registers classes (insn-effect insn)))
+				:unrecognized-action "goto unrecognized;")
+      (format t "~{*_gen_~A = gen_~:*~A;~%*_kill_~:*~A = kill_~:*~A;~%~}return;
+unrecognized:
+~:*~{*_gen_~A = *_kill_~:*~A = 0xffffffff;~%~}}~%"	;FIXME: this constant should be dependent on the register width
 	      (append (mapcar #'register-name registers) class-names)))))
 
 (defun generate-jump-analyzer (machine)

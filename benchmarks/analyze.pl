@@ -1,39 +1,57 @@
 #!/usr/bin/perl
 
 foreach $fn (glob("out.*")) {
-    $fn =~ /out\.(\w+)\.(\w+)\.(\w+)(\.(\w+))?/ or die;
-    $bench = $1;
-    $config = $2;
-    if ($3 eq "static") {
-	next if $5 eq "collect";
-	$nth = $3;
-	$run = $5;
-    } elsif ($4) {
-	$nth = $3;
-	$run = $5;
+    if ($fn =~ /\.count/) {
+	$fn =~ /out\.(\w+)\.(\w+)\.(\w+)(\.(\w+))?\.count/ or die;
+	$count = 1;
+	$m1 = $1; $m2 = $2; $m3 = $3; $m4 = $4; $m5 = $5;
+    } else {
+	$fn =~ /out\.(\w+)\.(\w+)\.(\w+)(\.(\w+))?/ or die;
+	$count = 0;
+	$m1 = $1; $m2 = $2; $m3 = $3; $m4 = $4; $m5 = $5;
+    }
+    $bench = $m1;
+    $config = $m2;
+    if ($m3 eq "static") {
+	next if $m5 eq "collect";
+	$nth = $m3;
+	$run = $m5;
+    } elsif ($m4) {
+	$nth = $m5;
+	$run = $m3;
     } else {
 	$nth = "na";
-	$run = $3;
+	$run = $m3;
     }
-    print "$bench $config $nth $run\n";
+    #print "$bench $config $nth $run $count ($fn)\n";
     open(FILE, $fn) or die;
     while (<FILE>) {
-	if (/(\d+\.\d+)user (\d+\.\d+)system/) {
-	    $data{$bench}{$config}{$nth}{$run} = $1 + $2;
-	    last;
+	if (!$count) {
+	    if (/(\d+\.\d+)user (\d+\.\d+)system/) {
+		$time{$bench}{$config}{$nth}{$run} = $1 + $2;
+		last;
+	    }
+	} elsif ($count) {
+	    if (/executed load insns:\s*(\d+)/) {
+		$mem{$bench}{$config}{$nth}{loads} = $1;
+	    } elsif (/executed store insns:\s*(\d+)/) {
+		$mem{$bench}{$config}{$nth}{stores} = $1;
+	    }
 	}
     }
     close(FILE);
 }
 
-foreach $bench (keys %data) {
-    foreach $config (keys %{$data{$bench}}) {
-	foreach $nth (keys %{$data{$bench}{$config}}) {
+foreach $bench (keys %time) {
+    foreach $config (keys %{$time{$bench}}) {
+	foreach $nth (keys %{$time{$bench}{$config}}) {
 	    $time = 0;
-	    foreach $run (keys %{$data{$bench}{$config}{$nth}}) {
-		$time += $data{$bench}{$config}{$nth}{$run};
+	    foreach $run (keys %{$time{$bench}{$config}{$nth}}) {
+		$time += $time{$bench}{$config}{$nth}{$run};
 	    }
-	    print "$bench $config $nth $time\n";
+	    $loads = $mem{$bench}{$config}{$nth}{loads};
+	    $stores = $mem{$bench}{$config}{$nth}{stores};
+	    print "$bench $config $nth $time $loads $stores\n";
 	}
     }
 }
