@@ -323,7 +323,7 @@
 		 (format t "i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);~%"))
 	       (format t "if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {~%")
 	       (if (null insn16)
-		   (format t "assert(0);~%")
+		   (format t "bt_assert(0);~%")
 		   (progn
 		     (decode-immediate-if-necessary insn16)
 		     (format t "next_pc = pc = intp->pc;~%")
@@ -351,13 +351,13 @@
 		 (generate-case insns2 nil)))
 	     (format t "default :~%~Aswitch (reg) {~%"
 		     (if (and (>= opcode #xd8) (<= opcode #xdf))
-			 (format nil "assert(opcode2 <= 0xbf);~%")
+			 (format nil "bt_assert(opcode2 <= 0xbf);~%")
 			 ""))
 	     (dolist (extended-opcode (remove-duplicates (mapcar* #'intel-insn-extended-opcode insns)))
 	       (let ((insnsx (remove-if-not #'(lambda (x) (eql extended-opcode (intel-insn-extended-opcode x))) insns)))
 		 (format t "case ~A :~%" extended-opcode)
 		 (generate-16-32-pair (first insnsx) (second insnsx) t)))
-	     (format t "default :~%assert(0);~%}~%}~%break;~%")
+	     (format t "default :~%bt_assert(0);~%}~%}~%break;~%")
 	     (assert (null (remove-if-not #'(lambda (x) (and (null (second (intel-insn-opcode x)))
 							     (null (intel-insn-extended-opcode x))))
 					  insns)))))
@@ -372,7 +372,7 @@
 						 (null (intel-insn-extended-opcode x)))) insns))
 	      (format t "case ~A :~%" opcode)
 	      (generate-switch-for-opcode2 insns opcode)))))
-    (format t "default:~%assert(0);~%}~%")))
+    (format t "default:~%bt_assert(0);~%}~%")))
 
 (defun generate-intel-interpreter ()
   (with-open-file (out "i386_interpreter.c" :direction :output :if-exists :supersede)
@@ -587,8 +587,7 @@ can_jump_indirectly = ~:[0~;1~];~%"
 			(error "cannot handle ~A exprs~%" (expr-kind single-effect)))))))))
     (with-open-file (out (format nil "i386_~A_~A_compiler.c" (dcs insn-name) (dcs mode)) :direction :output :if-exists :supersede)
       (let ((*standard-output* out))
-	(format t "#include <assert.h>
-#include \"bintrans.h\"
+	(format t "#include \"bintrans.h\"
 #include \"compiler.h\"
 #include \"alpha_composer.h\"
 static word_8 mod, reg, rm, sib_scale, sib_index, sib_base, disp8, opcode_reg, imm8;
@@ -618,6 +617,7 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
     (format t "~A generator functions~%" (length *generated-effects*))
     (values)))
 
+#|
 (defun generate-all-intel-files ()
   (generate-defines-file *i386*)
   (generate-intel-interpreter)
@@ -629,6 +629,7 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
     (destructuring-bind (insn-name mode)
 	insn-matcher
       (generate-intel-insn-compiler-file insn-name mode))))
+|#
 
 (define-std-binary-insn adc
     ((al-imm8 (#x14))

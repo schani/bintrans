@@ -3,7 +3,7 @@
  *
  * bintrans
  *
- * Copyright (C) 2001 Mark Probst
+ * Copyright (C) 2001,2002 Mark Probst
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -26,6 +26,14 @@
 #include "config_defs.h"
 #include "target_arch.h"
 #include "emu_arch.h"
+
+#define bt_assert(expr)                                             \
+  ((void) ((expr) ? 0 :                                             \
+           bt_assert_fail (#expr,                                   \
+                            __FILE__, __LINE__,                     \
+                            __PRETTY_FUNCTION__), 0))
+
+void bt_assert_fail (char* expr, char* file, int line, char* fn) __attribute__ ((__noreturn__));
 
 word_32 leading_zeros (word_32);
 word_1 parity_even (word_32 op);
@@ -265,7 +273,7 @@ void strcpy_to_user (interpreter_t *intp, word_32 p, char *s);
 #ifdef CROSSDEBUGGER
 #define sc_open_fd(i,f) \
   ({ int __fd1 = open_fd(debugger_intp, (f)), __fd2 = open_fd(compiler_intp, (f)); \
-     assert(__fd1 == __fd2); \
+     bt_assert(__fd1 == __fd2); \
      __fd1; })
 #define sc_close_fd(i,f) \
   (close_fd(debugger_intp, (f)), close_fd(compiler_intp, (f)))
@@ -284,12 +292,12 @@ void strcpy_to_user (interpreter_t *intp, word_32 p, char *s);
 #define sc_mmap_anonymous(i,l,fl,fi,a) \
   ({ word_32 __a1 = mmap_anonymous(debugger_intp, (l), (fl), (fi), (a)); \
      word_32 __a2 = mmap_anonymous(compiler_intp, (l), (fl), (fi), (a)); \
-     assert(__a1 == __a2); \
+     bt_assert(__a1 == __a2); \
      __a1; })
 #define sc_mmap_file(i,l,fl,fi,a,fd,o) \
   ({ word_32 __a1 = mmap_file(debugger_intp, (l), (fl), (fi), (a), (fd), (o)); \
      word_32 __a2 = mmap_file(compiler_intp, (l), (fl), (fi), (a), (fd), (o)); \
-     assert(__a1 == __a2); \
+     bt_assert(__a1 == __a2); \
      __a1; })
 #define sc_mprotect_pages(i,a,l,fl,ad,z) \
   (mprotect_pages(debugger_intp, (a), (l), (fl), (ad), (z)), mprotect_pages(compiler_intp, (a), (l), (fl), (ad), (z)))
@@ -380,5 +388,5 @@ void init_loops (void);
 #elif defined(ARCH_PPC)
 #define disassemble_target_insn               disassemble_ppc_insn
 #else
-#define disassemble_target_insn               assert(0),
+#define disassemble_target_insn               bt_assert(0),
 #endif

@@ -29,7 +29,6 @@
 #include <asm/sysinfo.h>
 #include <sys/syscall.h>
 #include <errno.h>
-#include <assert.h>
 #include <signal.h>
 #include <asm/sigcontext.h>
 typedef unsigned long old_sigset_t;
@@ -181,7 +180,7 @@ sigbus_handler (int signo, siginfo_t *si, struct ucontext *uc)
 	    break;
 
 	default :
-	    assert(0);
+	    bt_assert(0);
     }
 
     uc->uc_mcontext.sc_pc += 4;
@@ -197,7 +196,7 @@ init_unaligned (void)
     buf[0] = SSIN_UACPROC;
     buf[1] = UAC_SIGBUS;
     error = osf_setsysinfo(SSI_NVPAIRS, buf, 1, 0, 0);
-    assert(error == 0);
+    bt_assert(error == 0);
 
 #ifdef COMPLANG
     act.sa_handler = sigbus_handler;
@@ -208,7 +207,7 @@ init_unaligned (void)
     sigemptyset(&act.sa_mask);
     act.sa_flags = SA_NOMASK | SA_SIGINFO;
     error = sigaction(SIGBUS, &act, 0);
-    assert(error == 0);
+    bt_assert(error == 0);
 }
 
 #else

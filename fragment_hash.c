@@ -20,7 +20,6 @@
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
-#include <assert.h>
 #include <stdio.h>
 
 #include "bintrans.h"
@@ -39,7 +38,7 @@ fragment_hash_get (word_32 addr, fragment_hash_supplement_t **supplement)
 {
     int index = HASH_ADDR(addr);
 
-    assert(addr != (word_32)-1);
+    bt_assert(addr != (word_32)-1);
 
     if (fragment_hash_table[index].foreign_addr == (word_32)-1)
 	return 0;
@@ -80,7 +79,7 @@ fragment_hash_put (word_32 foreign_addr, fragment_hash_entry_t *entry, fragment_
 
     if (table_entry != 0)
     {
-	assert(table_entry->foreign_addr == foreign_addr);
+	bt_assert(table_entry->foreign_addr == foreign_addr);
 
 	/* printf("entry already in table\n"); */
 
@@ -109,7 +108,7 @@ fragment_hash_put (word_32 foreign_addr, fragment_hash_entry_t *entry, fragment_
 	{
 	    int new = first_free_overflow;
 
-	    assert(new != -1);
+	    bt_assert(new != -1);
 	    first_free_overflow = fragment_hash_table[new].next;
 
 	    fragment_hash_table[new] = *entry;

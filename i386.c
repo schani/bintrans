@@ -24,7 +24,6 @@
 
 #include <stdio.h>
 #include <math.h>
-#include <assert.h>
 
 #include "bintrans.h"
 #include "i386.h"
@@ -58,7 +57,7 @@ i386_decode_opcode (interpreter_t *intp, int *prefix_flags, word_8 *opcode1, wor
 
 	if (i < I386_NUM_PREFIXES)
 	{
-	    assert(!(*prefix_flags & prefixes[i].flag));
+	    bt_assert(!(*prefix_flags & prefixes[i].flag));
 	    *prefix_flags |= prefixes[i].flag;
 	}
 	else
@@ -118,12 +117,12 @@ i386_decode_sib (interpreter_t *intp, word_8 modrm, word_8 *_scale, word_8 *_ind
 
 	if (base == 5 && mod == 0)
 	{
-	    assert(!need_disp32);
+	    bt_assert(!need_disp32);
 	    need_disp32 = 1;
 	}
 
 	if (base == 5)
-	    assert(need_disp32 || need_disp8);
+	    bt_assert(need_disp32 || need_disp8);
     }
 
     if (need_disp8)
@@ -166,7 +165,7 @@ i386_disassemble_r8 (FILE *out, word_8 reg)
 {
     static char *names[] = { "al", "cl", "dl", "bl", "ah", "ch", "dh", "bh" };
 
-    assert(reg < 8);
+    bt_assert(reg < 8);
     fputs(names[reg], out);
 }
 
@@ -175,7 +174,7 @@ i386_disassemble_r16 (FILE *out, word_8 reg)
 {
     static char *names[] = { "ax", "cx", "dx", "bx", "sp", "bp", "si", "di" };
 
-    assert(reg < 8);
+    bt_assert(reg < 8);
     fputs(names[reg], out);
 }
 
@@ -184,7 +183,7 @@ i386_disassemble_r32 (FILE *out, word_8 reg)
 {
     static char *names[] = { "eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi" };
 
-    assert(reg < 8);
+    bt_assert(reg < 8);
     fputs(names[reg], out);
 }
 
@@ -247,7 +246,7 @@ i386_disassemble_ea (FILE *out, word_8 mod, word_8 rm, word_8 scale, word_8 inde
 void
 i386_disassemble_rm8 (FILE *out, word_8 mod, word_8 rm, word_8 scale, word_8 index, word_8 base, word_8 disp8, word_32 disp32)
 {
-    assert(mod < 4);
+    bt_assert(mod < 4);
 
     if (mod == 0 || mod == 1 || mod == 2)
 	i386_disassemble_ea(out, mod, rm, scale, index, base, disp8, disp32);
@@ -258,7 +257,7 @@ i386_disassemble_rm8 (FILE *out, word_8 mod, word_8 rm, word_8 scale, word_8 ind
 void
 i386_disassemble_rm16 (FILE *out, word_8 mod, word_8 rm, word_8 scale, word_8 index, word_8 base, word_8 disp8, word_32 disp32)
 {
-    assert(mod < 4);
+    bt_assert(mod < 4);
 
     if (mod == 0 || mod == 1 || mod == 2)
 	i386_disassemble_ea(out, mod, rm, scale, index, base, disp8, disp32);
@@ -269,7 +268,7 @@ i386_disassemble_rm16 (FILE *out, word_8 mod, word_8 rm, word_8 scale, word_8 in
 void
 i386_disassemble_rm32 (FILE *out, word_8 mod, word_8 rm, word_8 scale, word_8 index, word_8 base, word_8 disp8, word_32 disp32)
 {
-    assert(mod < 4);
+    bt_assert(mod < 4);
 
     if (mod == 0 || mod == 1 || mod == 2)
 	i386_disassemble_ea(out, mod, rm, scale, index, base, disp8, disp32);

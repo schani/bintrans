@@ -195,7 +195,7 @@ gen_interpreter_handle (void)
 static reg_t
 ref_i386_gpr (reg_t num, int for_reading, int for_writing)
 {
-    assert(for_reading || for_writing);
+    bt_assert(for_reading || for_writing);
 
     if (for_reading)
     {
@@ -418,7 +418,7 @@ gen_ea (reg_t *ra, reg_t *rb, word_16 *imm)
 			*imm = 0;
 			if (*ra != 0)
 			{
-			    assert(*rb == NO_REG);
+			    bt_assert(*rb == NO_REG);
 			    *rb = *ra;
 			    *ra = 0;
 			}
@@ -446,7 +446,7 @@ gen_ea (reg_t *ra, reg_t *rb, word_16 *imm)
 		{
 		    reg_t tmp = alloc_tmp_integer_reg();
 
-		    assert(*rb != NO_REG && *imm == 0);
+		    bt_assert(*rb != NO_REG && *imm == 0);
 
 		    if ((disp32 >> 15) == 0 || (disp32 >> 15) == 0x1ffff)
 			emit(COMPOSE_ADDI(tmp, *rb, disp32 & 0xffff));
@@ -490,7 +490,7 @@ gen_ea (reg_t *ra, reg_t *rb, word_16 *imm)
 	    break;
 
 	default :
-	    assert(0);
+	    bt_assert(0);
     }
 }
 
@@ -511,7 +511,7 @@ gen_ea_for_indexing (reg_t *ra, reg_t *rb)
 static reg_t
 ref_i386_gpr_extended (reg_t num, int for_reading, int for_writing, int zexed, int width)
 {
-    assert(for_reading || for_writing);
+    bt_assert(for_reading || for_writing);
 
     if (zexed)
     {
@@ -711,10 +711,10 @@ ref_src_op (int zexed, word_32 *imm, int imm_width, int is_simm)
 	    return ref_i386_gpr_r(REG_EAX);
 
 	case MODE_PST :
-	    assert(0);
+	    bt_assert(0);
 
 	default :
-	    assert(0);
+	    bt_assert(0);
     }
 }
 
@@ -749,11 +749,11 @@ ref_dst_op (int for_reading, int for_writing, int zexed,
 {
     word_32 val;
 
-    assert(imm == 0);
+    bt_assert(imm == 0);
 
-    assert(for_reading || for_writing);
+    bt_assert(for_reading || for_writing);
     if (zexed)
-	assert(for_reading);
+	bt_assert(for_reading);
 
     if (dst_is_imm(&val))
     {
@@ -829,7 +829,7 @@ ref_dst_op (int for_reading, int for_writing, int zexed,
 	    }
 
 	case MODE_M64 :
-	    assert(0);
+	    bt_assert(0);
 
 	case MODE_RM8 :
 	case MODE_RM8_1 :
@@ -948,10 +948,10 @@ ref_dst_op (int for_reading, int for_writing, int zexed,
 		return extract_hreg(opcode_reg - 4, for_reading, for_writing);
 
 	case MODE_PST :
-	    assert(0);
+	    bt_assert(0);
 
 	default :
-	    assert(0);
+	    bt_assert(0);
     }
 }
 
@@ -1029,7 +1029,7 @@ commit_and_dispose_dst_op (reg_t dst_reg, int for_reading, int zexed, int own_re
 	    break;
 
 	case MODE_M64 :
-	    assert(0);
+	    bt_assert(0);
 
 	case MODE_RM8 :
 	case MODE_RM8_1 :
@@ -1158,10 +1158,10 @@ commit_and_dispose_dst_op (reg_t dst_reg, int for_reading, int zexed, int own_re
 	    break;
 
 	case MODE_PST :
-	    assert(0);
+	    bt_assert(0);
 
 	default :
-	    assert(0);
+	    bt_assert(0);
     }
 
     dispose_integer_reg(dst_reg);
@@ -1244,7 +1244,7 @@ gen_bit_insn (void (*igen) (reg_t, reg_t, word_16), void (*dgen) (reg_t, reg_t, 
 static void
 gen_add_with_imm (reg_t dst, word_16 imm)
 {
-    assert(!KILL_OF);
+    bt_assert(!KILL_OF);
     if (KILL_SZF)
 	emit(COMPOSE_ADDICD(dst, dst, imm));
     else if (KILL_CF)
@@ -1266,7 +1266,7 @@ handle_add_insn (void)
     {
 	reg_t tmp = alloc_tmp_integer_reg();
 
-	assert(src != NO_REG);
+	bt_assert(src != NO_REG);
 
 	emit(COMPOSE_SLWI(tmp, src, 32 - op_width));
 	dispose_integer_reg(src);
@@ -1277,7 +1277,7 @@ handle_add_insn (void)
 
     if (src == NO_REG)
     {
-	assert(!shift);
+	bt_assert(!shift);
 	gen_add_with_imm(dst, imm);
     }
     else
@@ -1404,7 +1404,7 @@ handle_call_insn (void)
 	    break;
 
 	default :
-	    assert(0);
+	    bt_assert(0);
     }
 }
 
@@ -1429,7 +1429,7 @@ handle_cbw_cwde_insn (void)
 	emit(COMPOSE_SRAWI(eax, eax, 16));
     }
     else
-	assert(0);
+	bt_assert(0);
 
     unref_integer_reg(eax);
 }
@@ -1554,7 +1554,7 @@ gen_div_insn (int is_signed)
     reg_t tmp = alloc_tmp_integer_reg();
     reg_t tmp2 = alloc_tmp_integer_reg();
 
-    assert(op_width == 32);
+    bt_assert(op_width == 32);
 
     if (is_signed)
 	emit(COMPOSE_DIVW(tmp, eax, dst));
@@ -1831,7 +1831,7 @@ gen_mul64 (void (*gen_high) (reg_t, reg_t, reg_t), int single_op)
     reg_t src;
     reg_t low, high;
 
-    assert(op_width == 32);
+    bt_assert(op_width == 32);
 
     if (single_op)
     {
@@ -1941,7 +1941,7 @@ handle_inc_insn (void)
 static void
 handle_int_insn (void)
 {
-    assert(mode == MODE_IMM8 && imm8 == 0x80);
+    bt_assert(mode == MODE_IMM8 && imm8 == 0x80);
 
     emit_system_call();
 
@@ -1955,7 +1955,7 @@ gen_cr_jump (void (*gen) (label_t))
     int is_imm = dst_is_imm(&rel);
     label_t label = alloc_label();
 
-    assert(is_imm);
+    bt_assert(is_imm);
 
     gen(label);
 
@@ -2108,7 +2108,7 @@ handle_jmp_insn (void)
 	word_32 rel;
 	int is_imm = dst_is_imm(&rel);
 
-	assert(is_imm);
+	bt_assert(is_imm);
 
 	emit_direct_jump(pc + rel);
     }
@@ -2220,7 +2220,7 @@ handle_lea_insn (void)
 	emit(COMPOSE_ADDI(dst, ra, imm));
     else
     {
-	assert(imm == 0);
+	bt_assert(imm == 0);
 	emit(COMPOSE_ADD(dst, ra, rb));
 	dispose_integer_reg(rb);
     }
@@ -2266,7 +2266,7 @@ handle_movsx_insn (void)
     else if (mode == MODE_R32_RM16)
 	width = 16;
     else
-	assert(0);
+	bt_assert(0);
 
     emit(COMPOSE_SLWI(dst, src, 32 - width));
     emit(COMPOSE_SRAWI(dst, dst, 32 - width));
@@ -2477,7 +2477,7 @@ handle_ret_insn (void)
     else
 	offset = 4;
 
-    assert((offset & ~0x7fff) == 0);
+    bt_assert((offset & ~0x7fff) == 0);
 
     emit(COMPOSE_ADDI(esp, esp, offset));
 
@@ -2847,7 +2847,7 @@ handle_sub_insn (void)
     {
 	reg_t tmp;
 
-	assert(src != NO_REG);
+	bt_assert(src != NO_REG);
 
 	tmp = alloc_tmp_integer_reg();
 	emit(COMPOSE_SLWI(tmp, src, 32 - op_width));
@@ -2882,7 +2882,7 @@ handle_sub_insn (void)
 
     if (src == NO_REG)
     {
-	assert(!KILL_SZF && !KILL_OF && op_width == 32);
+	bt_assert(!KILL_SZF && !KILL_OF && op_width == 32);
 
 	emit(COMPOSE_ADDI(dst, dst, imm));
     }
@@ -2902,7 +2902,7 @@ handle_sub_insn (void)
 
     if (real_dst != dst)
     {
-	assert(op_width != 32);
+	bt_assert(op_width != 32);
 
 	emit(COMPOSE_SRWI(real_dst, dst, 32 - op_width));
 	dispose_integer_reg(dst);
@@ -2975,7 +2975,7 @@ handle_xchg_insn (void)
 	emit(COMPOSE_INSRWI(src, tmp, 16, 16));
     else
     {
-	assert(op_width == 8);
+	bt_assert(op_width == 8);
 
 	if (reg < 4)
 	    emit(COMPOSE_INSRWI(src, tmp, 8, 24));

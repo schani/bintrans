@@ -1,0 +1,195 @@
+		bintrans - A Dynamic Binary Translator
+		======================================
+
+These are the first attempts at installation instructions and
+documentation for bintrans.  The information you find in here should
+be correct, but it is certainly not comprehensive.  If there is
+anything you would like to know which is not contained in here, please
+mail me.
+
+    Overview
+    --------
+
+bintrans currently has working i386->PPC and PPC->Alpha translators.
+There is also a i386->Alpha translator which is currently defunct,
+because I have not kept it up-to-date with other parts of bintrans.
+If you need it, please mail me, and I'll see what I can do to help
+you.
+
+bintrans can also run as an interpreter, in which case it can emulate
+the i386 and the PPC.  Running bintrans as an interpreter should work
+on almost all native architectures (like i386, SPARC, MIPS, ...).
+Mail me if you have any problems running the interpreter.
+
+WARNING: bintrans does not currently run real-world applications.  It
+runs the SPECINT95 benchmarks and some small X11 applications (it runs
+xedit and xdvi on i386->PPC and xbattle on PPC->Alpha).  The main
+thing holding bintrans back is the system call interface and signal
+handling.  I'll soon start implementing signals, but I'm currently
+mostly dependent on contributors regard the system call interface.  If
+you want to help out, please mail me.
+
+    Homepage
+    --------
+
+bintrans's homepage is
+
+  http://www.complang.tuwien.ac.at/schani/bintrans/
+
+    Prerequisites
+    -------------
+
+The i386->PPC translator requires the uClibc library.  You can get it
+from
+
+  http://www.uclibc.org/
+
+Also, if you want to play with the machine descriptions, get a Common
+Lisp implementation.  I have only tested this with CLISP, so if you
+use something else, you're on your own.  CLISP's homepage is
+
+  http://clisp.sourceforge.net/
+
+    Compiling
+    ---------
+
+First, modify the Makefile.  Search for the string "ATT" and follow
+the instructions you find there.  You shouldn't have to change
+anything other than the ATT-annotated parts.
+
+There are four different modes bintrans can run in.  They are:
+
+  COMPILER
+
+    This is the mode of operation which you'll most likely want to
+    use.  In this mode, bintrans will operate as a dynamic binary
+    translator.
+
+  INTERPRETER
+
+    This mode uses the interpreter to execute foreign instructions.
+    That means it's slow, but it should run on almost all native
+    architectures.
+
+  DEBUGGER
+
+    This runs the interpreter with a simple machine level debugger
+    interface.  Type "help" on the debugger prompt for a summary
+    of commands.
+
+  CROSSDEBUGGER
+
+    In this mode, the compiler and the interpreter run in
+    tandem.  After each executed fragment, the state of both is
+    compared and if they differ, execution stops.  This makes finding
+    bugs in the compiler very easy, provided that the interpreter
+    works correctly.
+
+The DEFINES variable can be used to specify several options.  These
+are the most important ones:
+
+  USE_HAND_TRANSLATOR
+
+    This must be enabled if you use COMPILER or CROSSDEBUGGER mode.
+
+  COLLECT_STATS
+
+    Collects all sorts of useful and lots of uttely meaningless
+    statistics and prints them out when the program is finished.  I
+    always keep it turned on.
+
+  DUMP_CODE
+
+    Prints out the native code generated during executions, together
+    with the corresponding original foreign code.
+
+  EMULATED_MEM
+
+    This can and should be used in interpreter and debugger mode for
+    better portability.  It makes bintrans emulate the foreign address
+    space instead of using the native address space directly.
+
+    Installing
+    ----------
+
+Installation of bintrans mainly involves creating a root file system
+for the emulated machine.  Simply create a directory and copy all the
+files you want there, or NFS mount the root partition of a system you
+want to emulate.  Then, create a file ".bintransrc" in your home
+directory, which should look like this:
+
+  (root ppc linux "/nethome/hansolo/schani/Work/unix/bintrans/ppc-root")
+  (root i386 linux "/nethome/hansolo/schani/Work/unix/bintrans/i386-root")
+
+Of course, you have to change the paths accordingly.
+
+You can download example i386 and PPC root file systems from the
+bintrans homepage.
+
+NOTE: In order for dynamic executables to work, you have to make sure
+all shared libraries (including the dynamic loader ld.so) are in the
+correct places in the emulated root file system.
+
+    Running Programs
+    ----------------
+
+Simply invoke bintrans with the name and arguments of the foreign
+executable.  Let's say you copied a hello-world program called "hello"
+to the directory /usr/bin in the emulated root file system.  Invoke it
+with
+
+  bintrans /usr/bin/hello
+
+It seems X11 applications don't work yet with X11 authentication, so
+you have to turn it off, by doing
+
+  xhost +
+
+    Contributing
+    ------------
+
+bintrans needs YOUR help!  Play around with it and mail me if
+something doesn't work.  Again, don't expect Mozilla to run, but
+simple X11 applications should run without too much difficulty,
+i.e. there will probably a few unsupported system calls and maybe one
+or the other opcode which isn't implemented yet.
+
+One area which needs lots of help is the system call interface.
+Fortunately, this part of bintrans isn't too hard to work on.  Please
+mail me if you want to have a go at it.
+
+If you are interested in getting bintrans to support other
+foreign-native combinations, I'm also very interested and willing to
+help.
+
+Also, the name "bintrans" is slightly boring and is a testament to my
+lack of phantasy.  If you can think of a better name, please let me
+know.
+
+    Machine Descriptions
+    --------------------
+
+bintrans uses machine descriptions to automatically generate
+interpreters, disassemblers, composer macros, and liveness analysers.
+Currently, there are machine descriptions for the i386, the PPC and
+the Alpha, residing in the files "i386.lisp", "ppc.lisp", and
+"alpha.lisp", respectively.
+
+Should you choose to play around with them, here's how to generate the
+various C files from them:
+
+  1. Start CLISP
+  2. (load "init.lisp")
+
+then:
+
+  3a. (generate-all-alpha-files)     ; to generate the Alpha files
+  3b. (generate-all-ppc-files)       ; to generate the PPC files
+  3c. (generate-all-intel-files)     ; to generate the i386 files
+
+Loading and generating might take quite some time, so don't worry if
+it takes a little longer.
+
+---
+Mark Probst
+schani@complang.tuwien.ac.at

@@ -21,7 +21,6 @@
  */
 
 #include <stdio.h>
-#include <assert.h>
 
 #include "bintrans.h"
 #include "compiler.h"
@@ -61,7 +60,7 @@ compute_liveness (interpreter_t *intp, word_32 addr, word_32 *addrs,
 	    break;
     }
 
-    assert(num_targets > 0 || can_jump_indirectly || !can_fall_through);
+    bt_assert(num_targets > 0 || can_jump_indirectly || !can_fall_through);
 
     if (can_fall_through)
 	*fallthrough_addr = intp->pc;
@@ -154,7 +153,7 @@ compute_liveness_for_block (interpreter_t *intp, word_32 first_addr, word_32 las
     if (addrs == 0)
     {
 	addr = last_addr - 4;
-	assert(last_addr > first_addr);
+	bt_assert(last_addr > first_addr);
     }
     else
 	i = length - 1;
@@ -210,7 +209,7 @@ discover_block (interpreter_t *intp, word_32 addr, word_32 *addrs, word_32 *_las
 
 	if (addrs != 0)
 	{
-	    assert(length < MAX_TRACE_INSNS);
+	    bt_assert(length < MAX_TRACE_INSNS);
 
 	    addrs[length++] = last_addr;
 	}
@@ -225,7 +224,7 @@ discover_block (interpreter_t *intp, word_32 addr, word_32 *addrs, word_32 *_las
 
     if (can_fall_through)
     {
-	assert(*num_targets <= 1);
+	bt_assert(*num_targets <= 1);
 
 	targets[(*num_targets)++] = last_addr;
     }
@@ -260,7 +259,7 @@ compute_depth_liveness (interpreter_t *intp, word_32 addr, word_32 *addrs, word_
 
     if (depth < 0)
     {
-	assert(addrs == 0);
+	bt_assert(addrs == 0);
 
 	*live_cr = *live_xer = *live_gpr = 0xffffffff;
 
@@ -388,14 +387,14 @@ compute_limited_liveness (interpreter_t *intp, word_32 pc, int max_depth, word_3
 
 	if (!can_fall_through)
 	{
-	    assert(num_targets == 1);
+	    bt_assert(num_targets == 1);
 	    pc = target;
 	}
 	else if (num_targets == 0)
 	    pc += 4;
 	else
 	{
-	    assert(num_targets == 1);
+	    bt_assert(num_targets == 1);
 	    break;
 	}
     }
@@ -414,7 +413,7 @@ compute_liveness_for_trace (interpreter_t *intp, word_32 *addrs, int length)
     word_32 target;
     int can_fall_through, can_jump_indirectly;
 
-    assert(length <= MAX_DYNAMO_TRACE);
+    bt_assert(length <= MAX_DYNAMO_TRACE);
 
     /* first check the end of the trace */
     jump_analyze_ppc_insn(mem_get_32(intp, addrs[length - 1]), addrs[length - 1], &num_targets, &target, &can_fall_through, &can_jump_indirectly);
@@ -431,7 +430,7 @@ compute_liveness_for_trace (interpreter_t *intp, word_32 *addrs, int length)
 	{
 	    word_32 alt_live_cr, alt_live_xer;
 
-	    assert(num_targets == 1);
+	    bt_assert(num_targets == 1);
 
 	    compute_limited_liveness(intp, target, MAX_ALT_DEPTH, &alt_live_cr, &alt_live_xer);
 
@@ -460,13 +459,13 @@ compute_liveness_for_trace (interpreter_t *intp, word_32 *addrs, int length)
 	    word_32 alt_pc;
 	    word_32 alt_live_cr, alt_live_xer;
 
-	    assert(num_targets == 1);
+	    bt_assert(num_targets == 1);
 
 	    if (addrs[i + 1] == pc + 4)
 		alt_pc = target;
 	    else
 	    {
-		assert(addrs[i + 1] == target);
+		bt_assert(addrs[i + 1] == target);
 
 		alt_pc = pc + 4;
 	    }
@@ -566,10 +565,10 @@ save_liveness_info (void)
 #ifdef DUMP_CFG
     FILE *cfg = fopen("cfg.txt", "w");
 
-    assert(cfg != 0);
+    bt_assert(cfg != 0);
 #endif
 
-    assert(out != 0);
+    bt_assert(out != 0);
 
     for (i = 0; i < FRAGMENT_HASH_ENTRIES; ++i)
     {
@@ -594,7 +593,7 @@ save_liveness_info (void)
 	    info.live_xer = fragment_hash_supplement[i].live_xer;
 	    info.live_gpr = fragment_hash_supplement[i].live_gpr;
 
-	    assert(fwrite(&info, sizeof(ppc_liveness_info_t), 1, out) == 1);
+	    bt_assert(fwrite(&info, sizeof(ppc_liveness_info_t), 1, out) == 1);
 	}
 
 #ifdef DUMP_CFG

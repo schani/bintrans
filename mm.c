@@ -22,7 +22,6 @@
 
 #include <unistd.h>
 #include <sys/mman.h>
-#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -46,7 +45,7 @@ extern int debug;
 #elif defined(CROSSDEBUGGER)
 #define touch_mem(i,a,l)      if (trace_mem) \
 			      { \
-				  assert(num_mem_trace_entries < MAX_MEM_TRACES); \
+				  bt_assert(num_mem_trace_entries < MAX_MEM_TRACES); \
 				  mem_trace[num_mem_trace_entries].addr = (a); \
 				  mem_trace[num_mem_trace_entries].len = (l); \
 				  ++num_mem_trace_entries; \
@@ -88,7 +87,7 @@ compare_mem_writes (interpreter_t *intp1, interpreter_t *intp2)
 	}
     }
 
-    assert(!diff);
+    bt_assert(!diff);
 
     return 1;
 }
@@ -165,14 +164,14 @@ mprotect_pages (interpreter_t *intp, word_32 addr, word_32 len, int flags, int a
     page_t *level1;
 
     if (zero)
-	assert(flags & PAGE_MMAPPED);
+	bt_assert(flags & PAGE_MMAPPED);
 
-    assert((addr & PPC_PAGE_MASK) == 0);
-    assert((len & PPC_PAGE_MASK) == 0);
+    bt_assert((addr & PPC_PAGE_MASK) == 0);
+    bt_assert((len & PPC_PAGE_MASK) == 0);
 
     num_pages = len >> PPC_PAGE_SHIFT;
 
-    assert(num_pages > 0);
+    bt_assert(num_pages > 0);
 
     l1 = LEVEL1_INDEX(addr);
     l2 = LEVEL2_INDEX(addr);
@@ -191,7 +190,7 @@ mprotect_pages (interpreter_t *intp, word_32 addr, word_32 len, int flags, int a
 	    {
 		i += LEVEL2_SIZE - (l2 & LEVEL2_MASK);
 		++l1;
-		assert((l1 & LEVEL1_MASK) != 0);
+		bt_assert((l1 & LEVEL1_MASK) != 0);
 		l2 = 0;
 
 		continue;
@@ -230,7 +229,7 @@ mprotect_pages (interpreter_t *intp, word_32 addr, word_32 len, int flags, int a
 	    }
 	    else if (new_flags != 0 && level1[l2].mem == 0)
 	    {
-		assert(new_flags & PAGE_MMAPPED);
+		bt_assert(new_flags & PAGE_MMAPPED);
 
 		level1[l2].mem = (byte*)malloc(PPC_PAGE_SIZE);
 	    }
@@ -244,7 +243,7 @@ mprotect_pages (interpreter_t *intp, word_32 addr, word_32 len, int flags, int a
 	if (l2 == 0)
 	{
 	    ++l1;
-	    assert((l1 & LEVEL1_MASK) != 0);
+	    bt_assert((l1 & LEVEL1_MASK) != 0);
 	    level1 = intp->pagetable[l1];
 	}
     }
@@ -280,7 +279,7 @@ natively_mmap_pages (interpreter_t *intp, word_32 addr, word_32 len)
 		break;
 
 	result = mmap((void*)REAL_ADDR(start), end - start, 0, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-	assert(result != 0);
+	bt_assert(result != 0);
 
 	for (; start < end; start += NATIVE_PAGE_SIZE)
 	{
@@ -289,7 +288,7 @@ natively_mmap_pages (interpreter_t *intp, word_32 addr, word_32 len)
 	    get_page(intp, start)->flags = PAGE_SET_NATIVE_FLAGS(old_flags, PAGE_MMAPPED);
 	}
 
-	assert(start == end);
+	bt_assert(start == end);
     }
 }
 
@@ -337,14 +336,14 @@ natively_mprotect_pages (interpreter_t *intp, word_32 addr, word_32 len)
 
 		result = mmap((void*)REAL_ADDR(start), end - start, flags_to_prot(PAGE_EMU_FLAGS(flags)),
 			      MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-		assert(result != 0);
+		bt_assert(result != 0);
 	    }
 	    else if (!(PAGE_EMU_FLAGS(flags) & PAGE_MMAPPED) && (PAGE_NATIVE_FLAGS(flags) & PAGE_MMAPPED))
 	    {
 		int result;
 
 		result = munmap((void*)REAL_ADDR(start), end - start);
-		assert(result == 0);
+		bt_assert(result == 0);
 	    }
 
 	    if (PAGE_EMU_FLAGS(flags) & PAGE_MMAPPED)
@@ -352,7 +351,7 @@ natively_mprotect_pages (interpreter_t *intp, word_32 addr, word_32 len)
 		int result;
 
 		result = mprotect((void*)REAL_ADDR(start), end - start, flags_to_prot(PAGE_EMU_FLAGS(flags)));
-		assert(result == 0);
+		bt_assert(result == 0);
 	    }
 
 	    for (; start < end; start += NATIVE_PAGE_SIZE)
@@ -362,7 +361,7 @@ natively_mprotect_pages (interpreter_t *intp, word_32 addr, word_32 len)
 		get_page(intp, start)->flags = PAGE_SET_NATIVE_FLAGS(old_flags, PAGE_EMU_FLAGS(flags));
 	    }
 
-	    assert(start == end);
+	    bt_assert(start == end);
 	}
     }
 }
@@ -389,7 +388,7 @@ natively_mprotect_pages_with_flags (interpreter_t *intp, word_32 addr, word_32 l
 	}
 
 	result = mprotect((void*)REAL_ADDR(first_page_addr), last_page_addr + NATIVE_PAGE_SIZE - first_page_addr, flags_to_prot(flags));
-	assert(result == 0);
+	bt_assert(result == 0);
     }
 }
 
@@ -453,7 +452,7 @@ emulated_mem_set_8 (interpreter_t *intp, word_32 addr, word_32 value)
 void
 emulated_mem_set_16 (interpreter_t *intp, word_32 addr, word_16 value)
 {
-    assert((addr & PPC_PAGE_MASK) + 2 <= PPC_PAGE_SIZE);
+    bt_assert((addr & PPC_PAGE_MASK) + 2 <= PPC_PAGE_SIZE);
 
     touch_mem(intp, addr, 2);
 
@@ -535,8 +534,8 @@ mem_copy_to_user_32 (interpreter_t *intp, word_32 addr, byte *buf, word_32 len)
 {
     word_32 w;
 
-    assert((addr & 3) == 0);
-    assert((len & 3) == 0);
+    bt_assert((addr & 3) == 0);
+    bt_assert((len & 3) == 0);
 
     for (w = 0; w < len; w += 4)
 	mem_set_32(intp, addr + w, *(word_32*)(buf + w));
@@ -547,8 +546,8 @@ mem_copy_from_user_32 (interpreter_t *intp, byte *buf, word_32 addr, word_32 len
 {
     word_32 w;
 
-    assert((addr & 3) == 0);
-    assert((len & 3) == 0);
+    bt_assert((addr & 3) == 0);
+    bt_assert((len & 3) == 0);
 
     for (w = 0; w < len; w += 4)
 	*(word_32*)(buf + w) = mem_get_32(intp, addr + w);
@@ -620,8 +619,8 @@ first_fit_addr (interpreter_t *intp, word_32 start, word_32 len)
     word_32 i;
     page_t *level1;
 
-    assert((start & PPC_PAGE_MASK) == 0);
-    assert((len & PPC_PAGE_MASK) == 0);
+    bt_assert((start & PPC_PAGE_MASK) == 0);
+    bt_assert((len & PPC_PAGE_MASK) == 0);
 
     num_pages = len >> PPC_PAGE_SHIFT;
 
@@ -647,7 +646,7 @@ first_fit_addr (interpreter_t *intp, word_32 start, word_32 len)
 	    if (l2 == 0)
 	    {
 		++l1;
-		assert((l1 & LEVEL1_MASK) != 0);
+		bt_assert((l1 & LEVEL1_MASK) != 0);
 		level1 = intp->pagetable[l1];
 	    }
 	}
@@ -668,7 +667,7 @@ first_fit_addr (interpreter_t *intp, word_32 start, word_32 len)
 	    if (l2 == 0)
 	    {
 		++l1;
-		assert((l1 & LEVEL1_MASK) != 0);
+		bt_assert((l1 & LEVEL1_MASK) != 0);
 		level1 = intp->pagetable[l1];
 	    }
 	}
@@ -689,13 +688,13 @@ mmap_segment (interpreter_t *intp, word_32 len, int flags, int fixed, word_32 ad
 
     if (fixed)
     {
-	assert((addr & PPC_PAGE_MASK) == 0);
+	bt_assert((addr & PPC_PAGE_MASK) == 0);
 	used_addr = addr;
     }
     else
 	used_addr = first_fit_addr(intp, addr == 0 ? MMAP_START : addr, len);
 
-    assert(used_addr != 0);
+    bt_assert(used_addr != 0);
 
     mprotect_pages(intp, used_addr, len, flags | PAGE_MMAPPED, 0, zero);
 
@@ -751,7 +750,7 @@ read_all_at (int fd, byte *buf, size_t count, off_t offset)
     off_t seek_result;
 
     seek_result = lseek(fd, offset, SEEK_SET);
-    assert(seek_result != (off_t)-1);
+    bt_assert(seek_result != (off_t)-1);
 
     return read_all(fd, buf, count);
 }
@@ -766,11 +765,11 @@ copy_file_to_mem (interpreter_t *intp, int fd, word_32 addr, word_32 len, word_3
     if (reset)
     {
 	curr_offset = lseek(fd, 0, SEEK_CUR);
-	assert(curr_offset != (off_t)-1);
+	bt_assert(curr_offset != (off_t)-1);
     }
 
     seek_result = lseek(fd, offset, SEEK_SET);
-    assert(seek_result != (off_t)-1);
+    bt_assert(seek_result != (off_t)-1);
 
     while (num_read < len)
     {
@@ -779,7 +778,7 @@ copy_file_to_mem (interpreter_t *intp, int fd, word_32 addr, word_32 len, word_3
 
 	result = read_all(fd, page->mem + ((addr + num_read) & PPC_PAGE_MASK),
 			  MIN(MIN(PPC_PAGE_SIZE, len - num_read), PPC_PAGE_SIZE - ((addr + num_read) & PPC_PAGE_MASK)));
-	assert(result != -1);
+	bt_assert(result != -1);
 
 #if defined(DIFFERENT_BYTEORDER) && !defined(SWAP_DIRECT_MEM)
 	if (intp->direct_memory)
@@ -795,7 +794,7 @@ copy_file_to_mem (interpreter_t *intp, int fd, word_32 addr, word_32 len, word_3
     if (reset)
     {
 	seek_result = lseek(fd, curr_offset, SEEK_SET);
-	assert(seek_result != (off_t)-1);
+	bt_assert(seek_result != (off_t)-1);
     }
 
     return num_read;
@@ -916,7 +915,7 @@ strdup_from_user (interpreter_t *intp, word_32 p)
     char *mem = (char*)malloc(len + 1);
     word_32 i;
 
-    assert(mem != 0);
+    bt_assert(mem != 0);
     for (i = 0; i <= len; ++i)
 	mem[i] = mem_get_8(intp, p + i);
 

@@ -1456,7 +1456,7 @@
 			      (format nil "((~A)(~A)~A)" (c-type width 'integer) (c-type width 'integer t)
 				      (generate-interpreter value bindings))))
 	  (nop () "0 /* nop */")
-	  (not-implemented () "({ assert(0); 0; }) /* not implemented */")
+	  (not-implemented () "({ bt_assert(0); 0; }) /* not implemented */")
 	  (system-call () "handle_system_call(intp)")
 	  ((= =f < <f > >f + +f - -f * *f / % /f logor logand logxor shiftl shiftr and or) (left right)
 	   (let* ((op (cadr (assoc (expr-kind expr) '((= "==") (=f "==") (< "<") (<f "<") (> ">") (>f ">") (+ "+") (+f "+") (- "-")
@@ -1915,7 +1915,7 @@ store_all_foreign_regs();
 }~%"
 			   (if (expr-constp target)
 			       "emit_branch(COMPOSE_BR(31, 0), taken_jump_label);"
-			       "assert(0);")
+			       "bt_assert(0);")
 			   (if (expr-constp target)
 			       (format nil "emit_direct_jump(~A);" (generate-interpreter target nil))
 			       (let ((target-reg (make-tmp-name)))
@@ -4553,7 +4553,7 @@ save_live = live_~A;~%"
 			  (nop ()
 			       (format t "/* nop */~%"))
 			  (not-implemented ()
-					   (format t "assert(0); /* not implemented */~%"))
+					   (format t "bt_assert(0); /* not implemented */~%"))
 			  (ignore (value)
 				  (format t "/* ignore */~%"))
 			  (system-call ()
@@ -4633,7 +4633,7 @@ save_live = live_~A;~%"
 			  (nop ()
 			       (format t "/* nop */~%"))
 			  (not-implemented ()
-					   (format t "assert(0); /* not implemented */~%"))
+					   (format t "bt_assert(0); /* not implemented */~%"))
 			  (ignore (value)
 				  (format t "/* ignore */~%"))
 			  (system-call ()
@@ -4783,7 +4783,7 @@ save_live = live_~A;~%"
 			    directives args)))
       (format t "printf(\"~A\"~{, ~A~});~%" format-string c-exprs))))
 
-(defun generate-insn-recognizer (tree action &key (unrecognized-action "assert(0);"))
+(defun generate-insn-recognizer (tree action &key (unrecognized-action "bt_assert(0);"))
   (if (insn-p tree)
       (progn
 	(format t "/* ~A */~%" (insn-name tree) (insn-name tree))
@@ -5082,10 +5082,7 @@ pc = _pc;~%"
     (with-open-file (out (format nil "~A_skeleton.c" (dcs (machine-name machine))) :direction :output :if-exists :supersede)
       (let ((*standard-output* out)
 	    (decision-tree (build-decision-tree (machine-insns machine))))
-	(dolist (field (machine-fields machine))
-	  (format t "#define FIELD_~A    ~A~%" (car field) (generate-interpreter (cdr field) nil)))
-	(format t "void xxx_~A_insn (~A insn, ~A pc) {~%"
-		(dcs (machine-name machine))
+	(format t "void SKELETON_FUNC_NAME (~A insn, ~A pc SKELETON_FUNC_ARGS) {~%SKELETON_PRE_DECODE~%"
 		(c-type (machine-insn-bits machine) 'integer)
 		(c-type (machine-word-bits *this-machine*) 'integer))
 	(generate-insn-recognizer decision-tree #'(lambda (insn)
@@ -5113,7 +5110,9 @@ pc = _pc;~%"
 	(dolist (reg (machine-registers machine))
 	  (format t "#define REG_INDEX_~A ~A~%"
 		  (register-name reg)
-		  (+ (register-number reg) (register-class-start-index (register-register-class reg)))))))))
+		  (+ (register-number reg) (register-class-start-index (register-register-class reg)))))
+	(dolist (field (machine-fields machine))
+	  (format t "#define ~A_FIELD_~A    ~A~%" (machine-name machine) (car field) (generate-interpreter (cdr field) nil)))))))
 
 (defun generate-composer-file (machine &key (safe t))
   (labels ((sexp-to-c (x)
@@ -5139,9 +5138,9 @@ pc = _pc;~%"
 		      (lookup-field name)
 		    (let ((width (1+ (- end begin))))
 		      (if (member name reg-fields)
-			  (format t "if ((~A) & FIELD_REG_BIT) note_insn_reg(~A, ~A); else assert((~A) >= 0 && (~A) < ~A); "
+			  (format t "if ((~A) & FIELD_REG_BIT) note_insn_reg(~A, ~A); else bt_assert((~A) >= 0 && (~A) < ~A); "
 				  c-name c-name begin c-name c-name (expt 2 width))
-			  (format t "assert((~A) >= 0 && (~A) < ~A); " c-name c-name (expt 2 width)))))))
+			  (format t "bt_assert((~A) >= 0 && (~A) < ~A); " c-name c-name (expt 2 width)))))))
 	      (format t "0x~X" (bit-vector-to-integer (insn-known-bit-values insn)))
 	      (dolist (operand operands)
 		(multiple-value-bind (begin end)

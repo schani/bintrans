@@ -22,7 +22,6 @@
 
 #include <elf.h>
 #include <stdio.h>
-#include <assert.h>
 #include <stdlib.h>
 #include <netinet/in.h>
 #include <string.h>
@@ -248,6 +247,7 @@ int emu_errnos[] = { 0,
 #define SYSCALL_READV            145
 #define SYSCALL_WRITEV           146
 #define SYSCALL_MREMAP           163
+#define SYSCALL_POLL             167
 #define SYSCALL_RT_SIGACTION     173
 #define SYSCALL_GETCWD           182
 #define SYSCALL_FSTAT64          197
@@ -346,10 +346,21 @@ int debug = 0;
 
 char *emu_root = 0;
 
+void
+bt_assert_fail (char *expr, char *file, int line, char *fn)
+{
+    fprintf(stderr, "\nbintrans: %s:%d (%s): Assertion `%s' failed.\n"
+	    "Please report the above message and some details about the program you're\n"
+	    "running in bintrans to schani@complang.tuwien.ac.at\n"
+	    "Thank you.\n",
+	    file, line, fn, expr);
+    exit(1);
+}
+
 word_32
 rotl_32 (word_32 x, word_32 i)
 {
-    assert(i <= 32);
+    bt_assert(i <= 32);
 
     return (x << i) | (x >> (32 - i));
 }
@@ -357,7 +368,7 @@ rotl_32 (word_32 x, word_32 i)
 word_16
 rotl_16 (word_16 x, word_32 i)
 {
-    assert(i <= 16);
+    bt_assert(i <= 16);
 
     return (x << i) | (x >> (16 - i));
 }
@@ -640,7 +651,7 @@ translate_filename (char *file)
 	if (strcmp(unmangled[i], file) == 0)
 	    return unmangled[i];
 
-    assert(strlen(file) + strlen(emu_root) <= MAX_FILENAME_LEN);
+    bt_assert(strlen(file) + strlen(emu_root) <= MAX_FILENAME_LEN);
 
     strcpy(mangled, emu_root);
     strcat(mangled, file);
@@ -657,7 +668,7 @@ open_fd (interpreter_t *intp, int fd)
 	if (intp->fd_map[i].free)
 	    break;
 
-    assert(i < MAX_FDS);
+    bt_assert(i < MAX_FDS);
 
     intp->fd_map[i].free = 0;
     intp->fd_map[i].native_fd = fd;
@@ -668,7 +679,7 @@ open_fd (interpreter_t *intp, int fd)
 int
 lookup_fd (interpreter_t *intp, word_32 fd)
 {
-    assert(fd < MAX_FDS);
+    bt_assert(fd < MAX_FDS);
     if (intp->fd_map[fd].free)
 	return -1;
     return intp->fd_map[fd].native_fd;
@@ -689,8 +700,8 @@ reverse_lookup_fd (interpreter_t *intp, int fd)
 void
 close_fd (interpreter_t *intp, word_32 fd)
 {
-    assert(fd < MAX_FDS);
-    assert(!intp->fd_map[fd].free);
+    bt_assert(fd < MAX_FDS);
+    bt_assert(!intp->fd_map[fd].free);
     intp->fd_map[fd].free = 1;
 }
 
@@ -703,7 +714,7 @@ convert_native_sockaddr_to_ppc (interpreter_t *intp, struct sockaddr *sa, word_3
 	    {
 		struct sockaddr_in *si = (struct sockaddr_in*)sa;
 
-		assert(ppc_len >= 16);
+		bt_assert(ppc_len >= 16);
 
 		*used_len = 16;
 
@@ -720,7 +731,7 @@ convert_native_sockaddr_to_ppc (interpreter_t *intp, struct sockaddr *sa, word_3
 	    break;
 
 	default :
-	    assert(0);
+	    bt_assert(0);
     }
 }
 
@@ -922,7 +933,7 @@ convert_native_stat_to_emu_stat64 (interpreter_t *intp, word_32 addr, struct sta
     sc_mem_set_32(intp, addr + 80, buf->st_mtime);
     sc_mem_set_32(intp, addr + 88, buf->st_ctime);
 #elif defined(EMU_I386)
-    assert(0);
+    bt_assert(0);
 #endif
 }
 
@@ -986,7 +997,7 @@ convert_emu_pollfds_to_native (interpreter_t *intp, word_32 addr, struct pollfd 
     for (i = 0; i < n; ++i)
     {
 	pollfds[i].fd = lookup_fd(intp, mem_get_32(intp, addr + 8 * i + 0));
-	assert(pollfds[i].fd != -1);
+	bt_assert(pollfds[i].fd != -1);
 	pollfds[i].events = convert_emu_pollevents_to_native(mem_get_16(intp, addr + 8 * i + 4));
 	pollfds[i].revents = 0;
     }
@@ -1064,7 +1075,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 	    {
 		byte *mem = (byte*)malloc(arg3);
 
-		assert(mem != 0);
+		bt_assert(mem != 0);
 
 		result = read(fd, mem, arg3);
 
@@ -1093,7 +1104,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 		byte *mem = (byte*)malloc(arg3);
 		word_32 i;
 
-		assert(mem != 0);
+		bt_assert(mem != 0);
 
 		for (i = 0; i < arg3; ++i)
 		    mem[i] = mem_get_8(intp, arg2 + i);
@@ -1122,7 +1133,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 		else if ((ppc_flags & EMU_O_ACCMODE) == EMU_O_RDWR)
 		    flags = O_RDWR;
 		else
-		    assert(0);
+		    bt_assert(0);
 		if (ppc_flags & EMU_O_CREAT)
 		    flags |= O_CREAT;
 		if (ppc_flags & EMU_O_EXCL)
@@ -1279,7 +1290,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 			addr = sc_mmap_anonymous(intp, new_top_aligned - old_top_aligned, PAGE_READABLE | PAGE_WRITEABLE, 1, old_top_aligned);
 
-			assert(addr != (word_32)-1);
+			bt_assert(addr != (word_32)-1);
 		    }
 
 		    sc_set_data_segment_top(intp, new_top);
@@ -1339,7 +1350,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 			break;
 
 		    default :
-			assert(0);
+			bt_assert(0);
 		}
 	    }
 	    break;
@@ -1367,7 +1378,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 			{
 			    int native_result = fcntl(fd, F_GETFL);
 
-			    assert(0); /* all open flags are returned */
+			    bt_assert(0); /* all open flags are returned */
 
 			    if (native_result != -1)
 			    {
@@ -1413,7 +1424,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 	case SYSCALL_GETRLIMIT :
 	    ANNOUNCE_SYSCALL("getrlimit");
-	    assert(arg1 == EMU_RLIMIT_STACK);
+	    bt_assert(arg1 == EMU_RLIMIT_STACK);
 	    sc_mem_set_32(intp, arg2 + 0, STACK_SIZE * 1024);
 	    sc_mem_set_32(intp, arg2 + 4, STACK_SIZE * 1024);
 	    result = 0;
@@ -1424,7 +1435,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 	    {
 		struct rusage ru;
 
-		assert(arg1 == EMU_RUSAGE_SELF);
+		bt_assert(arg1 == EMU_RUSAGE_SELF);
 
 		result = getrusage(RUSAGE_SELF, &ru);
 		if (result == 0)
@@ -1470,7 +1481,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 		printf("name: %s\n", name);
 #endif
 
-		assert(buf != 0);
+		bt_assert(buf != 0);
 
 		result = readlink(name, buf, arg3);
 
@@ -1503,13 +1514,13 @@ process_system_call (interpreter_t *intp, word_32 number,
 		word_32 len = PPC_PAGE_ALIGN(arg2);
 		word_32 addr;
 
-		assert(!(arg4 & PPC_MAP_SHARED));
-		assert(arg4 & PPC_MAP_PRIVATE);
+		bt_assert(!(arg4 & PPC_MAP_SHARED));
+		bt_assert(arg4 & PPC_MAP_PRIVATE);
 
 		if (arg4 & PPC_MAP_ANONYMOUS)
 		{
-		    assert(arg5 == -1);
-		    assert(arg6 == 0);
+		    bt_assert(arg5 == -1);
+		    bt_assert(arg6 == 0);
 
 		    addr = sc_mmap_anonymous(intp, len, prot_to_flags(arg3), arg4 & PPC_MAP_FIXED, arg1);
 
@@ -1541,7 +1552,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 	    {
 		word_32 mem_len;
 
-		assert((arg1 & PPC_PAGE_MASK) == 0);
+		bt_assert((arg1 & PPC_PAGE_MASK) == 0);
 
 		mem_len = PPC_PAGE_ALIGN(arg2);
 
@@ -1583,10 +1594,10 @@ process_system_call (interpreter_t *intp, word_32 number,
 				type = SOCK_PACKET;
 				break;
 			    default :
-				assert(0);
+				bt_assert(0);
 			}
 
-			assert(ARG(2) == 0);
+			bt_assert(ARG(2) == 0);
 
 			result = socket(ARG(0), type, 0);
 			if (result != -1)
@@ -1616,7 +1627,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 					char *real_name = malloc(len + 1);
 					char *name;
 
-					assert(len <= sizeof(su.sun_path));
+					bt_assert(len <= sizeof(su.sun_path));
 
 					mem_copy_from_user_8(intp, real_name, ARG(1) + 2, len);
 					real_name[len] = '\0';
@@ -1624,7 +1635,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 					free(real_name);
 
 					su.sun_family = AF_UNIX;
-					assert(strlen(name) < sizeof(su.sun_path));
+					bt_assert(strlen(name) < sizeof(su.sun_path));
 					strcpy(su.sun_path, name);
 
 					result = connect(fd, &su, sizeof(su) - sizeof(su.sun_path) + len);
@@ -1635,7 +1646,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 				    {
 					struct sockaddr_in si;
 
-					assert(ARG(2) == 16);
+					bt_assert(ARG(2) == 16);
 
 					si.sin_family = AF_INET;
 					si.sin_port = mem_get_16(intp, ARG(1) + 2);
@@ -1652,7 +1663,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 				    break;
 
 				default :
-				    assert(0);
+				    bt_assert(0);
 			    }
 		    }
 		    break;
@@ -1742,7 +1753,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 			else
 			{
 			    optval = (byte*)malloc(ARG(4));
-			    assert(optval != 0);
+			    bt_assert(optval != 0);
 			    mem_copy_from_user_32(intp, optval, ARG(3), ARG(4));
 
 			    result = setsockopt(fd, ARG(1), ARG(2), optval, ARG(4));
@@ -1803,7 +1814,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 	case SYSCALL_UNAME :
 	    ANNOUNCE_SYSCALL("uname");
-	    /* assert(SYS_NMLN == 65); */
+	    /* bt_assert(SYS_NMLN == 65); */
 	    {
 		struct utsname un;
 
@@ -1827,11 +1838,11 @@ process_system_call (interpreter_t *intp, word_32 number,
 		word_32 mem_len;
 		int flags = prot_to_flags(arg3);
 
-		assert((arg1 & PPC_PAGE_MASK) == 0);
+		bt_assert((arg1 & PPC_PAGE_MASK) == 0);
 
 		mem_len = PPC_PAGE_ALIGN(arg2);
 
-		assert(is_mapped(intp, arg1, mem_len, 0));
+		bt_assert(is_mapped(intp, arg1, mem_len, 0));
 
 		sc_mprotect_pages(intp, arg1, mem_len, flags | PAGE_MMAPPED, 0, 0);
 		sc_natively_mprotect_pages(intp, arg1, mem_len);
@@ -1842,7 +1853,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 	case SYSCALL_PERSONALITY :
 	    ANNOUNCE_SYSCALL("personality");
-	    assert(arg1 == 0);
+	    bt_assert(arg1 == 0);
 	    result = 0;
 	    break;
 
@@ -1876,7 +1887,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 		fd_set *rsp, *wsp, *esp;
 		int maxfd, native_maxfd = 0;
 
-		assert(arg1 < 4096);
+		bt_assert(arg1 < 4096);
 
 		maxfd = arg1;
 
@@ -1948,7 +1959,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 		    out_len += mem_get_32(intp, arg2 + i * 8 + 4);
 
 		buf = (byte*)malloc(out_len);
-		assert(buf != 0);
+		bt_assert(buf != 0);
 
 		result = read(fd, buf, out_len);
 
@@ -1963,7 +1974,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 			num_copied += len;
 		    }
 
-		    assert(num_copied == out_len);
+		    bt_assert(num_copied == out_len);
 		}
 
 		free(buf);
@@ -1989,7 +2000,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 		    in_len += mem_get_32(intp, arg2 + i * 8 + 4);
 
 		buf = (byte*)malloc(in_len);
-		assert(buf != 0);
+		bt_assert(buf != 0);
 
 		for (i = 0; i < arg3; ++i)
 		{
@@ -2000,7 +2011,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 		    num_copied += len;
 		}
 
-		assert(num_copied == in_len);
+		bt_assert(num_copied == in_len);
 
 		result = write(fd, buf, in_len);
 
@@ -2017,7 +2028,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 		word_32 old_len, new_len;
 		int flags;
 
-		assert((arg1 & PPC_PAGE_MASK) == 0);
+		bt_assert((arg1 & PPC_PAGE_MASK) == 0);
 
 		old_len = PPC_PAGE_ALIGN(arg2);
 		new_len = PPC_PAGE_ALIGN(arg3);
@@ -2032,7 +2043,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 			    addr = sc_mmap_anonymous(intp, new_len - old_len, flags, 1, arg1 + old_len);
 
-			    assert(addr != (word_32)-1);
+			    bt_assert(addr != (word_32)-1);
 
 			    result = arg1;
 			}
@@ -2065,7 +2076,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 	    {
 		struct pollfd *pollfds = (struct pollfd*)malloc(sizeof(struct pollfd) * arg2);
 
-		assert(pollfds != 0);
+		bt_assert(pollfds != 0);
 
 		convert_emu_pollfds_to_native(intp, arg1, pollfds, arg2);
 
@@ -2085,7 +2096,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 	case SYSCALL_GETCWD :
 	    ANNOUNCE_SYSCALL("getcwd");
-	    assert(arg2 >= 2);
+	    bt_assert(arg2 >= 2);
 	    sc_strcpy_to_user(intp, arg1, "/");	/* FIXME: do the real thing */
 	    result = 2;
 	    break;
@@ -2135,13 +2146,13 @@ lookup_errno (int host_errno)
 {
     int i;
 
-    assert(host_errno > 0);
+    bt_assert(host_errno > 0);
 
     for (i = 1; i <= LAST_EMU_ERRNO; ++i)
 	if (emu_errnos[i] == host_errno)
 	    break;
 
-    assert(i <= LAST_EMU_ERRNO);
+    bt_assert(i <= LAST_EMU_ERRNO);
 
     return i;
 }
@@ -2217,7 +2228,7 @@ handle_system_call (interpreter_t *intp)
 	return;
     }
 
-    assert(syscall_args[i].num != (word_32)-1);
+    bt_assert(syscall_args[i].num != (word_32)-1);
     num_args = syscall_args[i].num_args;
 
 #if defined(EMU_PPC)
@@ -2241,7 +2252,7 @@ handle_system_call (interpreter_t *intp)
     compiler_intp->regs_SPR[1] = intp->regs_SPR[1];
 #endif
 #elif defined(EMU_I386)
-    assert(num == SYSCALL_MMAP || num_args <= 5);
+    bt_assert(num == SYSCALL_MMAP || num_args <= 5);
 
     result = process_system_call(intp, num,
 				 intp->regs_GPR[3], intp->regs_GPR[1], intp->regs_GPR[2],
@@ -2740,7 +2751,26 @@ debugger (interpreter_t *intp)
 	    show_watchpoints(intp);
 	}
 	else if (strcmp(token, "help") == 0)
-	    printf("rotfl!\n");
+	{
+	    printf("Command help:\n"
+		   "  help                Show this help\n"
+		   "  n                   Execute one instruction\n"
+		   "  cont                Execute until breakpoint/watchpoint hit\n"
+		   "  regs                Show register contents\n"
+		   "  segs                Show memory segments\n"
+		   "  trace on/off        Turn on/off tracing\n"
+		   "  x <addr> <len>      Show <len> bytes of memory starting at <addr>\n"
+		   "  dis <addr> <len>    Disassemble <len> instructions starting at <addr>\n"
+		   "  show                Show breakpoints and watchpoints\n"
+		   "  break <addr>        Add breakpoint at <addr>\n"
+		   "  del <num>           Delete breakpoint <num>\n"
+		   "  watch <addr> <len>  Add a watchpoint for <len> bytes starting at <addr>\n"
+		   "  delwatch <num>      Delete watchpoint <num>\n"
+		   "  file <fd> <mode> <name>\n"
+		   "                      Open file <name> with <mode> (one of r,w,rw) as <fd>\n"
+		   "\n"
+		   "Mail bug reports and suggestions to schani@complang.tuwien.ac.at\n");
+	}
 	else if (strcmp(token, "segs") == 0)
 	    show_segments(intp);
 	else if (strcmp(token, "trace") == 0)
@@ -2896,7 +2926,7 @@ debugger (interpreter_t *intp)
 		continue;
 	    }
 	    fd = atoi(token);
-	    assert(fd >= 0 && fd < MAX_FDS);
+	    bt_assert(fd >= 0 && fd < MAX_FDS);
 
 	    p = get_token(p, token);
 	    if (p == 0)
@@ -2997,40 +3027,40 @@ read_elf_info (int fd, Elf32_Ehdr *ehdr, Elf32_Phdr **phdrs)
     int i;
 
     num_read = read_all(fd, (byte*)ehdr, sizeof(Elf32_Ehdr));
-    assert(num_read == sizeof(Elf32_Ehdr));
+    bt_assert(num_read == sizeof(Elf32_Ehdr));
 
-    assert(ehdr->e_ident[EI_MAG0] == ELFMAG0);
-    assert(ehdr->e_ident[EI_MAG1] == ELFMAG1);
-    assert(ehdr->e_ident[EI_MAG2] == ELFMAG2);
-    assert(ehdr->e_ident[EI_MAG3] == ELFMAG3);
+    bt_assert(ehdr->e_ident[EI_MAG0] == ELFMAG0);
+    bt_assert(ehdr->e_ident[EI_MAG1] == ELFMAG1);
+    bt_assert(ehdr->e_ident[EI_MAG2] == ELFMAG2);
+    bt_assert(ehdr->e_ident[EI_MAG3] == ELFMAG3);
 
-    assert(ehdr->e_ident[EI_CLASS] == ELFCLASS32);
+    bt_assert(ehdr->e_ident[EI_CLASS] == ELFCLASS32);
 
 #if defined(EMU_PPC)
-    assert(ehdr->e_ident[EI_DATA] == ELFDATA2MSB);
+    bt_assert(ehdr->e_ident[EI_DATA] == ELFDATA2MSB);
 #elif defined(EMU_I386)
-    assert(ehdr->e_ident[EI_DATA] == ELFDATA2LSB);
+    bt_assert(ehdr->e_ident[EI_DATA] == ELFDATA2LSB);
 #endif
 
-    assert(ehdr->e_ident[EI_VERSION] == EV_CURRENT);
+    bt_assert(ehdr->e_ident[EI_VERSION] == EV_CURRENT);
 
     /*
-    assert(ehdr->e_ident[EI_OSABI] == ELFOSABI_SYSV);
-    assert(ehdr->e_ident[EI_ABIVERSION] == 0);
+    bt_assert(ehdr->e_ident[EI_OSABI] == ELFOSABI_SYSV);
+    bt_assert(ehdr->e_ident[EI_ABIVERSION] == 0);
     */
 
 #ifdef DIFFERENT_BYTEORDER
     lsbify_elf32_ehdr(ehdr);
 #endif
 
-    assert(ehdr->e_type == ET_EXEC || ehdr->e_type == ET_DYN);
+    bt_assert(ehdr->e_type == ET_EXEC || ehdr->e_type == ET_DYN);
 #if defined(EMU_PPC)
-    assert(ehdr->e_machine == EM_PPC);
+    bt_assert(ehdr->e_machine == EM_PPC);
 #elif defined(EMU_I386)
-    assert(ehdr->e_machine == EM_386);
+    bt_assert(ehdr->e_machine == EM_386);
 #endif
 
-    assert(ehdr->e_version == EV_CURRENT);
+    bt_assert(ehdr->e_version == EV_CURRENT);
 
     *phdrs = (Elf32_Phdr*)malloc(sizeof(Elf32_Phdr) * ehdr->e_phnum);
 
@@ -3038,7 +3068,7 @@ read_elf_info (int fd, Elf32_Ehdr *ehdr, Elf32_Phdr **phdrs)
     for (i = 0; i < ehdr->e_phnum; ++i)
     {
 	num_read = read_all(fd, (byte*)&(*phdrs)[i], sizeof(Elf32_Phdr));
-	assert(num_read == sizeof(Elf32_Phdr));
+	bt_assert(num_read == sizeof(Elf32_Phdr));
 #ifdef DIFFERENT_BYTEORDER
 	lsbify_elf32_phdr(&(*phdrs)[i]);
 #endif
@@ -3066,7 +3096,7 @@ read_elf_segment (interpreter_t *intp, int fd, Elf32_Phdr *phdr, word_32 bias)
     mprotect_pages(intp, mem_start, mem_len, flags | PAGE_MMAPPED, 1, 1);
     natively_mprotect_pages_with_flags(intp, mem_start, mem_len, PAGE_WRITEABLE | PAGE_MMAPPED);
     read_len = copy_file_to_mem(intp, fd, phdr->p_vaddr + bias, phdr->p_filesz, phdr->p_offset, 0);
-    assert(read_len == phdr->p_filesz);
+    bt_assert(read_len == phdr->p_filesz);
     natively_mprotect_pages(intp, mem_start, mem_len);
 
     if (phdr->p_type == PT_LOAD && (phdr->p_flags & (PF_W | PF_R)) == (PF_W | PF_R) && bias == 0)
@@ -3082,14 +3112,14 @@ read_rc (void)
     lisp_stream_t stream;
     lisp_object_t *obj;
 
-    assert(home_dir != 0);
+    bt_assert(home_dir != 0);
 
     rcname = (char*)malloc(strlen(home_dir) + 13);
     strcpy(rcname, home_dir);
     strcat(rcname, "/.bintransrc");
 
     rcfile = fopen(rcname, "r");
-    assert(rcfile != 0);
+    bt_assert(rcfile != 0);
     free(rcname);
 
     lisp_stream_init_file(&stream, rcfile);
@@ -3109,18 +3139,27 @@ read_rc (void)
 		if (strcmp(lisp_symbol(vars[0]), EMU_ARCH_NAME) == 0
 		    && strcmp(lisp_symbol(vars[1]), EMU_OS_NAME) == 0)
 		{
-		    assert(emu_root == 0);
+		    bt_assert(emu_root == 0);
 		    emu_root = strdup(lisp_string(vars[2]));
 		}
 	}
 
-	assert(type != LISP_TYPE_PARSE_ERROR);
+	bt_assert(type != LISP_TYPE_PARSE_ERROR);
 
 	if (type == LISP_TYPE_EOF)
 	    break;
     }
 
     fclose(rcfile);
+}
+
+static void
+usage (void)
+{
+    fprintf(stderr,
+	    "Usage:\n"
+	    "  bintrans EXECUTABLE-NAME [EXECUTABLE-OPTION]...\n"
+	    "\n");
 }
 
 int
@@ -3155,7 +3194,11 @@ main (int argc, char *argv[])
     init_interpreter_struct(&compiler, 1, 1);
 #endif
 
-    assert(argc >= 2);
+    if (argc < 2)
+    {
+	usage();
+	exit(1);
+    }
 
     ppc_argv = (char**)malloc(sizeof(char*) * argc);
 #if defined(EMU_PPC)
@@ -3169,7 +3212,11 @@ main (int argc, char *argv[])
     ppc_argv[argc - 1] = 0;
 
     exec_fd = open(translate_filename(argv[1]), O_RDONLY);
-    assert(exec_fd != -1);
+    if (exec_fd == -1)
+    {
+	fprintf(stderr, "Could not open executable `%s'\n", argv[1]);
+	exit(1);
+    }
 
     read_elf_info(exec_fd, &ehdr, &phdrs);
 
@@ -3208,11 +3255,11 @@ main (int argc, char *argv[])
 	int intp_fd = open(translate_filename(elf_interpreter), O_RDONLY);
 	Elf32_Ehdr intp_ehdr;
 
-	assert(intp_fd != 0);
+	bt_assert(intp_fd != 0);
 
 	read_elf_info(intp_fd, &intp_ehdr, &phdrs);
 
-	assert(phdrs[0].p_vaddr == 0);
+	bt_assert(phdrs[0].p_vaddr == 0);
 
 	for (i = 0; i < intp_ehdr.e_phnum; ++i)
 	{
@@ -3240,10 +3287,10 @@ main (int argc, char *argv[])
 		   PAGE_READABLE | PAGE_WRITEABLE | PAGE_MMAPPED, 0, 1);
     natively_mprotect_pages(&interpreter, STACK_TOP - STACK_SIZE * PPC_PAGE_SIZE, STACK_SIZE * PPC_PAGE_SIZE);
 
-    assert(interpreter.data_segment_top != 0);
+    bt_assert(interpreter.data_segment_top != 0);
 
     stack_bottom = setup_stack(&interpreter, STACK_TOP, ppc_argv, elf_interpreter != 0 ? &ehdr : 0, load_addr);
-    assert((stack_bottom & 15) == 0);
+    bt_assert((stack_bottom & 15) == 0);
 
     setup_registers(&interpreter, stack_bottom);
     interpreter.pc = entry;
@@ -3253,10 +3300,10 @@ main (int argc, char *argv[])
 		   PAGE_READABLE | PAGE_WRITEABLE | PAGE_MMAPPED, 0, 1);
     natively_mprotect_pages(&compiler, STACK_TOP - STACK_SIZE * PPC_PAGE_SIZE, STACK_SIZE * PPC_PAGE_SIZE);
 
-    assert(compiler.data_segment_top != 0);
+    bt_assert(compiler.data_segment_top != 0);
 
     stack_bottom = setup_stack(&compiler, STACK_TOP, ppc_argv, elf_interpreter != 0 ? &ehdr : 0, load_addr);
-    assert((stack_bottom & 15) == 0);
+    bt_assert((stack_bottom & 15) == 0);
 
     setup_registers(&compiler, stack_bottom);
     compiler.pc = entry;

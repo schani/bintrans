@@ -21,7 +21,6 @@
  */
 
 #include <stdio.h>
-#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -50,7 +49,7 @@ pool_alloc (int size)
 {
     int mark;
 
-    assert(pool_mark + size <= COUNT_POOL_SIZE);
+    bt_assert(pool_mark + size <= COUNT_POOL_SIZE);
 
     mark = pool_mark;
     pool_mark += size;
@@ -78,7 +77,7 @@ inc_trace (int num_jumps)
 	    entry->trace_pool_indexes[num_jumps - 1] = pool_alloc(1 << num_jumps);
 	    /* printf("new loop with %d jumps\n", num_jumps); */
 	}
-	assert(index >= 0 && index < (1 << num_jumps));
+	bt_assert(index >= 0 && index < (1 << num_jumps));
 	pool_index = entry->trace_pool_indexes[num_jumps - 1];
 	++count_pool[pool_index + index];
     }
@@ -245,7 +244,7 @@ loop_profiler (interpreter_t *intp)
 	{
 	    branch = (intp->pc == prev_pc + 4) ? 0 : 1;
 
-	    assert(entry != 0);
+	    bt_assert(entry != 0);
 	    for (i = 0; i < MAX_TRACE_BLOCKS; ++i)
 		if (fragment_history[i] == entry)
 		    break;
@@ -432,7 +431,7 @@ dynamo_runner (word_32 addr)
 	fragment_hash_supplement_t *supp;
 
 #ifdef CROSSDEBUGGER
-	assert(compiler_intp->pc == debugger_intp->pc);
+	bt_assert(compiler_intp->pc == debugger_intp->pc);
 	compare_register_sets();
 #endif
 
@@ -445,7 +444,7 @@ dynamo_runner (word_32 addr)
 #ifdef CROSSDEBUGGER
 		int trace_index = 0;
 
-		assert(supp->insn_addrs != 0 && supp->insn_addrs[0] == debugger_intp->pc);
+		bt_assert(supp->insn_addrs != 0 && supp->insn_addrs[0] == debugger_intp->pc);
 
 		reset_mem_trace();
 		trace_mem = 1;
@@ -488,7 +487,7 @@ dynamo_runner (word_32 addr)
 		    if (fragment_hash_get(foreign_addr, &dummy) == 0) /* cache flush */
 		    {
 #ifdef CROSSDEBUGGER
-			assert(0);
+			bt_assert(0);
 #else
 			fragment_hash_entry_t new_entry;
 			fragment_hash_supplement_t supplement;
@@ -501,7 +500,7 @@ dynamo_runner (word_32 addr)
 			fragment_hash_put(foreign_addr, &new_entry, &supplement);
 
 			entry = fragment_hash_get(foreign_addr, &supp);
-			assert(entry != 0);
+			bt_assert(entry != 0);
 #endif
 		    }
 
@@ -522,7 +521,7 @@ dynamo_runner (word_32 addr)
 
 		    collect_dynamo_trace(debugger_intp);
 
-		    assert(compiler_intp->pc == debugger_intp->pc);
+		    bt_assert(compiler_intp->pc == debugger_intp->pc);
 		    compare_register_sets();
 #endif
 
@@ -582,7 +581,7 @@ dynamo_profiler (interpreter_t *intp)
 	{
 	    if (supp->insn_addrs != 0)
 	    {
-		assert(supp->insn_addrs[0] == intp->pc);
+		bt_assert(supp->insn_addrs[0] == intp->pc);
 
 		trace_index = 0;
 

@@ -1,30 +1,26 @@
 # -*- makefile -*-
 
-EMU = I386
-#EMU = PPC
-#LOCATION = -DCOMPLANG
+## ATT: choose which architecture you want to emulate
+#EMU = I386
+EMU = PPC
 
+## ATT: choose the native architecture you're using
+NATIVE = ALPHA
+#NATIVE = PPC
+#NATIVE = I386
+
+## ATT: choose which mode you want bintrans to run in
 #MODE = INTERPRETER
 MODE = COMPILER
 #MODE = DEBUGGER
 #MODE = CROSSDEBUGGER
 
-#ARCH = -DARCH_ALPHA
-#ARCH = -DARCH_I386
-ARCH = -DARCH_PPC
-
-#ASM_OBJS = alpha_asm.o
-ASM_OBJS = ppc_asm.o
-
-COMPILER_OBJS = compiler.o
-
-#DIET = diet
-CC = /usr/local/powerpc-linux-uclibc/bin/powerpc-uclibc-gcc
-LDOPTS = -Wl,-Ttext,0x70000000
+## ATT: choose the options you want to compile bintrans with below.
+## the most important ones are documented in the README file.
 
 #DEFINES = -DUSE_HAND_TRANSLATOR -DCOLLECT_STATS -DDYNAMO_TRACES -DDYNAMO_THRESHOLD=50 -DSYNC_BLOCKS
 #-DDUMP_CODE
-#DEFINES = -DUSE_HAND_TRANSLATOR -DCOLLECT_STATS
+DEFINES = -DUSE_HAND_TRANSLATOR -DCOLLECT_STATS
 #-DCOLLECT_LIVENESS -DLIVENESS_DEPTH=1
 #-DDUMP_CFG
 #-DDUMP_CODE
@@ -36,7 +32,7 @@ LDOPTS = -Wl,-Ttext,0x70000000
 # 
 #  -DFAST_PPC_FPR
 #  -DCOLLECT_PPC_FPR_STATS
-DEFINES = -DUSE_HAND_TRANSLATOR -DCOLLECT_STATS
+#DEFINES = -DUSE_HAND_TRANSLATOR -DCOLLECT_STATS
 #-DDUMP_CODE
 #DEFINES =
 #DEFINES = -O -DPROFILE_LOOPS -DPROFILE_FRAGMENTS -DCOLLECT_STATS
@@ -60,6 +56,22 @@ DEFINES = -DUSE_HAND_TRANSLATOR -DCOLLECT_STATS
 # 
 # 
 
+ifeq ($(NATIVE),ALPHA)
+ARCH = -DARCH_ALPHA
+ASM_OBJS = alpha_asm.o
+endif
+ifeq ($(NATIVE),PPC)
+ARCH = -DARCH_PPC
+ASM_OBJS = ppc_asm.o
+## ATT: change the line below to reflect the path of your uClibc
+## installation
+CC = /usr/local/powerpc-linux-uclibc/bin/powerpc-uclibc-gcc
+LDOPTS = -Wl,-Ttext,0x70000000
+endif
+ifeq ($(NATIVE),I386)
+ARCH = -DARCH_I386
+endif
+
 ifeq ($(EMU),PPC)
 EMU_DEFS = -DEMU_PPC -DEMU_BIG_ENDIAN
 EMU_OBJS = unaligned.o
@@ -67,7 +79,7 @@ endif
 ifeq ($(EMU),I386)
 EMU_DEFS = -DEMU_I386 -DEMU_LITTLE_ENDIAN
 EMU_OBJS = i386.o
-ifeq ($(ARCH),-DARCH_ALPHA)
+ifeq ($(NATIVE),ALPHA)
 COMPILER_OBJS += i386_add_rm32_simm8_compiler.o i386_add_rm32_r32_compiler.o \
 		i386_inc_pr32_compiler.o i386_inc_rm32_compiler.o \
 		i386_lea_r32_rm32_compiler.o \
@@ -97,6 +109,13 @@ ifeq ($(MODE),CROSSDEBUGGER)
 MODE_DEFS = -DCROSSDEBUGGER
 OBJS = $(EMU_OBJS) $(COMPILER_OBJS) $(ASM_OBJS)
 endif
+
+COMPILER_OBJS = compiler.o
+
+#DIET = diet
+
+#LOCATION = -DCOMPLANG
+
 
 CFLAGS = $(MODE_DEFS) $(DEFINES) $(ARCH) $(EMU_DEFS) $(LOCATION) -fno-inline
 
