@@ -47,6 +47,7 @@
 
 #include "bintrans.h"
 #include "fragment_hash.h"
+#include "lispreader.h"
 
 /* Symbolic values for the entries in the auxiliary table
    put on the initial stack */
@@ -157,20 +158,13 @@
 #define EMU_FD_CLOEXEC          1
 #endif
 
+#if defined(EMU_PPC)
+#define EMU_ARCH_NAME       "ppc"
+#elif defined(EMU_I386)
+#define EMU_ARCH_NAME       "i386"
+#endif
 
-#if COMPLANG
-#if defined(EMU_PPC)
-#define EMU_ROOT                "/a5/schani/ppc-root"
-#elif defined(EMU_I386)
-#define EMU_ROOT                "/a5/schani/i386-root"
-#endif
-#else
-#if defined(EMU_PPC)
-#define EMU_ROOT                "/nethome/hansolo/schani/Work/unix/bintrans/ppc-root"
-#elif defined(EMU_I386)
-#define EMU_ROOT                "/nethome/hansolo/schani/Work/unix/bintrans/i386-root"
-#endif
-#endif
+#define EMU_OS_NAME         "linux"
 
 #if defined(EMU_PPC)
 int emu_errnos[] = { 0,
@@ -308,6 +302,8 @@ int emu_errnos[] = { 0,
 */
 
 int debug = 0;
+
+char *emu_root = 0;
 
 word_32
 rotl (word_32 x, word_32 i)
@@ -583,9 +579,9 @@ translate_filename (char *file)
 	if (strcmp(unmangled[i], file) == 0)
 	    return unmangled[i];
 
-    assert(strlen(file) + strlen(EMU_ROOT) <= MAX_FILENAME_LEN);
+    assert(strlen(file) + strlen(emu_root) <= MAX_FILENAME_LEN);
 
-    strcpy(mangled, EMU_ROOT);
+    strcpy(mangled, emu_root);
     strcat(mangled, file);
 
     return mangled;
@@ -2770,6 +2766,56 @@ read_elf_segment (interpreter_t *intp, int fd, Elf32_Phdr *phdr, word_32 bias)
 	intp->data_segment_top = phdr->p_vaddr + phdr->p_memsz;
 }
 
+void
+read_rc (void)
+{
+    char *rcname;
+    char *home_dir = getenv("HOME");
+    FILE *rcfile;
+    lisp_stream_t stream;
+    lisp_object_t *obj;
+
+    assert(home_dir != 0);
+
+    rcname = (char*)malloc(strlen(home_dir) + 13);
+    strcpy(rcname, home_dir);
+    strcat(rcname, "/.bintransrc");
+
+    rcfile = fopen(rcname, "r");
+    assert(rcfile != 0);
+    free(rcname);
+
+    lisp_stream_init_file(&stream, rcfile);
+
+    for (;;)
+    {
+	int type;
+
+	obj = lisp_read(&stream);
+	type = lisp_type(obj);
+
+	if (type != LISP_TYPE_EOF && type != LISP_TYPE_PARSE_ERROR)
+	{
+	    lisp_object_t *vars[3];
+
+	    if (lisp_match_string("(root #?(symbol) #?(symbol) #?(string))", obj, vars))
+		if (strcmp(lisp_symbol(vars[0]), EMU_ARCH_NAME) == 0
+		    && strcmp(lisp_symbol(vars[1]), EMU_OS_NAME) == 0)
+		{
+		    assert(emu_root == 0);
+		    emu_root = strdup(lisp_string(vars[2]));
+		}
+	}
+
+	assert(type != LISP_TYPE_PARSE_ERROR);
+
+	if (type == LISP_TYPE_EOF)
+	    break;
+    }
+
+    fclose(rcfile);
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -2788,6 +2834,8 @@ main (int argc, char *argv[])
 #ifdef NEED_COMPILER
     interpreter_t compiler;
 #endif
+
+    read_rc();
 
 #ifdef NEED_INTERPRETER
 #if defined(NEED_COMPILER) || defined(EMULATED_MEM)

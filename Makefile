@@ -82,8 +82,8 @@ endif
 
 CFLAGS = $(MODE_DEFS) $(DEFINES) $(ARCH) $(EMU_DEFS) $(LOCATION)
 
-bintrans : ppc.o mm.o fragment_hash.o loops.o liveness.o $(OBJS)
-	gcc -o bintrans ppc.o mm.o fragment_hash.o loops.o liveness.o $(OBJS)
+bintrans : ppc.o mm.o fragment_hash.o loops.o liveness.o lispreader.o $(OBJS)
+	gcc -o bintrans ppc.o mm.o fragment_hash.o loops.o liveness.o lispreader.o $(OBJS)
 
 ppc.o : ppc.c ppc_interpreter.c ppc_disassembler.c alpha_types.h bintrans.h
 	gcc $(CFLAGS) -Wall -g -c ppc.c
@@ -108,6 +108,9 @@ loops.o : loops.c fragment_hash.h bintrans.h compiler.h
 
 liveness.o : liveness.c bintrans.h
 	gcc $(CFLAGS) -Wall -g -c liveness.c
+
+lispreader.o : lispreader.c lispreader.h
+	gcc $(CFLAGS) -I. -Wall -g -c lispreader.c
 
 alpha_asm.o : alpha_asm.S Makefile
 	gcc $(MODE_DEFS) $(DEFINES) $(EMU_DEFS) -g -c alpha_asm.S
