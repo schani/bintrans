@@ -291,8 +291,9 @@
      (rb 0)
      (xo1 16)
      (lk 1))
-  ((jump-absolute (logand (reg lr) #xfffffffc))
-   (set (reg lr) (+ pc 4)))
+  ((let ((old-lr (reg lr)))
+     (set (reg lr) (+ pc 4))
+     (jump-absolute (logand old-lr #xfffffffc))))
   ("blrl"))
 
 (define-insn bne
@@ -576,7 +577,7 @@
 (define-insn lbzu
     ((opcd 35))
   ((set (reg rd gpr) (zex (width 8 (mem (+ (reg ra gpr) (sex d))))))
-   (set (reg ra gpr) (+ (reg ra gpr) (sex d))))
+   (set (reg ra gpr) (+ (reg ra gpr) (sex d))))	;FIXME: aliasing!!!!!
   ("lbzu r%u,%d(r%u)" rd d ra))
 
 (define-insn lbzx
@@ -637,7 +638,7 @@
 (define-insn lwzu
     ((opcd 33))
   ((set (reg rd gpr) (mem (+ (reg ra gpr) (sex d))))
-   (set (reg ra gpr) (+ (reg ra gpr) (sex d))))
+   (set (reg ra gpr) (+ (reg ra gpr) (sex d))))	;FIXME: aliasing!!!!!!1
   ("lwzu r%u,%d(r%u)" rd d ra))
 
 (define-insn lwzx

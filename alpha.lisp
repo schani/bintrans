@@ -42,7 +42,7 @@
       (pal-code 0 25)))
 
 (define-operand-order
-    '(ra fa rb imm fb rc fc memory-disp branch-disp))
+    '(ra fa memory-disp rb imm fb rc fc branch-disp))
 
 ;;;; macros
 
@@ -87,14 +87,14 @@
     ((if ,condition
 	 (jump-relative (+ (shiftl (sex branch-disp) 2) 4))
 	 (nop)))
-    (,(format nil "~A 0x%x" (string-downcase (symbol-name name))) (+ addr (+ (shiftl (sex branch-disp) 2) 4)))))
+    (,(format nil "~A 0x%x" (string-downcase (symbol-name name))) (width 64 (+ addr (+ (shiftl (sex branch-disp) 2) 4))))))
 
 (defmacro define-unconditional-branch-insn (name opcd)
   `(define-insn ,name
     ((opcd ,opcd))
     ((set-ra (+ pc 4))
      (jump-relative (+ (shiftl (sex branch-disp) 2) 4)))
-    (,(format nil "~A $%u,0x%x" (string-downcase (symbol-name name))) ra (+ addr (+ (shiftl (sex branch-disp) 2) 4)))))
+    (,(format nil "~A $%u,0x%x" (string-downcase (symbol-name name))) ra (width 64 (+ addr (+ (shiftl (sex branch-disp) 2) 4))))))
 
 (defmacro define-conditional-move-insn (name function condition)
   `(define-operate-insn ,name #x11 ,function
@@ -119,7 +119,7 @@
     (,(format nil "~A $%u,$%u" (string-downcase (symbol-name name))) ra rb)))
 
 (defmacro define-conditional-float-move-insn (name function condition)
-  `(define-float-insn name #x17 ,function
+  `(define-float-insn ,name #x17 ,function
     ((if ,condition
 	 (set-fc (fop fb))
 	 (nop)))))
@@ -313,10 +313,7 @@
    (fc dont-care)))
 
 (define-float-insn cpysn #x17 #x021
-  ()					;FIXME
-  ((fa dont-care)
-   (fb dont-care)
-   (fc dont-care)))
+  ((set-fc (+f (fop fa) (fop fb)))))	;FIXME
 
 (define-operate-insn ctlz #x1c #x32	;should have special asm since ra is not used
   ((set-rc (leading-zeros (op rb))))
@@ -337,10 +334,8 @@
    (fc dont-care)))
 
 (define-float-insn cvtql #x17 #x030
-  ()					;FIXME
-  ((fa dont-care)
-   (fb dont-care)
-   (fc dont-care)))
+  ((set-fc (integer-to-double (double-to-bits (fop fb))))) ;FIXME (negative values are complemented, long)
+  ((fa 31)))
 
 (define-float-insn cvtqs #x16 #x0bc
   ()					;FIXME
@@ -349,10 +344,8 @@
    (fc dont-care)))
 
 (define-float-insn cvtqt #x16 #x0be
-  ()					;FIXME
-  ((fa dont-care)
-   (fb dont-care)
-   (fc dont-care)))
+  ((set-fc (integer-to-double (double-to-bits (fop fb))))) ;FIXME (negative values are complemented)
+  ((fa 31)))
 
 (define-float-insn cvtst #x16 #x2ac
   ()					;FIXME
@@ -459,10 +452,8 @@
   ((nop)))
 
 (define-float-insn ftois #x1c #x078
-  ()					;FIXME
-  ((fa dont-care)
-   (fb 31)
-   (fc dont-care)))
+  ((set-rc (zex (single-to-bits (double-to-single (fop fa))))))	;FIXME
+  ((fb 31)))
 
 (define-float-insn ftoit #x1c #x070
   ((set-rc (double-to-bits (fop fa))))
@@ -506,10 +497,8 @@
 		   (shiftl (mask 0 15) (* (logand (op-b) 7) 8))))))
 
 (define-float-insn itofs #x14 #x004
-  ()					;FIXME
-  ((ra dont-care)
-   (rb 31)
-   (fc dont-care)))
+  ((set-fc (single-to-double (bits-to-single (long-op ra))))) ;FIXME
+  ((rb 31)))
 
 (define-float-insn itoft #x14 #x024
   ((set-fc (bits-to-double (op ra))))
@@ -756,5 +745,14 @@
 (define-mnemonic fmov (s d)
   (cpys s s d))
 
+(define-mnemonic fnegt (s d)
+  (cpysn s s d))
+
 (define-mnemonic mov (s d)
   (bis s s d))
+
+(define-mnemonic negq (s d)
+  (subq 31 s d))
+
+(define-mnemonic not (s d)
+  (ornot 31 s d))
