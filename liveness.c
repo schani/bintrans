@@ -166,7 +166,7 @@ compute_iterative_liveness (interpreter_t *intp, word_32 addr, word_32 *addrs, w
 
 	if (can_fall_through)
 	{
-	    entry = fragment_hash_get(last_addr + 4, &supplement);
+	    entry = fragment_hash_get(last_addr, &supplement);
 	    if (entry == 0)
 		*live_cr = *live_xer = *live_gpr = 0xffffffff;
 	    else

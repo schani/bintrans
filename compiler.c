@@ -1287,7 +1287,7 @@ alloc_native_reg_for_emu_reg (reg_t emu_reg, int current_insn_num, int insn_inde
 
     if (emu_regs[l].dirty
 #ifdef COLLECT_LIVENESS
-	&& emu_reg_live(l, block_insns[insn_index].live_cr, block_insns[insn_index].live_xer, block_insns[insn_index].live_gpr)
+	/* && emu_reg_live(l, block_insns[insn_index].live_cr, block_insns[insn_index].live_xer, block_insns[insn_index].live_gpr) */
 #endif
 	)
     {
@@ -2596,24 +2596,63 @@ compile_trace (word_32 *addrs, int length, unsigned char *preferred_alloced_inte
 
 #ifdef CROSSDEBUGGER
 void
-compare_register_sets (void)
+compare_register_sets (word_32 addr)
 {
     int diff = 0;
     int i;
 
 #if defined(EMU_PPC)
-    /*
+    word_32 live_cr, live_xer, live_gpr;
+
+#ifdef COLLECT_LIVENESS
+    fragment_hash_supplement_t *supplement;
+    fragment_hash_entry_t *entry = fragment_hash_get(addr, &supplement);
+
+    if (entry != 0)
+    {
+	live_cr = supplement->live_cr;
+	live_xer = supplement->live_xer;
+	live_gpr = supplement->live_gpr;
+    }
+    else
+#else
+	live_cr = live_xer = live_gpr = 0xffffffff;
+#endif
+
     for (i = 0; i < 5; ++i)
-	if (compiler_intp->regs_SPR[i] != debugger_intp->regs_SPR[i])
+    {
+	word_32 mask;
+
+	if (i == 1)
+	    mask = live_cr;
+	else if (i == 2)
+	    mask = live_xer;
+	else
+	    mask = 0xffffffff;
+
+	if ((compiler_intp->regs_SPR[i] & mask) != (debugger_intp->regs_SPR[i] & mask))
+	{
 	    diff = 1;
-    */
+	    printf("diff for spr%d\n", i);
+	}
+    }
     for (i = 0; i < 32; ++i)
     {
-	if (compiler_intp->regs_GPR[i] != debugger_intp->regs_GPR[i])
+	if ((live_gpr & (1 << i))
+	    && compiler_intp->regs_GPR[i] != debugger_intp->regs_GPR[i])
+	{
 	    diff = 1;
+	    printf("diff for gpr%d\n", i);
+	}
 	if (*(addr_t*)&compiler_intp->regs_FPR[i] != *(addr_t*)&debugger_intp->regs_FPR[i])
+	{
 	    diff = 1;
+	    printf("diff for fpr%d\n", i);
+	}
     }
+
+    if (diff)
+	printf("liveness      cr: %08x  xer: %08x  gpr: %08x\n", live_cr, live_xer, live_gpr);
 #elif defined(EMU_I386)
     /*
     if (compiler_intp->regs_SPR[0] != debugger_intp->regs_SPR[0])
@@ -2717,7 +2756,7 @@ compile_fragment_if_needed (word_32 addr, unsigned char *preferred_alloced_integ
 	interpret_insn(debugger_intp);
     trace_mem = 0;
     move_regs_compiler_to_interpreter(compiler_intp);
-    compare_register_sets();
+    compare_register_sets(addr);
     compare_mem_writes(debugger_intp, compiler_intp);
     assert(debugger_intp->pc == addr);
 #endif

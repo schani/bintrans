@@ -70,7 +70,7 @@ void emit (word_32 insn);
 #define FIELD_REG_BIT      0x80000000
 
 #ifdef CROSSDEBUGGER
-void compare_register_sets (void);
+void compare_register_sets (word_32 addr);
 #endif
 
 /* liveness.c */

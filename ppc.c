@@ -886,7 +886,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 	case SYSCALL_EXIT :
 	    printf("exit (%d)\n", arg1);
 	    printf("%ld insn executed\n", intp->insn_count);
-#ifdef COMPILER
+#ifdef NEED_COMPILER
 	    print_compiler_stats();
 #endif
 #ifdef PROFILE_LOOPS
