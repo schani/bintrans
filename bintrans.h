@@ -1,7 +1,7 @@
 #include <unistd.h>
 
 #include "target_arch.h"
-#include "ppc_defines.h"
+#include "emu_arch.h"
 
 #if defined(INTERPRETER) || defined(DEBUGGER) || defined(CROSSDEBUGGER)
 #define NEED_INTERPRETER
@@ -11,8 +11,21 @@
 #endif
 
 word_32 leading_zeros (word_32);
-word_32 mask (word_32 begin, word_32 end);
+word_32 mask_32 (word_32 begin, word_32 end);
+word_64 mask_64 (word_32 begin, word_32 end);
 word_32 maskmask (word_32 width, word_32 num, word_32 mask);
+word_32 addcarry_32 (word_32 op1, word_32 op2);
+word_32 addcarry_16 (word_16 op1, word_16 op2);
+word_32 addcarry_8 (word_8 op1, word_8 op2);
+word_32 subcarry_32 (word_32 op1, word_32 op2);
+word_32 subcarry_16 (word_16 op1, word_16 op2);
+word_32 subcarry_8 (word_8 op1, word_8 op2);
+word_32 addoverflow_32 (word_32 op1, word_32 op2);
+word_32 addoverflow_16 (word_16 op1, word_16 op2);
+word_32 addoverflow_8 (word_8 op1, word_8 op2);
+
+int can_inv_maskmask (int width, word_64 value);
+word_64 inv_maskmask (int width, word_64 value);
 
 /* asm routines */
 void flush_icache (void);
@@ -49,7 +62,11 @@ void c_stub (void);
 #define PPC_PAGE_ALIGN(a)      (((a)+PPC_PAGE_SIZE-1)&~PPC_PAGE_MASK)
 #define PPC_PAGE_ALIGN_DOWN(a) ((a)&~PPC_PAGE_MASK)
 
+#if defined(EMU_PPC)
 #define MMAP_START 0x30000000
+#elif defined(EMU_I386)
+#define MMAP_START 0x40000000
+#endif
 
 typedef struct
 {
@@ -73,7 +90,7 @@ typedef struct
     int have_jumped;
     int trace;
     breakpoint_t *breakpoints;
-    PPC_REGISTER_SET;
+    EMU_REGISTER_SET;
     word_32 pc;
     page_t *pagetable[LEVEL1_SIZE];
 } interpreter_t;
@@ -114,6 +131,9 @@ word_64 emulated_mem_get_64 (interpreter_t *intp, word_32 addr);
 #define mem_get_32(intp,addr)          ((intp)->direct_memory ? direct_mem_get_32((addr)) : emulated_mem_get_32((intp),(addr)))
 #define mem_get_64(intp,addr)          ((intp)->direct_memory ? direct_mem_get_64((addr)) : emulated_mem_get_64((intp),(addr)))
 
+word_16 mem_get_16_unaligned (interpreter_t *intp, word_32 addr);
+word_32 mem_get_32_unaligned (interpreter_t *intp, word_32 addr);
+
 ssize_t read_all (int fd, byte *buf, size_t count);
 
 word_32 copy_file_to_mem (interpreter_t *intp, int fd, word_32 addr, word_32 len, word_32 offset, int reset);
@@ -142,7 +162,27 @@ void print_compiler_stats (void);
 void move_ppc_regs_interpreter_to_compiler (interpreter_t *intp);
 void move_ppc_regs_compiler_to_interpreter (interpreter_t *intp);
 
-/* theser are from ppc_interpreter.c */
+/* these are from ppc_interpreter.c */
 void interpret_ppc_insn (interpreter_t *intp);
 void dump_ppc_registers (interpreter_t *intp);
 void disassemble_ppc_insn (word_32 insn, word_32 addr);
+
+/* from i386.c */
+void interpret_i386_insn (interpreter_t *intp);
+void dump_i386_registers (interpreter_t *intp);
+void setup_i386_registers (interpreter_t *intp, word_32 stack_bottom);
+
+/* from unaligned.c */
+void init_unaligned (void);
+
+#if defined(EMU_PPC)
+#define interpret_insn       interpret_ppc_insn
+#define dump_registers       dump_ppc_registers
+#define setup_registers      setup_ppc_registers
+#elif defined(EMU_I386)
+#define interpret_insn       interpret_i386_insn
+#define dump_registers       dump_i386_registers
+#define setup_registers      setup_i386_registers
+#else
+#error no interpreter specified
+#endif

@@ -62,7 +62,7 @@
     (if imm-form
 	`(progn
 	  ,reg-form
-	  (define-insn ,(intern (string-concat (symbol-name name) "_IMM"))
+	  (define-insn ,(intern (concatenate 'string (symbol-name name) "_IMM"))
 	      ((opcd ,opcd)
 	       (operate-function ,function)
 	       (imm-select 1)
@@ -187,8 +187,8 @@
 (define-insn-macro mem-src ()
   (mem (+ (op rb) (sex memory-disp))))
 
-(define-insn-macro set-mem (width value)
-  (set (mem (+ (op rb) (sex memory-disp)) width) value))
+(define-insn-macro set-mem (w value)
+  (set (width w (mem (+ (op rb) (sex memory-disp)))) value))
 
 ;;;; insns
 
@@ -405,7 +405,7 @@
   ((set-rc (shiftl (op ra) (* (logand (op-b) 7) 8)))))
 
 (define-operate-insn extql #x12 #x36
-  ((set-rc (shiftr (op ra) (* (logand (op-b) 7) 8)) (mask 0 31))))
+  ((set-rc (logand (shiftr (op ra) (* (logand (op-b) 7) 8)) (mask 0 31)))))
 
 (define-operate-insn extwh #x12 #x5a
   ((set-rc (logand (shiftl (op ra) (* (logand (op-b) 7) 8)) (mask 0 15)))))

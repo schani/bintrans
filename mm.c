@@ -281,10 +281,17 @@ emulated_mem_set_32 (interpreter_t *intp, word_32 addr, word_32 value)
     {
 	printf("unaligned write 32 access at 0x%08x (pc=0x%08x)\n", addr, intp->pc);
 
+#ifdef EMU_BIG_ENDIAN
 	emulated_mem_set_8(intp, addr, value >> 24);
 	emulated_mem_set_8(intp, addr + 1, (value >> 16) & 0xff);
 	emulated_mem_set_8(intp, addr + 2, (value >> 8) & 0xff);
 	emulated_mem_set_8(intp, addr + 3, value & 0xff);
+#else
+	emulated_mem_set_8(intp, addr + 3, value >> 24);
+	emulated_mem_set_8(intp, addr + 2, (value >> 16) & 0xff);
+	emulated_mem_set_8(intp, addr + 1, (value >> 8) & 0xff);
+	emulated_mem_set_8(intp, addr, value & 0xff);
+#endif
     }
 }
 
@@ -293,7 +300,9 @@ emulated_mem_set_8 (interpreter_t *intp, word_32 addr, word_32 value)
 {
     page_t *page;
 
+#ifdef DIFFERENT_BYTEORDER
     addr ^= 3;
+#endif
 
     page = get_page(intp, addr);
 
@@ -316,8 +325,13 @@ emulated_mem_set_16 (interpreter_t *intp, word_32 addr, word_16 value)
     if ((addr & 1) != 0)
 	printf("unaligned write 16 access at 0x%08x (pc=0x%08x)\n", addr, intp->pc);
 
+#ifdef EMU_BIG_ENDIAN
     emulated_mem_set_8(intp, addr, value >> 8);
     emulated_mem_set_8(intp, addr + 1, value & 0xff);
+#else
+    emulated_mem_set_8(intp, addr + 1, value >> 8);
+    emulated_mem_set_8(intp, addr, value & 0xff);
+#endif
 }
 
 void
@@ -325,8 +339,41 @@ emulated_mem_set_64 (interpreter_t *intp, word_32 addr, word_64 value)
 {
     assert((addr & PPC_PAGE_MASK) + 8 <= PPC_PAGE_SIZE);
 
+#ifdef EMU_BIG_ENDIAN
     emulated_mem_set_32(intp, addr, value >> 32);
     emulated_mem_set_32(intp, addr + 4, value & 0xffffffff);
+#else
+    emulated_mem_set_32(intp, addr + 4, value >> 32);
+    emulated_mem_set_32(intp, addr, value & 0xffffffff);
+#endif
+}
+
+word_16
+mem_get_16_unaligned (interpreter_t *intp, word_32 addr)
+{
+#ifdef EMU_BIG_ENDIAN
+    return (word_16)mem_get_8(intp, addr) << 8
+	| (word_16)mem_get_8(intp, addr + 1);
+#else
+    return (word_16)mem_get_8(intp, addr + 1) << 8
+	| (word_16)mem_get_8(intp, addr);
+#endif
+}
+
+word_32
+mem_get_32_unaligned (interpreter_t *intp, word_32 addr)
+{
+#ifdef EMU_BIG_ENDIAN
+    return (word_32)mem_get_8(intp, addr) << 24
+	| (word_32)mem_get_8(intp, addr + 1) << 16
+	| (word_32)mem_get_8(intp, addr + 2) << 8
+	| (word_32)mem_get_8(intp, addr + 3);
+#else
+    return (word_32)mem_get_8(intp, addr + 3) << 24
+	| (word_32)mem_get_8(intp, addr + 2) << 16
+	| (word_32)mem_get_8(intp, addr + 1) << 8
+	| (word_32)mem_get_8(intp, addr);
+#endif
 }
 
 void
@@ -404,12 +451,18 @@ emulated_mem_get_8 (interpreter_t *intp, word_32 addr)
 {
     page_t *page;
 
+#ifdef DIFFERENT_BYTEORDER
     addr ^= 3;
+#endif
     page = get_page(intp, addr);
 
     if (page == 0)
     {
-	segfault(intp, addr ^ 3);
+	segfault(intp, addr
+#ifdef DIFFERENT_BYTEORDER
+		 ^ 3
+#endif
+		 );
 	return 0;
     }
     else
@@ -420,9 +473,13 @@ word_16
 emulated_mem_get_16 (interpreter_t *intp, word_32 addr)
 {
     if ((addr & 1) != 0)
-	printf("unaligned write 16 access at 0x%08x (pc=0x%08x)\n", addr, intp->pc);
+	printf("unaligned read 16 access at 0x%08x (pc=0x%08x)\n", addr, intp->pc);
 
+#ifdef EMU_BIG_ENDIAN
     return ((word_16)emulated_mem_get_8(intp, addr) << 8) | emulated_mem_get_8(intp, addr + 1);
+#else
+    return ((word_16)emulated_mem_get_8(intp, addr + 1) << 8) | emulated_mem_get_8(intp, addr);
+#endif
 }
 
 word_64
@@ -430,7 +487,11 @@ emulated_mem_get_64 (interpreter_t *intp, word_32 addr)
 {
     assert((addr & PPC_PAGE_MASK) + 8 <= PPC_PAGE_SIZE);
 
+#ifdef EMU_BIG_ENDIAN
     return ((word_64)emulated_mem_get_32(intp, addr) << 32) | emulated_mem_get_32(intp, addr + 4);
+#else
+    return ((word_64)emulated_mem_get_32(intp, addr + 4) << 32) | emulated_mem_get_32(intp, addr);
+#endif
 }
 
 word_32
@@ -530,6 +591,7 @@ mmap_anonymous (interpreter_t *intp, word_32 len, int flags, int fixed, word_32 
     return addr;
 }
 
+#ifdef DIFFERENT_BYTEORDER
 void
 unbigendify_mem (word_32 *p, word_32 len)
 {
@@ -540,6 +602,7 @@ unbigendify_mem (word_32 *p, word_32 len)
     for (i = 0; i < len; ++i)
 	p[i] = ntohl(p[i]);
 }
+#endif
 
 ssize_t
 read_all (int fd, byte *buf, size_t count)
@@ -586,7 +649,9 @@ copy_file_to_mem (interpreter_t *intp, int fd, word_32 addr, word_32 len, word_3
 			  MIN(MIN(PPC_PAGE_SIZE, len - num_read), PPC_PAGE_SIZE - ((addr + num_read) & PPC_PAGE_MASK)));
 	assert(result != -1);
 
+#ifdef DIFFERENT_BYTEORDER
 	unbigendify_mem((word_32*)(page->mem + ((addr + num_read) & PPC_PAGE_MASK)), result);
+#endif
 
 	if (result == 0)
 	    break;

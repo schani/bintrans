@@ -1,6 +1,24 @@
 ;;;; settings
 
+(proclaim '(optimize (speed 0) (safety 3) (space 0) #+cmu (debug 3) (compilation-speed 0)))
+
 (setf *print-circle* t)			;we have cyclic data structures
+
+#+gcl (defmacro destructuring-bind (pattern expr &rest body)
+	(labels ((collect-paths (path pattern)
+		   (cond ((null pattern)
+			  nil)
+			 ((symbolp pattern)
+			  (list `(,pattern ,path)))
+			 ((consp pattern)
+			  (append (collect-paths `(car ,path) (car pattern))
+				  (collect-paths `(cdr ,path) (cdr pattern))))
+			 (t
+			  (error "illegal pattern ~A~%" pattern)))))
+	  (let ((expr-name (gensym)))
+	    `(let* ((,expr-name ,expr)
+		    ,@(collect-paths expr-name pattern))
+	      ,@body))))
 
 (defmacro dofromto (spec &rest body)
   (destructuring-bind (var from to)
@@ -53,6 +71,40 @@
 	  (values (cons val1 rest1)
 		  (cons val2 rest2))))))
 
+;;; the same with 3.
+
+(defun mapcar-mapcar-mapcar (func &rest lists)
+  (if (null (car lists))
+      (values nil nil)
+      (multiple-value-bind (val1 val2 val3)
+	  (apply func (mapcar #'car lists))
+	(multiple-value-bind (rest1 rest2 rest3)
+	    (apply #'mapcar-mapcar func (mapcar #'cdr lists))
+	  (values (cons val1 rest1)
+		  (cons val2 rest2)
+		  (cons val3 rest3))))))
+
+(defun separate-keywords (lst)
+  (cond ((null lst)
+	 (values nil nil))
+	((keywordp (car lst))
+	 (let ((keyword (car lst))
+	       (value (cadr lst))
+	       (rest (cddr lst)))
+	   (multiple-value-bind (lst keywords)
+	       (separate-keywords rest)
+	     (values lst (cons keyword (cons value keywords))))))
+	(t
+	 (multiple-value-bind (rest keywords)
+	     (separate-keywords (cdr lst))
+	   (values (cons (car lst) rest) keywords)))))
+
+(defun all-equal (eq list)
+  (if (or (null list) (null (cdr list)))
+      t
+      (and (funcall eq (car list) (cadr list))
+	   (all-equal eq (cdr list)))))
+
 (defun choices (&rest choices)
   choices)
 
@@ -71,7 +123,7 @@
   (apply #'append choices-lists))
 
 (defun dcs (x)
-  (string-downcase (symbol-name x)))
+  (substitute #\_ #\- (string-downcase (symbol-name x))))
 
 (defstruct insn
   name
@@ -105,7 +157,8 @@
   begin
   end)
 
-(defvar *expand-transformation* nil)
+(defvar *expanding-transformations* nil)
+(defvar *cse* nil)
 
 (defstruct expr
   kind
@@ -114,7 +167,9 @@
   (width nil)
   (operands nil)
   (alternatives-value nil)
-  (expanded-transformation-p *expand-transformation*))
+  (transformations *expanding-transformations*)
+  (widened nil)
+  (cse-p *cse*))
 
 (defmacro expr-case (expr &rest choices)
   (let ((expr-name (gensym)))
@@ -165,6 +220,7 @@
 (defvar *tmp-num* 0)
 
 (defvar *take-fields-from-variables* nil)
+(defvar *insn-field-accessor* #'(lambda (name begin end) (code-for-field "insn" begin end)))
 
 (defstruct transformation
   pattern
@@ -174,13 +230,13 @@
 
 (defvar *used-target-insns* :all)
 
-;;; returns nil if not successful or t and a list of the bindings
-;;; otherwise.
+;;; returns nil if not successful or t, a list of the bindings and a
+;;; list of all transformations otherwise.
 (defun match-sexpr (pattern expr)
   (cond ((integerp pattern)
 	 (if (or (and (integerp expr) (= pattern expr))
 		 (and (eq (expr-kind expr) 'integer) (= pattern (first (expr-operands expr)))))
-	     (values t nil)
+	     (values t nil nil)
 	     nil))
 	((eq (first pattern) 'match)
 	 (let* ((name (second pattern))
@@ -188,23 +244,25 @@
 		(width (getf props :width))
 		(type (getf props :type)))
 	   (cond ((not (expr-p expr))
-		  (values t (list (cons name expr))))
+		  (values t (list (cons name expr)) nil))
 		 ((and (or (null width) (symbolp width) (= width (expr-width expr)))
 		       (or (null type) (eq type (expr-type expr))))
 		  (values t (cons (cons name expr)
 				  (if (and (not (null width)) (symbolp width))
 				      (list (cons width (expr-width expr)))
-				      nil))))
+				      nil))
+			  (expr-transformations expr)))
 		 (t
 		  nil))))
 	(t
 	 (let ((kind (first pattern))
 	       (operands (rest pattern)))
 	   (if (eq kind (expr-kind expr))
-	       (multiple-value-bind (successes bindings)
-		   (mapcar-mapcar #'match-sexpr operands (expr-operands expr))
+	       (multiple-value-bind (successes bindings transformations)
+		   (mapcar-mapcar-mapcar #'match-sexpr operands (expr-operands expr))
 		 (if (notany #'null successes)
-		     (values t (apply #'append bindings))
+		     (values t (apply #'append bindings)
+			     (reduce #'union (cons (expr-transformations expr) transformations)))
 		     nil)))))))
 
 ;;; returns a list of the variables bound if pattern is matched
@@ -457,18 +515,21 @@
 	    ((integer float field string pc addr input) t)
 	    ((mem register subregister numbered-subregister) nil)
 	    ((symbol) nil)		;FIXME
-	    ((let ignore set jump nop system-call call-pal not-implemented) nil)
+	    ((let case ignore set jump nop system-call call-pal not-implemented) nil)
 	    (t (every #'expr-constp (remove-if-not #'expr-p (expr-operands expr)))))))
   (expr-constp-value expr))
 
 (defun expr-alternatives (expr)
   (when (null (expr-alternatives-value expr))
-    (format t "alternativing ~A~%" expr)
+;    (format t "alternativing ~A~%" expr)
     (setf (expr-alternatives-value expr)
-	  (if (or (expr-constp expr) (expr-expanded-transformation-p expr))
+	  (if (expr-constp expr)
 	      (list expr)
 	      (cons expr (mapcar* #'(lambda (transformation)
-				      (apply-transformation transformation expr))
+				      (if (member transformation (expr-transformations expr))
+					  nil
+					  (let ((expr (apply-transformation transformation expr)))
+					    (if expr (simplify expr) nil))))
 				  *transformations*)))))
   (expr-alternatives-value expr))
 
@@ -558,536 +619,601 @@
 	(t
 	 nil)))
 
-(defun make-integer-expr (width value)
-  (make-expr :kind 'integer :type 'integer :width width :operands (list value)))
+(defun make-integer-expr (width value &key (transformations nil))
+  (make-expr :kind 'integer :type 'integer :width width :operands (list value) :transformations transformations))
 
 (defun register-number-expr (reg)
   (make-integer-expr (register-class-number-width (register-register-class reg))
 		     (register-number reg)))
 
-(defun generate-expr (expr &optional (bindings nil) (required-width nil) (required-type 'integer))
-  (labels ((match-width (width)
-	     (when (and (not (null required-width))
-			(/= width required-width))
-	       (error "width ~A should be ~A in ~A~%" width required-width expr)))
-	   (match-type (type)
-	     (when (and (not (null required-type))
-			(not (eq required-type type)))
-	       (error "type ~A should be ~A in ~A~%" type required-type expr)))
-	   (resolve-register (name-or-field class-name)
-	     (cond ((register-class-p class-name)
-		    (values name-or-field class-name (register-number-expr name-or-field)))
-		   ((registerp name-or-field)
-		    (let* ((register (lookup-register name-or-field))
-			   (class (register-register-class register)))
-		      (values register class (register-number-expr register))))
-		   (t
-		    (let ((class (lookup-register-class class-name)))
-		      (when (null class)
-			(error "unknown register class in ~A~%" expr))
-		      (values nil class (generate-expr name-or-field bindings))))))
-	   (resolve-toplevel-bindings (expr)
-	     (if (listp expr)
-		 (cons (car expr) (mapcar #'(lambda (x)
-					      (cond ((symbolp x)
-						     (let ((binding (cdr (assoc x bindings))))
-						       (if (and binding *expand-transformation*)
-							   binding
-							   x)))
-						    ((and (consp x) (eq (car x) 'eval))
-						     (progv (mapcar #'car bindings) (mapcar #'cdr bindings)
-						       (eval (second x))))
-						    (t
-						     x)))
-					  (cdr expr)))
-		 expr))
-	   (generate ()
-	     (let ((expr (resolve-toplevel-bindings expr)))
-	       (cond ((expr-p expr)
-		      expr)
-		     ((fieldp expr)
-		      (multiple-value-bind (begin end expr)
-			  (lookup-field expr)
-			expr))
-		     ((registerp expr)
-		      (let* ((register (lookup-register expr))
-			     (register-class (register-register-class register))
-			     (width (register-class-width register-class))
-			     (type (register-class-type register-class)))
-			(make-expr :kind 'register :type type :width width :operands (list register nil nil))))
-		     ((subregisterp expr)
-		      (let* ((subregister (lookup-subregister expr))
-			     (register (subregister-register subregister))
-			     (begin (subregister-begin subregister))
-			     (end (subregister-end subregister))
-			     (width (1+ (- end begin)))
-			     (class (register-register-class register))
-			     (type (register-class-type class)))
-			(make-expr :kind 'subregister :type type :width width
-				   :operands (list register class (register-number-expr register) begin end t))))
-		     ((integerp expr)
-		      (make-expr :kind 'integer :type 'integer :width (or required-width (machine-word-bits *this-machine*)) :operands (list expr)))
-		     ((floatp expr)
-		      (make-expr :kind 'float :type 'float :width (or required-width (machine-double-bits *this-machine*)) :operands (list expr)))
-		     ((stringp expr)
-		      (make-expr :kind 'string :type 'string :width nil :operands (list expr)))
-		     ((eq expr 'pc)
-		      (make-expr :kind 'pc :type 'integer :width (machine-word-bits *this-machine*)))
-		     ((eq expr 'addr)
-		      (make-expr :kind 'addr :type 'integer :width (machine-word-bits *this-machine*)))
-		     ((symbolp expr)
-		      (let ((binding (cdr (assoc expr bindings))))
-			(if (null binding)
-			    (error "unknown variable ~A~%" expr)
-			    (if *expand-transformation*
-				binding
-				(make-expr :kind 'symbol :type (expr-type binding) :width (expr-width binding) :operands (list expr))))))
-		     ((consp expr)
-		      (case (first expr)
-			(ignore
-			 (unless (and (null required-width)
-				      (null required-type))
-			   (error "ignore has no return value~%"))
-			 (make-expr :kind 'ignore :operands (list (generate-expr (second expr) bindings))))
-			(widen
-			 (let ((op (generate-expr (second expr) bindings))
-			       (*expand-transformation* nil))
-			   (64bitify op)))
-			(let
-			    (unless (and (null required-width)
-					 (null required-type))
-			      (error "let has no return value~%"))
-			  (let ((new-bindings (mapcar #'(lambda (binding)
-							  (destructuring-bind (name value)
-							      binding
-							    (let ((expr (generate-expr value bindings nil nil)))
-							      (cons name expr))))
-						      (second expr))))
-			    (make-expr :kind 'let :type nil :width nil
-				       :operands (list new-bindings (mapcar #'(lambda (expr)
-										(generate-expr expr (append new-bindings bindings)
-											       nil nil))
-									    (cddr expr))))))
-			(set
-			 (unless (and (null required-width)
-				      (null required-type))
-			   (error "set has no return value~%"))
-			 (let ((lvalue (resolve-toplevel-bindings (second expr))))
-			   (cond ((subregisterp lvalue)
-				  (let* ((subregister (lookup-subregister lvalue))
-					 (begin (subregister-begin subregister))
-					 (end (subregister-end subregister))
-					 (width (1+ (- end begin))))
-				    (make-expr :kind 'set
-					       :operands (list (make-expr :kind 'subregister :type 'integer :width width
-									  :operands (list subregister))
-							       (generate-expr (third expr) bindings width 'integer)))))
-				 (t
-				  (case (first lvalue)
-				    (reg
-				     (multiple-value-bind (register class number)
-					 (resolve-register (second lvalue) (third lvalue))
-				       (let ((type (register-class-type class))
-					     (width (register-class-width class)))
-					 (make-expr :kind 'set
-						    :operands (list (make-expr :kind 'register :type type :width width
-									       :operands (list register class number))
-								    (generate-expr (third expr) bindings width type))))))
-				    (target-register
-				     (let* ((register (second lvalue))
-					    (class (third lvalue))
-					    (type (register-class-type class))
-					    (width (register-class-width class)))
-				       (make-expr :kind 'set
-						  :operands (list (make-expr :kind 'target-register :type type :width width
-									     :operands (list register class))
-								  (generate-expr (third expr) bindings width type)))))
-				    (numbered-subreg
-				     (let ((width (second lvalue)))
-				       (multiple-value-bind (register class number)
-					   (resolve-register (fourth lvalue) (fifth lvalue))
-					 (unless (eq (register-class-type class) 'integer)
-					   (error "numbered subregisters are only allowed of integer registers: ~A~%" expr))
-					 (let ((index (generate-expr (third lvalue) bindings)))
-					   (make-expr :kind 'set
-						      :operands (list (make-expr :kind 'numbered-subregister :type 'integer :width width
-										 :operands (list register class number width index))
-								      (generate-expr (third expr) bindings width)))))))
-				    (mem
-				     (let ((width (or (third lvalue) (machine-word-bits *this-machine*))))
-				       (make-expr :kind 'set
-						  :operands (list (make-expr :kind 'mem :type 'integer :width width
-									     :operands (list width
-											     (generate-expr (second lvalue) bindings
-													    (machine-word-bits *this-machine*))))
-								  (generate-expr (third expr) bindings width)))))
-				    (t
-				     (error "not an lvalue: ~A~%" lvalue)))))))
-			(width
-			 (let ((width (second expr)))
-			   (generate-expr (third expr) bindings width (or required-type 'integer))))
-			(promote
-			 (let ((width (second expr))
-			       (value (generate-expr (third expr) bindings)))
-			   (make-expr :kind 'promote :type 'integer :width width :operands (list value))))
-			(jump-relative
-			 (unless (and (null required-width)
-				      (null required-type))
-			   (error "jump-relative has no return value~%"))
-			 (let ((offset (generate-expr (second expr) bindings (machine-word-bits *this-machine*))))
-			   (make-expr :kind 'jump
-				      :operands (list (make-expr :kind '+ :type 'integer :width (machine-word-bits *this-machine*)
-								 :operands (list (make-expr :kind 'pc) offset))))))
-			(jump-absolute
-			 (unless (and (null required-width)
-				      (null required-type))
-			   (error "jump-absolute has no return value~%"))
-			 (make-expr :kind 'jump
-				    :operands (list (generate-expr (second expr) bindings (machine-word-bits *this-machine*)))))
-			(if
-			 (let ((cond (generate-expr (second expr) bindings))
-			       (cons (generate-expr (third expr) bindings required-width required-type))
-			       (alt (generate-expr (fourth expr) bindings required-width required-type)))
-			   (unless (and (eql (expr-width cons) (expr-width alt))
-					(eq (expr-type cons) (expr-type alt)))
-			     (error "widths and/or types do not match in ~A~%" expr))
-			   (when (and (not (null required-width))
-				      (null (expr-width cons)))
-			     (error "width should be ~A in ~A~%" required-width expr))
-			   (when (and (not (null required-type))
-				      (null (expr-type cons)))
-			     (error "type should be ~A in ~A~%" required-type expr))
-			   (make-expr :kind 'if :type (expr-type cons) :width (expr-width cons)
-				      :operands (list cond cons alt))))
-			((= =f < <s <f <= <=s <=f > >s >f >= >=s >=f)
-			 (let* ((op-type (if (member (first expr) '(=f <f <=f >f >=f)) 'float 'integer))
-				(op1 (generate-expr (second expr) bindings nil op-type))
-				(op2 (generate-expr (third expr) bindings nil op-type)))
-			   (when (/= (expr-width op1) (expr-width op2))
-			     (error "widths do not match in ~A~%" expr))
-			   (make-expr :kind (first expr) :type 'integer :width (machine-word-bits *this-machine*) :operands (list op1 op2))))
-			(bit-set-p
-			 (let ((value (generate-expr (second expr) bindings))
-			       (bit (generate-expr (third expr) bindings)))
-			   (make-expr :kind 'bit-set-p :type 'integer :width (machine-word-bits *this-machine*)
-				      :operands (list value bit))))
-			(reg
-			 (multiple-value-bind (register class number)
-			     (resolve-register (second expr) (third expr))
-			   (let ((type (register-class-type class))
-				 (width (register-class-width class)))
-			     (make-expr :kind 'register :type type :width width :operands (list register class number)))))
-			(subreg
-			 (let* ((begin (second expr))
-				(end (third expr))
-				(width (1+ (- end begin))))
-			   (multiple-value-bind (register class number)
-			       (resolve-register (fourth expr) (fifth expr))
-			     (unless (eq (register-class-type class) 'integer)
-			       (error "only subregisters of integer registers are allowed: ~A~%" expr))
-			     (make-expr :kind 'subregister :type 'integer :width width
-					:operands (list register class number begin end nil)))))
-			(numbered-subreg
-			 (let ((width (second expr)))
-			   (multiple-value-bind (register class number)
-			       (resolve-register (fourth expr) (fifth expr))
-			     (unless (eq (register-class-type class) 'integer)
-			       (error "only numbered subregisters of integer registers are allowed: ~A~%" expr))
-			     (make-expr :kind 'numbered-subregister :type 'integer :width width
-					:operands (list register class number width (generate-expr (third expr) bindings))))))
-			(mem
-			 (when (null required-width)
-			   (error "no required width in ~A~%" expr))
-			 (make-expr :kind 'mem :type 'integer :width (or required-width (machine-word-bits *this-machine*))
-				    :operands (list (generate-expr (second expr) bindings (machine-word-bits *this-machine*)))))
-			((zex sex)
-			 (when (null required-width)
-			   (error "no required width in ~A~%" expr))
-			 (let ((op (generate-expr (second expr) bindings)))
-			   (make-expr :kind (first expr) :type 'integer :width required-width :operands (list op))))
-			((+ - * *s / /s logor logand logxor)
-			 (let ((op1 (generate-expr (second expr) bindings required-width))
-			       (op2 (generate-expr (third expr) bindings required-width)))
-			   (when (/= (expr-width op1) (expr-width op2))
-			     (error "widths do not match in ~A" expr))
-			   (make-expr :kind (first expr) :type 'integer :width (expr-width op1)
-				      :operands (list op1 op2))))
-			((+f -f *f /f)
-			 (let ((op1 (generate-expr (second expr) bindings required-width 'float))
-			       (op2 (generate-expr (third expr) bindings required-width 'float)))
-			   (when (/= (expr-width op1) (expr-width op2))
-			     (error "widths do not match in ~A" expr))
-			   (make-expr :kind (first expr) :type 'float :width (expr-width op1)
-				      :operands (list op1 op2))))
-			(+carry
-			 (let ((op1 (generate-expr (second expr) bindings (machine-word-bits *this-machine*)))
-			       (op2 (generate-expr (third expr) bindings (machine-word-bits *this-machine*))))
-			   (make-expr :kind '+carry :type 'integer :width 1
-				      :operands (list op1 op2))))
-			((neg bitneg not)
-			 (let ((op (generate-expr (second expr) bindings (machine-word-bits *this-machine*))))
-			   (make-expr :kind (first expr) :type 'integer :width (machine-word-bits *this-machine*)
-				      :operands (list op))))
-			((fneg sqrt)
-			 (let* ((op (generate-expr (second expr) bindings required-width 'float))
-				(width (expr-width op)))
-			   (make-expr :kind (first expr) :type 'float :width width :operands (list op))))
-			((shiftl shiftr rotl)
-			 (let* ((op1 (generate-expr (second expr) bindings required-width))
-				(op2 (generate-expr (third expr) bindings))
-				(width (expr-width op1)))
-			   (make-expr :kind (first expr) :type 'integer :width width
-				      :operands (list op1 op2))))
-			(ashiftr
-			 (let ((op1 (generate-expr (second expr) bindings (machine-word-bits *this-machine*)))
-			       (op2 (generate-expr (third expr) bindings)))
-			   (make-expr :kind 'ashiftr :type 'integer :width (machine-word-bits *this-machine*)
-				      :operands (list op1 op2))))
-			(mask
-			 (let ((op1 (generate-expr (second expr) bindings))
-			       (op2 (generate-expr (third expr) bindings)))
-			   (make-expr :kind 'mask :type 'integer :width (or required-width (machine-word-bits *this-machine*))
-				      :operands (list op1 op2))))
-			(maskmask
-			 (let* ((bit-width (second expr))
-				(mask (generate-expr (third expr) bindings))
-				(mask-width (expr-width mask))
-				(width (* bit-width mask-width)))
-			   (make-expr :kind 'maskmask :type 'integer :width width
-				      :operands (list bit-width mask))))
-			((leading-zeros trailing-zeros population)
-			 (let ((op (generate-expr (second expr) bindings (machine-word-bits *this-machine*))))
-			   (make-expr :kind (first expr) :type 'integer :width (or required-width (machine-word-bits *this-machine*))
-				      :operands (list op))))
-			((single-to-double double-to-single)
-			 (multiple-value-bind (old-width new-width)
-			     (if (eq (first expr) 'single-to-double)
-				 (values (machine-single-bits *this-machine*) (machine-double-bits *this-machine*))
-				 (values (machine-double-bits *this-machine*) (machine-single-bits *this-machine*)))
-			   (let ((value (generate-expr (second expr) bindings old-width 'float)))
-			     (make-expr :kind 'convert-float :type 'float :width new-width
-					:operands (list value)))))
-			((bits-to-single bits-to-double)
-			 (let* ((width (if (eq (first expr) 'bits-to-single) (machine-single-bits *this-machine*) (machine-double-bits *this-machine*)))
-				(value (generate-expr (second expr) bindings width 'integer)))
-			   (make-expr :kind 'bits-to-float :type 'float :width width
-				      :operands (list value))))
-			((single-to-bits double-to-bits)
-			 (let* ((width (if (eq (first expr) 'single-to-bits) (machine-single-bits *this-machine*) (machine-double-bits *this-machine*)))
-				(value (generate-expr (second expr) bindings width 'float)))
-			   (make-expr :kind 'float-to-bits :type 'integer :width width
-				      :operands (list value))))
-			((single-to-integer double-to-integer)
-			 (let* ((float-width (if (eq (first expr) 'single-to-integer)
-						 (machine-single-bits *this-machine*)
-						 (machine-double-bits *this-machine*)))
-				(integer-width (or required-width (machine-word-bits *this-machine*)))
-				(value (generate-expr (second expr) bindings float-width 'float)))
-			   (make-expr :kind 'float-to-integer :type 'integer :width integer-width
-				      :operands (list value))))
-			((integer-to-single integer-to-double)
-			 (let* ((integer-width (or required-width (machine-word-bits *this-machine*)))
-				(float-width (if (eq (first expr) 'integer-to-single)
-						 (machine-single-bits *this-machine*)
-						 (machine-double-bits *this-machine*)))
-				(value (generate-expr (second expr) bindings integer-width 'integer)))
-			   (make-expr :kind 'integer-to-float :type 'float :width float-width
-				      :operands (list value))))
-			(nop
-			 (make-expr :kind 'nop))
-			(syscall
-			 (make-expr :kind 'system-call))
-			(call-pal
-			 (let ((value (generate-expr (second expr) bindings (machine-word-bits *this-machine*))))
-			   (make-expr :kind 'call-pal :operands (list value))))
-			(not-implemented
-			 (make-expr :kind 'not-implemented))
-			(t
-			 (error "unknown pattern ~A~%" (first expr)))))
-		     (t
-		      (error "illegal expr ~A~%" expr))))))
-    (let ((result (generate)))
-      (match-type (expr-type result))
-      (match-width (expr-width result))
-      result)))
+(defvar *generate-backtrace* nil)
 
-(defun generate-interpreter (expr bindings)
+(defun generate-expr (expr &optional (bindings nil) (required-width nil) (required-type 'integer))
+  (multiple-value-bind (expr keywords)
+      (if (listp expr)
+	  (separate-keywords expr)
+	  (values expr nil))
+    (let ((*cse* (getf keywords :cse nil))
+	  (*generate-backtrace* (cons expr *generate-backtrace*)))
+      (labels ((match-width (width)
+		 (when (and (not (null required-width))
+			    (/= width required-width))
+		   (error "width ~A should be ~A in ~A~%" width required-width expr)))
+	       (match-type (type)
+		 (when (and (not (null required-type))
+			    (not (eq required-type type)))
+		   (error "type ~A should be ~A in ~A~%" type required-type expr)))
+	       (resolve-register (name-or-field class-name)
+		 (cond ((register-class-p class-name)
+			(values name-or-field class-name (register-number-expr name-or-field)))
+		       ((registerp name-or-field)
+			(let* ((register (lookup-register name-or-field))
+			       (class (register-register-class register)))
+			  (values register class (register-number-expr register))))
+		       (t
+			(let ((class (lookup-register-class class-name)))
+			  (when (null class)
+			    (error "unknown register class in ~A~%" expr))
+			  (values nil class (generate-expr name-or-field bindings))))))
+	       (resolve-toplevel-bindings (expr)
+		 (if (listp expr)
+		     (cons (car expr) (mapcar #'(lambda (x)
+						  (cond ((symbolp x)
+							 (let ((binding (assoc x bindings)))
+							   (if (and binding *expanding-transformations*)
+							       (cdr binding)
+							       x)))
+							((and (consp x) (eq (car x) 'eval))
+							 (progv (append '(required-width required-type) (mapcar #'car bindings))
+							     (append (list required-width required-type) (mapcar #'cdr bindings))
+							   (eval (second x))))
+							(t
+							 x)))
+					      (cdr expr)))
+		     expr))
+	       (generate ()
+		 (let ((expr (resolve-toplevel-bindings expr)))
+		   (cond ((expr-p expr)
+			  expr)
+			 ((fieldp expr)
+			  (multiple-value-bind (begin end expr)
+			      (lookup-field expr)
+			    expr))
+			 ((registerp expr)
+			  (let* ((register (lookup-register expr))
+				 (register-class (register-register-class register))
+				 (width (register-class-width register-class))
+				 (type (register-class-type register-class)))
+			    (make-expr :kind 'register :type type :width width :operands (list register nil nil))))
+			 ((subregisterp expr)
+			  (let* ((subregister (lookup-subregister expr))
+				 (register (subregister-register subregister))
+				 (begin (subregister-begin subregister))
+				 (end (subregister-end subregister))
+				 (width (1+ (- end begin)))
+				 (class (register-register-class register))
+				 (type (register-class-type class)))
+			    (make-expr :kind 'subregister :type type :width width
+				       :operands (list register class (register-number-expr register) begin end t))))
+			 ((integerp expr)
+			  (make-expr :kind 'integer :type 'integer :width (or required-width (machine-word-bits *this-machine*)) :operands (list expr)))
+			 ((floatp expr)
+			  (make-expr :kind 'float :type 'float :width (or required-width (machine-double-bits *this-machine*)) :operands (list expr)))
+			 ((stringp expr)
+			  (make-expr :kind 'string :type 'string :width nil :operands (list expr)))
+			 ((eq expr 'pc)
+			  (make-expr :kind 'pc :type 'integer :width (machine-word-bits *this-machine*)))
+			 ((eq expr 'addr)
+			  (make-expr :kind 'addr :type 'integer :width (machine-word-bits *this-machine*)))
+			 ((symbolp expr)
+			  (let ((binding (cdr (assoc expr bindings))))
+			    (if (null binding)
+				(error "unknown variable ~A~%" expr)
+				(if *expanding-transformations*
+				    binding
+				    (make-expr :kind 'symbol :type (expr-type binding) :width (expr-width binding) :operands (list expr))))))
+			 ((consp expr)
+			  (case (first expr)
+			    (ignore
+			     (unless (and (null required-width)
+					  (null required-type))
+			       (error "ignore has no return value~%"))
+			     (make-expr :kind 'ignore :operands (list (generate-expr (second expr) bindings))))
+			    (widen
+			     (let ((op (generate-expr (second expr) bindings))
+				   (*expanding-transformations* nil))
+			       (if (and required-width (= required-width (machine-word-bits *source-machine*)))
+				   op
+				   (64bitify op))))
+			    (let
+				(unless (and (null required-width)
+					     (null required-type))
+				  (error "let has no return value~%"))
+			      (let ((new-bindings (mapcar #'(lambda (binding)
+							      (destructuring-bind (name value)
+								  binding
+								(let ((expr (generate-expr value bindings nil nil)))
+								  (cons name expr))))
+							  (second expr))))
+				(make-expr :kind 'let :type nil :width nil
+					   :operands (list new-bindings (mapcar #'(lambda (expr)
+										    (generate-expr expr (append new-bindings bindings)
+												   nil nil))
+										(cddr expr))))))
+			    (set
+			     (unless (and (null required-width)
+					  (null required-type))
+			       (error "set has no return value~%"))
+			     (let ((lvalue (generate-expr (second expr) bindings nil nil)))
+			       (make-expr :kind 'set :operands (list lvalue
+								     (generate-expr (third expr) bindings (expr-width lvalue) (expr-type lvalue))))))
+			    (width
+			     (let ((width (second expr)))
+			       (generate-expr (third expr) bindings width (or required-type 'integer))))
+			    (promote
+			     (let ((width (second expr))
+				   (value (generate-expr (third expr) bindings)))
+			       (make-expr :kind 'promote :type 'integer :width width :operands (list value))))
+			    (jump-relative
+			     (unless (and (null required-width)
+					  (null required-type))
+			       (error "jump-relative has no return value~%"))
+			     (let ((offset (generate-expr (second expr) bindings (machine-word-bits *this-machine*))))
+			       (make-expr :kind 'jump
+					  :operands (list (make-expr :kind '+ :type 'integer :width (machine-word-bits *this-machine*)
+								     :operands (list (make-expr :kind 'pc) offset))))))
+			    (jump-absolute
+			     (unless (and (null required-width)
+					  (null required-type))
+			       (error "jump-absolute has no return value~%"))
+			     (make-expr :kind 'jump
+					:operands (list (generate-expr (second expr) bindings (machine-word-bits *this-machine*)))))
+			    (if
+			     (let ((cond (generate-expr (second expr) bindings))
+				   (cons (generate-expr (third expr) bindings required-width required-type))
+				   (alt (generate-expr (fourth expr) bindings required-width required-type)))
+			       (unless (and (eql (expr-width cons) (expr-width alt))
+					    (eq (expr-type cons) (expr-type alt)))
+				 (error "widths and/or types do not match in ~A~%" expr))
+			       (when (and (not (null required-width))
+					  (null (expr-width cons)))
+				 (error "width should be ~A in ~A~%" required-width expr))
+			       (when (and (not (null required-type))
+					  (null (expr-type cons)))
+				 (error "type should be ~A in ~A~%" required-type expr))
+			       (make-expr :kind 'if :type (expr-type cons) :width (expr-width cons)
+					  :operands (list cond cons alt))))
+			    (case
+				(let ((value (generate-expr (second expr) bindings nil 'integer))
+				      (cases (mapcar #'(lambda (x)
+							 (cons (if (listp (car x)) (car x) (list (car x)))
+							       (generate-expr (cadr x) bindings required-width required-type)))
+						     (cddr expr))))
+				  (unless (all-equal #'eq (mapcar #'(lambda (x) (expr-type (cdr x))) cases))
+				    (error "types do not match in ~A" expr))
+				  (unless (all-equal #'= (mapcar #'(lambda (x) (expr-width (cdr x))) cases))
+				    (error "widths do not match in ~A" expr))
+				  (make-expr :kind 'case :type (expr-type (cdar cases)) :width (expr-width (cdar cases))
+					     :operands (list value cases))))
+			    (dowhile
+			     (let ((cond (generate-expr (second expr) bindings))
+				   (body (mapcar #'(lambda (x) (generate-expr x bindings nil nil)) (cddr expr))))
+			       (make-expr :kind 'dowhile :operands (list cond body))))
+			    ((= =f < <s <f <= <=s <=f > >s >f >= >=s >=f)
+			     (let* ((op-type (if (member (first expr) '(=f <f <=f >f >=f)) 'float 'integer))
+				    (op1 (generate-expr (second expr) bindings nil op-type))
+				    (op2 (generate-expr (third expr) bindings nil op-type)))
+			       (when (/= (expr-width op1) (expr-width op2))
+				 (error "widths do not match in ~A~%" expr))
+			       (make-expr :kind (first expr) :type 'integer :width (machine-word-bits *this-machine*) :operands (list op1 op2))))
+			    (bit-set-p
+			     (let ((value (generate-expr (second expr) bindings))
+				   (bit (generate-expr (third expr) bindings)))
+			       (make-expr :kind 'bit-set-p :type 'integer :width (machine-word-bits *this-machine*)
+					  :operands (list value bit))))
+			    ((reg register)
+			     (if (= (length expr) 4)
+				 (destructuring-bind (reg class number)
+				     (rest expr)
+				   (make-expr :kind 'register :type (register-class-type class) :width (register-class-width class)
+					      :operands (list reg class number)))
+				 (multiple-value-bind (register class number)
+				     (resolve-register (second expr) (third expr))
+				   (let ((type (register-class-type class))
+					 (width (register-class-width class)))
+				     (make-expr :kind 'register :type type :width width :operands (list register class number))))))
+			    (subreg
+			     (let* ((begin (second expr))
+				    (end (third expr))
+				    (width (1+ (- end begin))))
+			       (multiple-value-bind (register class number)
+				   (resolve-register (fourth expr) (fifth expr))
+				 (unless (eq (register-class-type class) 'integer)
+				   (error "only subregisters of integer registers are allowed: ~A~%" expr))
+				 (make-expr :kind 'subregister :type 'integer :width width
+					    :operands (list register class number begin end nil)))))
+			    (numbered-subreg
+			     (let* ((width (second expr))
+				    (width-expr (make-integer-expr (machine-word-bits *this-machine*) width)))
+			       (multiple-value-bind (register class number)
+				   (resolve-register (fourth expr) (fifth expr))
+				 (unless (eq (register-class-type class) 'integer)
+				   (error "only numbered subregisters of integer registers are allowed: ~A~%" expr))
+				 (make-expr :kind 'numbered-subregister :type 'integer :width width
+					    :operands (list register class number width-expr (generate-expr (third expr) bindings))))))
+			    (mem
+			     (make-expr :kind 'mem :type 'integer :width (or required-width (machine-word-bits *this-machine*))
+					:operands (list (generate-expr (second expr) bindings (machine-word-bits *this-machine*)))))
+			    ((zex sex)
+			     (when (null required-width)
+			       (error "no required width in ~A~%" expr))
+			     (let* ((op (generate-expr (second expr) bindings))
+				    (op (if (eq (expr-kind op) (first expr)) (first (expr-operands op)) op)))
+			       (make-expr :kind (first expr) :type 'integer :width required-width :operands (list op))))
+			    ((+ - * *s / % /s %s logor logand logxor)
+			     (let ((op1 (generate-expr (second expr) bindings required-width))
+				   (op2 (generate-expr (third expr) bindings required-width)))
+			       (when (/= (expr-width op1) (expr-width op2))
+				 (error "widths do not match in ~A" expr))
+			       (make-expr :kind (first expr) :type 'integer :width (expr-width op1)
+					  :operands (list op1 op2))))
+			    ((+f -f *f /f)
+			     (let ((op1 (generate-expr (second expr) bindings required-width 'float))
+				   (op2 (generate-expr (third expr) bindings required-width 'float)))
+			       (when (/= (expr-width op1) (expr-width op2))
+				 (error "widths do not match in ~A" expr))
+			       (make-expr :kind (first expr) :type 'float :width (expr-width op1)
+					  :operands (list op1 op2))))
+			    ((+carry -carry +overflow)
+			     (let ((op1 (generate-expr (second expr) bindings))
+				   (op2 (generate-expr (third expr) bindings)))
+			       (when (/= (expr-width op1) (expr-width op2))
+				 (error "widths do not match in ~A" expr))
+			       (make-expr :kind (first expr) :type 'integer :width 1
+					  :operands (list op1 op2))))
+			    ((neg bitneg not)
+			     (let ((op (generate-expr (second expr) bindings (or required-width (machine-word-bits *this-machine*)))))
+			       (make-expr :kind (first expr) :type 'integer :width (expr-width op)
+					  :operands (list op))))
+			    ((fneg sqrt)
+			     (let* ((op (generate-expr (second expr) bindings required-width 'float))
+				    (width (expr-width op)))
+			       (make-expr :kind (first expr) :type 'float :width width :operands (list op))))
+			    ((shiftl shiftr ashiftr rotl)
+			     (let* ((op1 (generate-expr (second expr) bindings required-width))
+				    (op2 (generate-expr (third expr) bindings (machine-word-bits *this-machine*)))
+				    (width (expr-width op1)))
+			       (make-expr :kind (first expr) :type 'integer :width width
+					  :operands (list op1 op2))))
+			    (mask
+			     (let ((op1 (generate-expr (second expr) bindings (machine-word-bits *this-machine*)))
+				   (op2 (generate-expr (third expr) bindings (machine-word-bits *this-machine*))))
+			       (make-expr :kind 'mask :type 'integer :width (or required-width (machine-word-bits *this-machine*))
+					  :operands (list op1 op2))))
+			    (maskmask
+			     (let* ((bit-width (second expr))
+				    (mask (generate-expr (third expr) bindings))
+				    (mask-width (expr-width mask))
+				    (width (* bit-width mask-width)))
+			       (make-expr :kind 'maskmask :type 'integer :width width
+					  :operands (list bit-width mask))))
+			    ((leading-zeros trailing-zeros population)
+			     (let ((op (generate-expr (second expr) bindings (machine-word-bits *this-machine*))))
+			       (make-expr :kind (first expr) :type 'integer :width (or required-width (machine-word-bits *this-machine*))
+					  :operands (list op))))
+			    ((single-to-double double-to-single)
+			     (multiple-value-bind (old-width new-width)
+				 (if (eq (first expr) 'single-to-double)
+				     (values (machine-single-bits *this-machine*) (machine-double-bits *this-machine*))
+				     (values (machine-double-bits *this-machine*) (machine-single-bits *this-machine*)))
+			       (let ((value (generate-expr (second expr) bindings old-width 'float)))
+				 (make-expr :kind 'convert-float :type 'float :width new-width
+					    :operands (list value)))))
+			    ((bits-to-single bits-to-double)
+			     (let* ((width (if (eq (first expr) 'bits-to-single)
+					       (machine-single-bits *this-machine*)
+					       (machine-double-bits *this-machine*)))
+				    (value (generate-expr (second expr) bindings width 'integer)))
+			       (make-expr :kind 'bits-to-float :type 'float :width width
+					  :operands (list value))))
+			    ((single-to-bits double-to-bits)
+			     (let* ((width (if (eq (first expr) 'single-to-bits)
+					       (machine-single-bits *this-machine*)
+					       (machine-double-bits *this-machine*)))
+				    (value (generate-expr (second expr) bindings width 'float)))
+			       (make-expr :kind 'float-to-bits :type 'integer :width width
+					  :operands (list value))))
+			    ((single-to-integer double-to-integer)
+			     (let* ((float-width (if (eq (first expr) 'single-to-integer)
+						     (machine-single-bits *this-machine*)
+						     (machine-double-bits *this-machine*)))
+				    (integer-width (or required-width (machine-word-bits *this-machine*)))
+				    (value (generate-expr (second expr) bindings float-width 'float)))
+			       (make-expr :kind 'float-to-integer :type 'integer :width integer-width
+					  :operands (list value))))
+			    ((integer-to-single integer-to-double)
+			     (let* ((integer-width (or required-width (machine-word-bits *this-machine*)))
+				    (float-width (if (eq (first expr) 'integer-to-single)
+						     (machine-single-bits *this-machine*)
+						     (machine-double-bits *this-machine*)))
+				    (value (generate-expr (second expr) bindings integer-width 'integer)))
+			       (make-expr :kind 'integer-to-float :type 'float :width float-width
+					  :operands (list value))))
+			    (nop
+			     (make-expr :kind 'nop))
+			    (syscall
+			     (make-expr :kind 'system-call))
+			    (call-pal
+			     (let ((value (generate-expr (second expr) bindings (machine-word-bits *this-machine*))))
+			       (make-expr :kind 'call-pal :operands (list value))))
+			    (not-implemented
+			     (make-expr :kind 'not-implemented))
+			    (t
+			     (error "unknown pattern ~A~%" (first expr)))))
+			 (t
+			  (error "illegal expr ~A~%" expr))))))
+	(let ((result (generate)))
+	  (match-type (expr-type result))
+	  (match-width (expr-width result))
+	  result)))))
+
+(defvar *assign-value* nil)
+(defvar *cse-bindings* nil)
+
+(defun generate-interpreter (expr bindings &optional (no-cse nil))
   (labels ((register-code (reg &optional class number (with-parens t))
 	     (format nil "~:[~;(~]intp->regs_~A[~A]~:[~;)~]"
 		     with-parens
 		     (register-class-name class)
 		     (generate-interpreter number bindings)
-		     with-parens)))
-    (expr-case expr
-      (field (name begin end)
-	     (if *take-fields-from-variables*
-		 (format nil "field_~A" (dcs name))
-		 (code-for-field "insn" begin end)))
-      (integer (value) (format nil "~A" value))
-      (string (value) (format nil "\"~A\"" value))
-      (pc () "pc")
-      (addr () "addr")
-      (symbol (name) (cdr (assoc name bindings)))
-      (input (name) name)
-      (ignore (value) "0 /* ignore */")
-      (let (let-bindings body)
-	   (with-output-to-string (out)
-	     (format out "{~%")
-	     (let ((new-bindings (append (mapcar #'(lambda (binding)
-						     (destructuring-bind (name . expr)
-							 binding
-						       (let ((code (generate-interpreter expr bindings))
-							     (c-name (make-tmp-name)))
-							 (format out "~A ~A = ~A;~%"
-								 (c-type (expr-width expr) (expr-type expr)) c-name code)
-							 (cons name c-name))))
-						 let-bindings)
-					 bindings)))
-	       (dolist (expr body)
-		 (format out "~A;~%" (generate-interpreter expr new-bindings))))
-	     (format out "}~%")))
-      (set (lvalue rhs)
-	   (expr-case lvalue
-	     (register (reg class number)
-		       (format nil "(~A = ~A)" (register-code reg class number) (generate-interpreter rhs bindings)))
-	     (subregister (subreg)
-			  (let* ((reg (subregister-register subreg))
-				 (class (register-register-class reg))
-				 (reg-code (register-code reg class (register-number-expr reg) nil))
-				 (begin (subregister-begin subreg))
-				 (end (subregister-end subreg))
-				 (width (1+ (- end begin))))
-			    (format nil "(~A = (~A & 0x~X) | (~A << ~A))"
-				    reg-code
-				    reg-code (bit-vector-to-integer (bit-not (bit-range begin end (register-class-width class))))
-				    (generate-interpreter rhs bindings) begin)))
-	     (numbered-subregister (reg class number width index)
-				   (let ((reg-code (register-code reg class number))
-					 (index-code (generate-interpreter index bindings)))
-				     (format nil "(~A = (~A & ~~mask(~A * ~A, ~A * ~A + ~A - 1)) | (~A << (~A * ~A)))"
-					     reg-code
-					     reg-code width index-code width index-code width
-					     (generate-interpreter rhs bindings) width index-code)))
-	     (mem (width addr)
-		  (format nil "mem_set_~A(intp, ~A, ~A)" width (generate-interpreter addr bindings)
-			  (generate-interpreter rhs bindings)))))
-      (promote (value)
-	       (format nil "((~A)~A)" (c-type (expr-width expr) 'integer) (generate-interpreter value bindings)))
-      (jump (target) (format nil "(next_pc = ~A)" (generate-interpreter target bindings)))
-      (if (cond cons alt)
-	  (format nil "(~A ? ~A : ~A)"
-		  (generate-interpreter cond bindings) (generate-interpreter cons bindings)
-		  (generate-interpreter alt bindings)))
-      (bit-set-p (value index)
-		 (format nil "(~A & (1 << ~A))" (generate-interpreter value bindings) (generate-interpreter index bindings)))
-      (register (reg class number) (register-code reg class number))
-      (subregister (reg class number begin end named)
-		   (let ((width (1+ (- end begin)))
-			 (reg-code (register-code reg class number (not named))))
-		     (format nil "((~A >> ~A) & 0x~X)" reg-code begin (1- (expt 2 width)))))
-      (numbered-subregister (reg class number width index)
-			    (let ((reg-code (register-code reg class number)))
-			      (format nil "((~A >> (~A * ~A)) & 0x~X)"
-				      reg-code width (generate-interpreter index bindings)
-				      (1- (expt 2 width)))))
-      (mem (addr) (format nil "mem_get_~A(intp, ~A)" (expr-width expr) (generate-interpreter addr bindings)))
-      (zex (value) (generate-interpreter value bindings))
-      (sex (value)
-	   (let ((old-width (expr-width value))
-		 (new-width (expr-width expr))
-		 (code (generate-interpreter value bindings)))
-	     (format nil "((~A & 0x~X) ? (~A | 0x~X) : ~A)"
-		     code (expt 2 (1- old-width))
-		     code (- (1- (expt 2 new-width)) (1- (expt 2 old-width)))
+		     with-parens))
+	   (generate-cse-expr ()
+	     (let ((binding (cdr (assoc (cons (if *assign-value* t nil) expr) *cse-bindings* :test #'(lambda (x y)
+												       (and (eq (car x) (car y))
+													    (expr-equal-p (cdr x) (cdr y))))))))
+	       (when (null binding)
+		 (setf binding (make-tmp-name))
+		 (setf *cse-bindings* (acons (cons (if *assign-value* t nil) expr) binding *cse-bindings*)))
+	       (if *assign-value*
+		   (format nil "~A(intp, ~A)" binding *assign-value*)
+		   (format nil "~A(intp)" binding)))))
+    (if (and (expr-cse-p expr) (not no-cse))
+	(generate-cse-expr)
+	(expr-case expr
+	  (field (name begin end)
+		 (if *take-fields-from-variables*
+		     (format nil "field_~A" (dcs name))
+		     (funcall *insn-field-accessor* name begin end)))
+	  (integer (value) (format nil "~A" value))
+	  (string (value) (format nil "\"~A\"" value))
+	  (pc () "pc")
+	  (addr () "addr")
+	  (symbol (name) (cdr (assoc name bindings)))
+	  (input (name) name)
+	  (ignore (value) "0 /* ignore */")
+	  (let (let-bindings body)
+	    (with-output-to-string (out)
+	      (format out "{~%")
+	      (let ((new-bindings (append (mapcar #'(lambda (binding)
+						      (destructuring-bind (name . expr)
+							  binding
+							(let ((code (generate-interpreter expr bindings))
+							      (c-name (make-tmp-name)))
+							  (format out "~A ~A = ~A;~%"
+								  (c-type (expr-width expr) (expr-type expr)) c-name code)
+							  (cons name c-name))))
+						  let-bindings)
+					  bindings)))
+		(dolist (expr body)
+		  (format out "~A;~%" (generate-interpreter expr new-bindings))))
+	      (format out "}~%")))
+	  (set (lvalue rhs)
+	       (let ((rhs-name (make-tmp-name)))
+		 (format nil "({ ~A ~A = ~A; ~A; })"
+			 (c-type (expr-width rhs) (expr-type rhs)) rhs-name (generate-interpreter rhs bindings)
+			 (let ((*assign-value* rhs-name))
+			   (generate-interpreter lvalue bindings)))))
+	  (promote (value)
+		   (format nil "((~A)~A)" (c-type (expr-width expr) 'integer) (generate-interpreter value bindings)))
+	  (jump (target) (format nil "(next_pc = ~A)" (generate-interpreter target bindings)))
+	  (if (cond cons alt)
+	      (format nil "(~A ? ~A : ~A)"
+		      (let ((*assign-value* nil)) (generate-interpreter cond bindings)) (generate-interpreter cons bindings)
+		      (generate-interpreter alt bindings)))
+	  (case (value cases)
+	    (if (null *assign-value*)
+		(let ((result-name (make-tmp-name)))
+		  (format nil "({ ~A ~A; switch (~A) { ~{ ~{case ~A: ~}~A = ~A; break; ~}} ~A; })"
+			  (c-type (expr-width expr) (expr-type expr)) result-name
+			  (generate-interpreter value bindings)
+			  (mappend #'(lambda (x)
+				       (list (car x) result-name (generate-interpreter (cdr x) bindings)))
+				   cases)
+			  result-name))
+		(format nil "({ switch (~A) { ~{ ~{case ~A: ~}~A; break; ~}}})"
+			(generate-interpreter value bindings)
+			(mappend #'(lambda (x)
+				     (list (car x) (generate-interpreter (cdr x) bindings)))
+				 cases))))
+	  (dowhile (cond body)
+		   (format nil "({ do {~%~{~A;~%~}} while (~A); })~%"
+			   (mapcar #'(lambda (x) (generate-interpreter x bindings)) body)
+			   (generate-interpreter cond bindings)))
+	  (bit-set-p (value index)
+		     (format nil "(~A & (1 << ~A))" (generate-interpreter value bindings) (generate-interpreter index bindings)))
+	  (register (reg class number)
+		    (let ((code (register-code reg class number)))
+		      (if (null *assign-value*)
+			  code
+			  (format nil "(~A = ~A)" code *assign-value*))))
+	  (subregister (reg class number begin end named)
+		       (let ((width (1+ (- end begin)))
+			     (reg-code (register-code reg class number (not named))))
+			 (if (null *assign-value*)
+			     (format nil "((~A >> ~A) & 0x~X)" reg-code begin (1- (expt 2 width)))
+			     (format nil "(~A = (~A & 0x~X) | (~A << ~A))"
+				     reg-code
+				     reg-code (bit-vector-to-integer (bit-not (bit-range begin end (register-class-width class))))
+				     *assign-value* begin))))
+	  (numbered-subregister (reg class number width index)
+				(let ((reg-code (register-code reg class number))
+				      (width-code (let ((*assign-value* nil)) (generate-interpreter width bindings)))
+				      (index-code (let ((*assign-value* nil)) (generate-interpreter index bindings))))
+				  (if (null *assign-value*)
+				      (format nil "((~A >> (~A * ~A)) & ((1 << ~A) - 1))"
+					      reg-code width-code index-code width-code)
+				      (format nil "(~A = (~A & ~~mask_32(~A * ~A, ~A * ~A + ~A - 1)) | (~A << (~A * ~A)))"
+					      reg-code
+					      reg-code width-code index-code width-code index-code width-code
+					      *assign-value* width-code index-code))))
+	  (mem (addr)
+	       (let ((addr-code (let ((*assign-value* nil)) (generate-interpreter addr bindings))))
+		 (if (null *assign-value*)
+		     (format nil "mem_get_~A(intp, ~A)" (expr-width expr) addr-code)
+		     (format nil "mem_set_~A(intp, ~A, ~A)" (expr-width expr) addr-code *assign-value*))))
+	  (zex (value)
+	       (let ((code (generate-interpreter value bindings)))
+		 (if (> (expr-width expr) 32)
+		     (format nil "((~A)~A)" (c-type (expr-width expr) 'integer) code)
 		     code)))
-      (ashiftr (value amount)
-	       (let ((value-code (generate-interpreter value bindings))
-		     (amount-code (generate-interpreter amount bindings)))
-		 (format nil "((~A >> ~A) | ((~A & 0x80000000) ? ~~((1 << (32 - ~A)) - 1) : 0))"
-			 value-code amount-code value-code amount-code)))
-      (maskmask (bit-width mask)
-		(format nil "maskmask(~A, ~A, ~A)" bit-width (expr-width mask) (generate-interpreter mask bindings)))
-      (leading-zeros (value) (format nil "leading_zeros(~A)" (generate-interpreter value bindings)))
-      (convert-float (value)
-		     (format nil "((~A)~A)" (c-type (expr-width expr) 'float) (generate-interpreter value bindings)))
-      (bits-to-float (value)
-		     (let ((width (expr-width expr)))
-		       (format nil "({ ~A tmp = ~A; *(~A*)&tmp; })"
-			       (c-type width 'integer)
-			       (generate-interpreter value bindings)
-			       (c-type width 'float))))
-      (float-to-bits (value)
-		     (let ((width (expr-width expr)))
-		       (format nil "({ ~A tmp = ~A; *(~A*)&tmp; })"
-			       (c-type width 'float)
-			       (generate-interpreter value bindings)
-			       (c-type width 'integer))))
-      (float-to-integer (value)
-			(let ((width (expr-width expr)))
-			  (format nil "((~A)(~A)~A)" (c-type width 'integer) (c-type width 'integer t)
-				  (generate-interpreter value bindings))))
-      (nop () "0 /* nop */")
-      (system-call () "handle_system_call(intp)")
-      ((= < <f > >f + +f - -f * *f / /f logor logand logxor shiftl shiftr) (left right)
-       (let ((op (cadr (assoc (expr-kind expr) '((= "==") (< "<") (<f "<") (> ">") (>f ">") (+ "+") (+f "+") (- "-")
-						 (-f "-") (* "*") (*f "*") (/ "/") (/f "/")
-						 (logor "|") (logand "&") (logxor "^") (shiftl "<<") (shiftr ">>"))))))
-	 (format nil "(~A ~A ~A)" (generate-interpreter left bindings) op (generate-interpreter right bindings))))
-      ((*s /s) (left right)
-       (let* ((op (cadr (assoc (expr-kind expr) '((*s "*") (/s "/")))))
-	      (width (expr-width expr))
-	      (type (c-type width 'integer t)))
-	 (format nil "((~A)((~A)~A ~A (~A)~A))"
-		 (c-type width 'integer)
-		 type (generate-interpreter left bindings) op type (generate-interpreter right bindings))))
-      ((neg fneg bitneg not) (value)
-       (let ((op (cadr (assoc (expr-kind expr) '((neg "-") (fneg "-") (bitneg "~") (not "!"))))))
-	 (format nil "(~A~A)" op (generate-interpreter value bindings))))
-      ((<s >s) (left right)
-       (let ((op (cadr (assoc (expr-kind expr) '((<s "<") (>s ">")))))
-	     (type (c-type (expr-width left) 'integer t)))
-	 (format nil "((~A)~A ~A (~A)~A)"
-		 type (generate-interpreter left bindings) op
-		 type (generate-interpreter right bindings))))
-      ((+carry -carry rotl mask) (first second)
-       (let ((func (cadr (assoc (expr-kind expr) '((+carry "addcarry") (-carry "subcarry") (rotl "rotl") (mask "mask"))))))
-	 (format nil "~A(~A, ~A)" func (generate-interpreter first bindings) (generate-interpreter second bindings)))))))
+	  (sex (value)
+	       (let ((old-width (expr-width value))
+		     (new-width (expr-width expr))
+		     (code (generate-interpreter value bindings))
+		     (type (c-type (if (> (expr-width expr) 32) (expr-width expr) 32) 'integer)))
+		 (format nil "((~A & 0x~X) ? ((~A)~A | 0x~X) : (~A)~A)"
+			 code (expt 2 (1- old-width))
+			 type code (- (1- (expt 2 new-width)) (1- (expt 2 old-width)))
+			 type code)))
+	  (ashiftr (value amount)
+		   (let ((value-code (generate-interpreter value bindings))
+			 (amount-code (generate-interpreter amount bindings)))
+		     (format nil "((~A >> ~A) | ((~A & (1 << ~A)) ? ~~((1 << (~A - ~A)) - 1) : 0))"
+			     value-code amount-code value-code (1- (expr-width expr))
+			     (expr-width expr) amount-code)))
+	  (maskmask (bit-width mask)
+		    (format nil "maskmask(~A, ~A, ~A)" bit-width (expr-width mask) (generate-interpreter mask bindings)))
+	  (leading-zeros (value) (format nil "leading_zeros(~A)" (generate-interpreter value bindings)))
+	  (convert-float (value)
+			 (format nil "((~A)~A)" (c-type (expr-width expr) 'float) (generate-interpreter value bindings)))
+	  (bits-to-float (value)
+			 (let ((width (expr-width expr)))
+			   (format nil "({ ~A tmp = ~A; *(~A*)&tmp; })"
+				   (c-type width 'integer)
+				   (generate-interpreter value bindings)
+				   (c-type width 'float))))
+	  (float-to-bits (value)
+			 (let ((width (expr-width expr)))
+			   (format nil "({ ~A tmp = ~A; *(~A*)&tmp; })"
+				   (c-type width 'float)
+				   (generate-interpreter value bindings)
+				   (c-type width 'integer))))
+	  (float-to-integer (value)
+			    (let ((width (expr-width expr)))
+			      (format nil "((~A)(~A)~A)" (c-type width 'integer) (c-type width 'integer t)
+				      (generate-interpreter value bindings))))
+	  (nop () "0 /* nop */")
+	  (system-call () "handle_system_call(intp)")
+	  ((= < <f > >f + +f - -f * *f / % /f logor logand logxor shiftl shiftr) (left right)
+	   (let ((op (cadr (assoc (expr-kind expr) '((= "==") (< "<") (<f "<") (> ">") (>f ">") (+ "+") (+f "+") (- "-")
+						     (-f "-") (* "*") (*f "*") (/ "/") (% "%") (/f "/")
+						     (logor "|") (logand "&") (logxor "^") (shiftl "<<") (shiftr ">>"))))))
+	     (format nil "(~A ~A ~A)" (generate-interpreter left bindings) op (generate-interpreter right bindings))))
+	  ((*s /s %s) (left right)
+	   (let* ((op (cadr (assoc (expr-kind expr) '((*s "*") (/s "/") (%s "%")))))
+		  (width (expr-width expr))
+		  (type (c-type width 'integer t)))
+	     (format nil "((~A)((~A)~A ~A (~A)~A))"
+		     (c-type width 'integer)
+		     type (generate-interpreter left bindings) op type (generate-interpreter right bindings))))
+	  ((neg bitneg) (value)
+	   (let ((op (cadr (assoc (expr-kind expr) '((neg "-") (bitneg "~"))))))
+	     (format nil "((~A)~A~A)" (c-type (expr-width expr) 'integer) op (generate-interpreter value bindings))))
+	  ((fneg not) (value)
+	   (let ((op (cadr (assoc (expr-kind expr) '((neg "-") (fneg "-") (bitneg "~") (not "!"))))))
+	     (format nil "(~A~A)" op (generate-interpreter value bindings))))
+	  ((<s >s) (left right)
+	   (let ((op (cadr (assoc (expr-kind expr) '((<s "<") (>s ">")))))
+		 (type (c-type (expr-width left) 'integer t)))
+	     (format nil "((~A)~A ~A (~A)~A)"
+		     type (generate-interpreter left bindings) op
+		     type (generate-interpreter right bindings))))
+	  ((+carry -carry +overflow rotl mask) (first second)
+	   (let ((func (cadr (assoc (expr-kind expr) '((+carry "addcarry") (-carry "subcarry") (+overflow "addoverflow")
+						       (rotl "rotl") (mask "mask"))))))
+	     (format nil "~A_~A(~A, ~A)" func (expr-width (if (eq (expr-kind expr) 'mask) expr first))
+		     (generate-interpreter first bindings) (generate-interpreter second bindings))))))))
 
 (defun expr-equal-p (e1 e2)
-  (or (eq e1 e2)
-      (and (eq (expr-kind e1) (expr-kind e2))
-	   (eq (expr-type e1) (expr-type e2))
-	   (eq (expr-width e1) (expr-width e2))
-	   (every #'(lambda (a b)
-		      (if (and (expr-p a) (expr-p b))
-			  (expr-equal-p a b)
-			  (eq a b)))
-		  (expr-operands e1) (expr-operands e2)))))
+  (cond ((and (expr-p e1) (expr-p e1))
+	 (or (eq e1 e2)
+	     (and (eq (expr-kind e1) (expr-kind e2))
+		  (eq (expr-type e1) (expr-type e2))
+		  (eq (expr-width e1) (expr-width e2))
+		  (expr-equal-p (expr-operands e1) (expr-operands e2)))))
+	((and (consp e1) (consp e2))
+	 (and (expr-equal-p (car e1) (car e2))
+	      (expr-equal-p (cdr e1) (cdr e2))))
+	(t (eq e1 e2))))
 
 (defun simplify (expr)
   (let* ((operands (mapcar #'(lambda (x) (if (expr-p x) (simplify x) x)) (expr-operands expr)))
-	 (expr (make-expr :kind (expr-kind expr) :type (expr-type expr) :width (expr-width expr) :operands operands)))
+	 (expr (make-expr :kind (expr-kind expr) :type (expr-type expr) :width (expr-width expr) :operands operands
+			  :transformations (reduce #'union (cons (expr-transformations expr)
+								 (mapcar #'expr-transformations (remove-if-not #'expr-p operands)))))))
     (expr-case expr
       ((+ logor) (op1 op2)
-	 (cond ((and (eq (expr-kind op1) 'integer) (= (first (expr-operands op1)) 0))
+         (cond ((and (eq (expr-kind op1) 'integer) (= (first (expr-operands op1)) 0))
 		op2)
 	       ((and (eq (expr-kind op2) 'integer) (= (first (expr-operands op2)) 0))
 		op1)
 	       (t
 		expr)))
+      (* (op1 op2)
+	 (cond ((and (eq (expr-kind op1) 'integer) (= (first (expr-operands op1)) 1))
+		op2)
+	       ((and (eq (expr-kind op2) 'integer) (= (first (expr-operands op2)) 1))
+		op1)
+	       (t
+		expr)))
       (mask (begin end)
 	    (if (and (eq (expr-kind begin) 'integer) (eq (expr-kind end) 'integer))
-		(make-integer-expr (expr-width expr) (mask (first (expr-operands begin)) (first (expr-operands end)) (expr-width expr)))
+		(make-integer-expr (expr-width expr) (mask (first (expr-operands begin)) (first (expr-operands end)) (expr-width expr))
+				   :transformations (union (expr-transformations expr)
+							   (union (expr-transformations begin)
+								  (expr-transformations end))))
 		expr))
+      ((zex sex) (op)
+         (cond ((= (expr-width op) (expr-width expr))
+		(make-expr :kind (expr-kind op) :type 'integer :width (expr-width expr) :operands (expr-operands op)
+			   :transformations (union (expr-transformations expr) (expr-transformations op))))
+	       ((eq (expr-kind op) (expr-kind expr))
+		(make-expr :kind (expr-kind expr) :type 'integer :width (expr-width expr) :operands (list (first (expr-operands op)))
+			   :transformations (union (expr-transformations expr) (expr-transformations op))))
+	       ((and (eq (expr-kind expr) 'zex) (eq (expr-kind op) 'integer))
+		(make-integer-expr (expr-width expr) (first (expr-operands op))
+				   :transformations (union (expr-transformations expr) (expr-transformations op))))
+	       ((and (eq (expr-kind expr) 'sex) (eq (expr-kind op) 'integer))
+		(make-integer-expr (expr-width expr) (sign-extend (first (expr-operands op)) (expr-width op) (expr-width expr))
+				   :transformations (union (expr-transformations expr) (expr-transformations op))))
+	       (t
+		expr)))
       (t
        expr))))
 
 (defun apply-transformation (trans expr)
-  (multiple-value-bind (success bindings)
+  (multiple-value-bind (success bindings transformations)
       (match-sexpr (transformation-pattern trans) expr)
     (if success
-	(let ((*expand-transformation* t)
-	      (*this-machine* *target-machine*))
+	(let* ((*expanding-transformations* (cons trans transformations))
+	       (*this-machine* *target-machine*)
+	       (bindings (mapcar #'(lambda (x) (if (expr-p (cdr x))
+						   (let ((y (cdr x)))
+						     (cons (car x) (make-expr :kind (expr-kind y) :type (expr-type y) :width (expr-width y)
+									      :operands (expr-operands y)
+									      :transformations *expanding-transformations*)))
+						   x))
+				 bindings)))
 	  (generate-expr (transformation-substitution trans) bindings (expr-width expr) (expr-type expr)))
 	nil)))
 
@@ -1135,9 +1261,9 @@
 			     (case (first (second pattern))
 			       (mem
 				(if (eq (expr-kind lvalue) 'mem)
-				    (destructuring-bind (width address)
+				    (destructuring-bind (address)
 					(expr-operands lvalue)
-				      (if (= width (third (second pattern)))
+				      (if (= (expr-width lvalue) (third (second pattern)))
 					  (match-multiple (list address rhs)
 							  (list (second (second pattern))
 								(third pattern))
@@ -1189,11 +1315,27 @@
 	(t
 	 nil)))
 
+(defvar *rhs-expr* nil)
+
 (defun generate-compiler (target expr bindings &key true-label false-label (foreign-target -1))
   (labels ((load-reg-name (type width)
 	     (format nil "load_reg_~A_~A" (dcs type) width))
 	   (store-reg-name (type width)
-	     (format nil "store_reg_~A_~A" (dcs type) width)))
+	     (format nil "store_reg_~A_~A" (dcs type) width))
+	   (normalize-value (width src dst)
+	     (cond ((= width 64)
+		    "")
+		   ((= width 32)
+		    (format nil
+			    "emit(COMPOSE_ADDL(~A, 31, ~A));~%"
+			    src dst))
+		   ((= (rem width 8) 0)
+		    (format nil
+			    "emit(COMPOSE_ZAPNOT_IMM(~A, ~A, ~A));~%"
+			    src (1- (ash 1 (/ width 8))) dst))
+		   (t
+		    (error "cannot normalize width ~A" width)))))
+	   
     (cond ((expr-constp expr)
 	   (unless (eq (expr-type expr) 'integer)
 	     (error "can only load integers~%"))
@@ -1277,7 +1419,7 @@ else
 			  (format nil "~A = ref_integer_reg_for_writing(~A);
 emit_load_integer_32(~A, ~A);~%"
 				  target foreign-target
-				  target (code-for-field "insn" begin end)))
+				  target (funcall *insn-field-accessor* "insn" begin end)))
 		   (string (value) (error "cannot generate compiler for string~%"))
 		   (pc () (format nil "~A = ref_integer_reg_for_writing(~A);
 emit_load_integer_32(~A, pc);~%"
@@ -1321,107 +1463,8 @@ emit_load_integer_32(~A, pc);~%"
 				  let-bindings new-bindings)
 			    (format out "}~%"))))
 		   (set (lvalue rhs)
-			(expr-case lvalue
-			  (register (reg class number)
-				    (let ((reg-index (register-index reg class number))
-					  (type (register-class-type class))
-					  (reg-reg (make-tmp-name)))
-				      (format nil "{
-reg_t ~A;
-~Aunref_~A_reg(~A);
-}~%"
-					      reg-reg
-					      (generate-compiler reg-reg rhs bindings :foreign-target reg-index) (dcs type) reg-reg)))
-			  (subregister (subreg)
-				       (let* ((reg (subregister-register subreg))
-					      (class (register-register-class reg))
-					      (reg-index (register-index reg class (register-number reg)))
-					      (reg-width (register-class-width class))
-					      (begin (subregister-begin subreg))
-					      (end (subregister-end subreg))
-					      (width (1+ (- end begin)))
-					      (rhs-reg (make-tmp-name))
-					      (mask-reg (make-tmp-name))
-					      (reg-reg (make-tmp-name)))
-					 (format nil "{
-reg_t ~A, ~A, ~A;
-~Aemit(COMPOSE_SLL_IMM(~A, ~A, ~A));
-emit(COMPOSE_SRL_IMM(~A, ~A, ~A));
-~A = ref_integer_reg_for_writing(-1);
-emit_load_integer_32(~A, -1);
-emit(COMPOSE_SLL_IMM(~A, ~A, ~A));
-emit(COMPOSE_SRL_IMM(~A, ~A, ~A));
-~A = ref_integer_reg_for_reading_and_writing(~A);
-emit(COMPOSE_BIC(~A, ~A, ~A));
-unref_integer_reg(~A);
-emit(COMPOSE_BIS(~A, ~A, ~A));
-unref_integer_reg(~A);
-unref_integer_reg(~A);
-}~%"
-						 rhs-reg mask-reg reg-reg
-						 (generate-compiler rhs-reg rhs bindings) rhs-reg (- 64 width) rhs-reg
-						 rhs-reg (- 63 end) rhs-reg
-						 mask-reg
-						 mask-reg
-						 mask-reg (- 64 width) mask-reg
-						 mask-reg (- 63 end) mask-reg
-						 reg-reg reg-index
-						 reg-reg mask-reg reg-reg
-						 mask-reg
-						 reg-reg rhs-reg reg-reg
-						 rhs-reg
-						 reg-reg)))
-			  (numbered-subregister (reg class number width index)
-						(let ((reg-index (register-index reg class number))
-						      (reg-width (register-class-width class))
-						      (rhs-reg (make-tmp-name))
-						      (mask-reg (make-tmp-name))
-						      (reg-reg (make-tmp-name)))
-						  (format nil "{
-word_64 begin = ~A * ~A;
-reg_t ~A, ~A, ~A;
-~Aemit(COMPOSE_SLL_IMM(~A, begin, ~A));
-~A = ref_integer_reg_for_writing(-1);
-emit_load_integer_32(~A, -1);
-emit(COMPOSE_SRL_IMM(~A, ~A, ~A));
-emit(COMPOSE_SLL_IMM(~A, begin, ~A));
-emit(COMPOSE_AND(~A, ~A, ~A));
-~A = ref_integer_reg_for_reading_and_writing(~A);
-emit(COMPOSE_BIC(~A, ~A, ~A));
-unref_integer_reg(~A);
-emit(COMPOSE_BIS(~A, ~A, ~A));
-unref_integer_reg(~A);
-unref_integer_reg(~A);
-}~%"
-							  (generate-interpreter index nil) width
-							  rhs-reg mask-reg reg-reg
-							  (generate-compiler rhs-reg rhs bindings) rhs-reg rhs-reg
-							  mask-reg
-							  mask-reg
-							  mask-reg (- 64 width) mask-reg
-							  mask-reg mask-reg
-							  rhs-reg mask-reg rhs-reg
-							  reg-reg reg-index
-							  reg-reg mask-reg reg-reg
-							  mask-reg
-							  reg-reg rhs-reg reg-reg
-							  rhs-reg
-							  reg-reg)))
-			  (mem (width addr)
-			       (let ((addr-reg (make-tmp-name))
-				     (rhs-reg (make-tmp-name)))
-				 (format nil "{
-reg_t ~A, ~A;
-~A/* emit(COMPOSE_ZAPNOT_IMM(~A, 15, ~A)); */
-~Aemit_store_mem_~A(~A, ~A);
-unref_integer_reg(~A);
-unref_integer_reg(~A);
-}~%"
-					 addr-reg rhs-reg
-					 (generate-compiler addr-reg addr bindings) addr-reg addr-reg
-					 (generate-compiler rhs-reg rhs bindings) width rhs-reg addr-reg
-					 addr-reg
-					 rhs-reg)))))
+			(let ((*rhs-expr* rhs))
+			  (generate-compiler nil lvalue bindings)))
 		   (promote (value)
 			    (let ((src-width (expr-width value))
 				  (dst-width (expr-width expr))
@@ -1429,13 +1472,10 @@ unref_integer_reg(~A);
 			      (if (and (= src-width 32) (= dst-width 64))
 				  (format nil "~Aemit(COMPOSE_ZAPNOT_IMM(~A, 15, ~A));~%"
 					  target-code target target)
-				  (progn
-				    (unless (and (= src-width 64) (= dst-width 32))
-				      (error "cannot promote from ~A to ~A bits~%" src-width dst-width))
-				    (format nil "~Aemit(COMPOSE_SLL_IMM(~A, ~A, ~A));
+				  (format nil "~Aemit(COMPOSE_SLL_IMM(~A, ~A, ~A));
 emit(COMPOSE_SRA_IMM(~A, ~A, ~A));~%"
-					    target-code target (- src-width dst-width) target
-					    target (- src-width dst-width) target)))))
+					  target-code target (- src-width dst-width) target
+					  target (- src-width dst-width) target))))
 		   (jump (target)
 			 (format nil "store_all_foreign_regs();~%~A~%"
 				 (if (expr-constp target)
@@ -1480,7 +1520,7 @@ free_label(~A);
 }~%"
 				     true false end
 				     (if (null target) "" (format nil "reg_t ~A;" result-reg))
-				     (generate-compiler nil cond bindings :true-label true :false-label false)
+				     (let ((*rhs-expr* nil)) (generate-compiler nil cond bindings :true-label true :false-label false))
 				     (if (null target)
 					 ""
 					 (format nil "~A = ref_~A_reg_for_writing(-1);" result-reg (dcs (expr-type expr))))
@@ -1501,6 +1541,37 @@ unref_~A_reg(~A);"
 						     target (dcs (expr-type expr)) foreign-target
 						     (if (eq (expr-type expr) 'float) "F" "") result-reg target
 						     (dcs (expr-type expr)) result-reg)))))))
+		   (case (value cases)
+		     (assert (expr-constp value))
+		     (format nil "switch (~A) {
+~{~{case ~A:
+~}~Abreak;
+~}}~%"
+			     (generate-interpreter value nil)
+			     (mappend #'(lambda (x)
+					  (list (car x) (generate-compiler target (cdr x) bindings)))
+				      cases)))
+		   (dowhile (cond body)
+			    (with-output-to-string (out)
+			      (let ((head-name (make-tmp-name))
+				    (exit-name (make-tmp-name)))
+				(format out "{
+label_t ~A = alloc_label(), ~A = alloc_label();
+emit_label(~A);
+push_alloc();~%"
+					head-name exit-name
+					head-name)
+				(dolist (expr body)
+				  (format out "~A;~%" (generate-compiler nil expr bindings)))
+				(format out "
+pop_alloc();
+~Aemit_label(~A);
+free_label(~A);
+free_label(~A);~%"
+					(generate-compiler nil cond bindings :true-label head-name :false-label exit-name)
+					exit-name
+					head-name
+					exit-name))))
 		   (bit-set-p (value index)
 			      (let ((value-reg (make-tmp-name))
 				    (bit-reg (make-tmp-name)))
@@ -1523,43 +1594,88 @@ emit_branch(COMPOSE_BR(31, 0), ~A);
 		   (register (reg class number)
 			     (let ((reg-index (register-index reg class number))
 				   (type (register-class-type class)))
-			       (if (eql foreign-target -1)
-				   (format nil "~A = ref_~A_reg_for_reading(~A);~%"
-					   target (dcs type) reg-index)
-				   (let ((tmp-reg (make-tmp-name)))
-				     (format nil "{
+			       (if (null *rhs-expr*)
+				   (if (eql foreign-target -1)
+				       (format nil "~A = ref_~A_reg_for_reading(~A);~%"
+					       target (dcs type) reg-index)
+				       (let ((tmp-reg (make-tmp-name)))
+					 (format nil "{
 reg_t ~A = ref_~A_reg_for_reading(~A);
 ~A = ref_~A_reg_for_writing(~A);
 emit(COMPOSE_~AMOV(~A, ~A));
 unref_~A_reg(~A);
 }~%"
-					     tmp-reg (dcs type) reg-index
-					     target (dcs type) foreign-target
-					     (if (eq type 'float) "F" "") tmp-reg target
-					     (dcs type) tmp-reg)))))
+						 tmp-reg (dcs type) reg-index
+						 target (dcs type) foreign-target
+						 (if (eq type 'float) "F" "") tmp-reg target
+						 (dcs type) tmp-reg)))
+				   (let ((reg-reg (make-tmp-name))
+					 (rhs *rhs-expr*)
+					 (*rhs-expr* nil))
+				     (format nil "{
+reg_t ~A;
+~Aunref_~A_reg(~A);
+}~%"
+					     reg-reg
+					     (generate-compiler reg-reg rhs bindings :foreign-target reg-index) (dcs type) reg-reg)))))
 		   (subregister (reg class number begin end named)
 				(let ((reg-index (register-index reg class number))
-				      (reg-type (register-class-type class))
 				      (reg-width (register-class-width class))
 				      (width (1+ (- end begin)))
 				      (reg-reg (make-tmp-name)))
-				  (format nil "{
+				  (if (null *rhs-expr*)
+				      (let ((reg-type (register-class-type class)))
+					(format nil "{
 reg_t ~A = ref_~A_reg_for_reading(~A);
 ~A = ref_~A_reg_for_writing(~A);
 emit(COMPOSE_SLL_IMM(~A, ~A, ~A));
 unref_~A_reg(~A);
 emit(COMPOSE_SRL_IMM(~A, ~A, ~A));
 }~%"
-					  reg-reg (dcs reg-type) reg-index
-					  target (dcs reg-type) foreign-target
-					  reg-reg (- 63 end) target
-					  (dcs reg-type) reg-reg
-					  target (- 64 width) target)))
+						reg-reg (dcs reg-type) reg-index
+						target (dcs reg-type) foreign-target
+						reg-reg (- 63 end) target
+						(dcs reg-type) reg-reg
+						target (- 64 width) target))
+				      (let ((rhs-reg (make-tmp-name))
+					    (mask-reg (make-tmp-name))
+					    (rhs *rhs-expr*)
+					    (*rhs-expr* nil))
+					(format nil "{
+reg_t ~A, ~A, ~A;
+~Aemit(COMPOSE_SLL_IMM(~A, ~A, ~A));
+emit(COMPOSE_SRL_IMM(~A, ~A, ~A));
+~A = ref_integer_reg_for_writing(-1);
+emit_load_integer_32(~A, -1);
+emit(COMPOSE_SLL_IMM(~A, ~A, ~A));
+emit(COMPOSE_SRL_IMM(~A, ~A, ~A));
+~A = ref_integer_reg_for_reading_and_writing(~A);
+emit(COMPOSE_BIC(~A, ~A, ~A));
+unref_integer_reg(~A);
+emit(COMPOSE_BIS(~A, ~A, ~A));
+unref_integer_reg(~A);
+unref_integer_reg(~A);
+}~%"
+						rhs-reg mask-reg reg-reg
+						(generate-compiler rhs-reg rhs bindings) rhs-reg (- 64 width) rhs-reg
+						rhs-reg (- 63 end) rhs-reg
+						mask-reg
+						mask-reg
+						mask-reg (- 64 width) mask-reg
+						mask-reg (- 63 end) mask-reg
+						reg-reg reg-index
+						reg-reg mask-reg reg-reg
+						mask-reg
+						reg-reg rhs-reg reg-reg
+						rhs-reg
+						reg-reg)))))
 		   (numbered-subregister (reg class number width index)
 					 (let ((reg-index (register-index reg class number))
-					       (reg-type (register-class-type class))
-					       (reg-reg (make-tmp-name)))
-					   (format nil "{
+					       (reg-reg (make-tmp-name))
+					       (width (first (expr-operands width))))
+					   (if (null *rhs-expr*)
+					       (let ((reg-type (register-class-type class)))
+						 (format nil "{
 word_32 index = ~A;
 reg_t ~A = ref_~A_reg_for_reading(~A);
 ~A = ref_~A_reg_for_writing(~A);
@@ -1567,26 +1683,78 @@ emit(COMPOSE_SLL_IMM(~A, 64 - (index + 1) * ~A, ~A));
 unref_~A_reg(~A);
 emit(COMPOSE_SRL_IMM(~A, ~A, ~A));
 }~%"
-						   (generate-interpreter index nil)
-						   reg-reg (dcs reg-type) reg-index
-						   target (dcs reg-type) foreign-target
-						   reg-reg width target
-						   (dcs reg-type) reg-reg
-						   target (- 64 width) target)))
+							 (generate-interpreter index nil)
+							 reg-reg (dcs reg-type) reg-index
+							 target (dcs reg-type) foreign-target
+							 reg-reg width target
+							 (dcs reg-type) reg-reg
+							 target (- 64 width) target))
+					       (let ((reg-width (register-class-width class))
+						     (rhs-reg (make-tmp-name))
+						     (mask-reg (make-tmp-name))
+						     (rhs *rhs-expr*)
+						     (*rhs-expr* nil))
+						 (format nil "{
+word_64 begin = ~A * ~A;
+reg_t ~A, ~A, ~A;
+~Aemit(COMPOSE_SLL_IMM(~A, begin, ~A));
+~A = ref_integer_reg_for_writing(-1);
+emit_load_integer_32(~A, -1);
+emit(COMPOSE_SRL_IMM(~A, ~A, ~A));
+emit(COMPOSE_SLL_IMM(~A, begin, ~A));
+emit(COMPOSE_AND(~A, ~A, ~A));
+~A = ref_integer_reg_for_reading_and_writing(~A);
+emit(COMPOSE_BIC(~A, ~A, ~A));
+unref_integer_reg(~A);
+emit(COMPOSE_BIS(~A, ~A, ~A));
+unref_integer_reg(~A);
+unref_integer_reg(~A);
+}~%"
+							 (generate-interpreter index nil) width
+							 rhs-reg mask-reg reg-reg
+							 (generate-compiler rhs-reg rhs bindings) rhs-reg rhs-reg
+							 mask-reg
+							 mask-reg
+							 mask-reg (- 64 width) mask-reg
+							 mask-reg mask-reg
+							 rhs-reg mask-reg rhs-reg
+							 reg-reg reg-index
+							 reg-reg mask-reg reg-reg
+							 mask-reg
+							 reg-reg rhs-reg reg-reg
+							 rhs-reg
+							 reg-reg)))))
 		   (mem (addr)
 			(let ((addr-reg (make-tmp-name)))
-			  (format nil "{
+			  (if (null *rhs-expr*)
+			      (format nil "{
 reg_t ~A;
 ~A/* emit(COMPOSE_ZAPNOT_IMM(~A, 15, ~A)); */
 ~A = ref_~A_reg_for_writing(~A);
 emit_load_mem_~A(~A, ~A);
 unref_integer_reg(~A);
 }~%"
-				  addr-reg
-				  (generate-compiler addr-reg addr bindings) addr-reg addr-reg
-				  target (dcs (expr-type expr)) foreign-target
-				  (expr-width expr) target addr-reg
-				  addr-reg)))
+				      addr-reg
+				      (generate-compiler addr-reg addr bindings) addr-reg addr-reg
+				      target (dcs (expr-type expr)) foreign-target
+				      (expr-width expr) target addr-reg
+				      addr-reg)
+			      (let ((width (expr-width expr))
+				    (rhs-reg (make-tmp-name))
+				    (rhs *rhs-expr*)
+				    (*rhs-expr* nil))
+				(format nil "{
+reg_t ~A, ~A;
+~A/* emit(COMPOSE_ZAPNOT_IMM(~A, 15, ~A)); */
+~Aemit_store_mem_~A(~A, ~A);
+unref_integer_reg(~A);
+unref_integer_reg(~A);
+}~%"
+					addr-reg rhs-reg
+					(generate-compiler addr-reg addr bindings) addr-reg addr-reg
+					(generate-compiler rhs-reg rhs bindings) width rhs-reg addr-reg
+					addr-reg
+					rhs-reg)))))
 		   (zex (value)
 			(let ((value-code (generate-compiler target value bindings :foreign-target foreign-target)))
 			  (if (and (= (expr-width expr) 64) (= (expr-width value) 32))
@@ -1602,36 +1770,137 @@ emit(COMPOSE_SRA_IMM(~A, ~A, ~A));~%"
 				target (- 64 (expr-width value)) target
 				target (- 64 (expr-width value)) target))
 		   (+carry (op1 op2)
-			   (let ((op1-reg (make-tmp-name))
-				 (op2-reg (make-tmp-name))
-				 (op1-zapped-reg (make-tmp-name))
-				 (op2-zapped-reg (make-tmp-name)))
-			     (format nil "{
+			   (with-output-to-string (out)
+			     (let ((op1-zapped-reg (make-tmp-name))
+				   (op2-zapped-reg (make-tmp-name)))
+			       (if (= (expr-width op1) 32)
+				   (let ((op1-reg (make-tmp-name))
+					 (op2-reg (make-tmp-name)))
+				     (format out "{
 reg_t ~A, ~A, ~A, ~A;
 ~A~A = ref_integer_reg_for_writing(-1);
 emit(COMPOSE_ZAPNOT_IMM(~A, 15, ~A));
 unref_integer_reg(~A);
 ~A~A = ref_integer_reg_for_writing(-1);
 emit(COMPOSE_ZAPNOT_IMM(~A, 15, ~A));
-unref_integer_reg(~A);
-~A = ref_integer_reg_for_writing(~A);
+unref_integer_reg(~A);"
+					     op1-reg op2-reg op1-zapped-reg op2-zapped-reg
+					     (generate-compiler op1-reg op1 bindings) op1-zapped-reg
+					     op1-reg op1-zapped-reg
+					     op1-reg
+					     (generate-compiler op2-reg op2 bindings) op2-zapped-reg
+					     op2-reg op2-zapped-reg
+					     op2-reg))
+				   (format out "{
+reg_t ~A, ~A;
+~A~A"
+					   op1-zapped-reg op2-zapped-reg
+					   (generate-compiler op1-zapped-reg op1 bindings)
+					   (generate-compiler op2-zapped-reg op2 bindings)))
+			       (format out "~A = ref_integer_reg_for_writing(~A);
 emit(COMPOSE_ADDQ(~A, ~A, ~A));
 unref_integer_reg(~A);
 unref_integer_reg(~A);
-emit(COMPOSE_SRL_IMM(~A, 32, ~A));
+emit(COMPOSE_SRL_IMM(~A, ~A, ~A));
 }~%"
-				     op1-reg op2-reg op1-zapped-reg op2-zapped-reg
-				     (generate-compiler op1-reg op1 bindings) op1-zapped-reg
-				     op1-reg op1-zapped-reg
-				     op1-reg
-				     (generate-compiler op2-reg op2 bindings) op2-zapped-reg
-				     op2-reg op2-zapped-reg
-				     op2-reg
-				     target foreign-target
-				     op1-zapped-reg op2-zapped-reg target
-				     op1-zapped-reg
-				     op2-zapped-reg
-				     target target)))
+				       target foreign-target
+				       op1-zapped-reg op2-zapped-reg target
+				       op1-zapped-reg
+				       op2-zapped-reg
+				       target (expr-width op1) target))))
+		   (-carry (op1 op2)
+			   (with-output-to-string (out)
+			     (let ((op1-zapped-reg (make-tmp-name))
+				   (op2-zapped-reg (make-tmp-name)))
+			       (if (= (expr-width op1) 32)
+				   (let ((op1-reg (make-tmp-name))
+					 (op2-reg (make-tmp-name)))
+				     (format out "{
+reg_t ~A, ~A, ~A, ~A;
+~A~A = ref_integer_reg_for_writing(-1);
+emit(COMPOSE_ZAPNOT_IMM(~A, 15, ~A));
+unref_integer_reg(~A);
+~A~A = ref_integer_reg_for_writing(-1);
+emit(COMPOSE_ZAPNOT_IMM(~A, 15, ~A));
+unref_integer_reg(~A);"
+					     op1-reg op2-reg op1-zapped-reg op2-zapped-reg
+					     (generate-compiler op1-reg op1 bindings) op1-zapped-reg
+					     op1-reg op1-zapped-reg
+					     op1-reg
+					     (generate-compiler op2-reg op2 bindings) op2-zapped-reg
+					     op2-reg op2-zapped-reg
+					     op2-reg))
+				   (format out "{
+reg_t ~A, ~A;
+~A~A"
+					   op1-zapped-reg op2-zapped-reg
+					   (generate-compiler op1-zapped-reg op1 bindings)
+					   (generate-compiler op2-zapped-reg op2 bindings)))
+			       (format out "~A = ref_integer_reg_for_writing(~A);
+emit(COMPOSE_SUBQ(~A, ~A, ~A));
+unref_integer_reg(~A);
+unref_integer_reg(~A);
+emit(COMPOSE_SRL_IMM(~A, ~A, ~A));
+emit(COMPOSE_AND_IMM(~A, 1, ~A));
+}~%"
+				       target foreign-target
+				       op1-zapped-reg op2-zapped-reg target
+				       op1-zapped-reg
+				       op2-zapped-reg
+				       target (expr-width op1) target
+				       target target))))
+		   (+overflow (op1 op2)
+			      (with-output-to-string (out)
+				(let ((op1-sexed-reg (make-tmp-name))
+				      (op2-sexed-reg (make-tmp-name))
+				      (tmp-reg (make-tmp-name)))
+				  (if (= (expr-width op1) 32)
+				      (format out "{
+reg_t ~A, ~A;
+~A~A"
+					      op1-sexed-reg op2-sexed-reg
+					      (generate-compiler op1-sexed-reg op1 bindings)
+					      (generate-compiler op2-sexed-reg op2 bindings))
+				      (let ((op1-reg (make-tmp-name))
+					    (op2-reg (make-tmp-name))
+					    (sext-char (if (= (expr-width op1) 8) "B" "W")))
+					(assert (member (expr-width op1) '(8 16)))
+					(format out "{
+reg_t ~A, ~A, ~A, ~A;
+~A~A = ref_integer_reg_for_writing(-1);
+emit(COMPOSE_SEXT~A(~A, ~A));
+unref_integer_reg(~A);
+~A~A = ref_integer_reg_for_writing(-1);
+emit(COMPOSE_SEXT~A(~A, ~A));
+unref_integer_reg(~A);"
+						op1-reg op2-reg op1-sexed-reg op2-sexed-reg
+						(generate-compiler op1-reg op1 bindings) op1-sexed-reg
+						sext-char op1-reg op1-sexed-reg
+						op1-reg
+						(generate-compiler op2-reg op2 bindings) op2-sexed-reg
+						sext-char op2-reg op2-sexed-reg
+						op2-reg)))
+				  (format out "~A = ref_integer_reg_for_writing(~A);
+emit(COMPOSE_ADDQ(~A, ~A, ~A));
+unref_integer_reg(~A);
+unref_integer_reg(~A);
+emit(COMPOSE_SRA_IMM(~A, ~A, ~A));
+emit(COMPOSE_ADDQ_IMM(31, 1, ~A));
+emit(COMPOSE_CMOVEQ_IMM(~A, 0, ~A));
+emit(COMPOSE_NOT(~A, ~A));
+emit(COMPOSE_CMOVEQ_IMM(~A, 0, ~A));
+unref_integer_reg(~A);
+}~%"
+					  target foreign-target
+					  op1-sexed-reg op2-sexed-reg tmp-reg
+					  op1-sexed-reg
+					  op2-sexed-reg
+					  tmp-reg (- 64 (expr-width op1)) tmp-reg
+					  target
+					  tmp-reg target
+					  tmp-reg tmp-reg
+					  tmp-reg target
+					  tmp-reg))))
 		   (shiftl (value amount)
 			   (let ((value-reg (make-tmp-name))
 				 (amount-reg (make-tmp-name)))
@@ -1648,51 +1917,62 @@ unref_integer_reg(~A);
 				     value-reg amount-reg target
 				     value-reg
 				     amount-reg
-				     (if (= (expr-width expr) 64)
-					 ""
-					 (progn
-					   (unless (= (expr-width expr) 32)
-					     (error "cannot shiftl width ~A~%" (expr-width expr)))
-					   (format nil
-						   "emit(COMPOSE_ADDL(~A, 31, ~A));~%"
-						   target target))))))
+				     (normalize-value (expr-width expr) target target))))
 		   (shiftr (value amount)
 			   (let ((value-reg (make-tmp-name))
 				 (amount-reg (make-tmp-name)))
-			     (if (= (expr-width expr) 64)
-				 (format nil "{
+			     (format nil "{
+reg_t ~A, ~A;
+~A~A~A~A = ref_integer_reg_for_writing(~A);
+emit(COMPOSE_SRL(~A, ~A, ~A));
+unref_integer_reg(~A);
+unref_integer_reg(~A);
+~A}~%"
+				     value-reg amount-reg
+				     (generate-compiler value-reg value bindings)
+				     (generate-compiler amount-reg amount bindings)
+				     (if (= (expr-width expr) 32) (format nil "emit(COMPOSE_ZAPNOT_IMM(~A, 15, ~A));~%" value-reg value-reg) "")
+				     target foreign-target
+				     value-reg amount-reg target
+				     value-reg
+				     amount-reg
+				     (normalize-value (expr-width expr) target target))))
+		   (ashiftr (value amount)
+			    (let ((value-reg (make-tmp-name))
+				  (amount-reg (make-tmp-name)))
+			      (if (member (expr-width expr) '(32 64))
+				  (format nil "{
 reg_t ~A, ~A;
 ~A~A~A = ref_integer_reg_for_writing(~A);
-emit(COMPOSE_SRL(~A, ~A, ~A));
+emit(COMPOSE_SRA(~A, ~A, ~A));
 unref_integer_reg(~A);
 unref_integer_reg(~A);
 }~%"
-					 value-reg amount-reg
-					 (generate-compiler value-reg value bindings)
-					 (generate-compiler amount-reg amount bindings) target foreign-target
-					 value-reg amount-reg target
-					 value-reg
-					 amount-reg)
-				 (progn
-				   (unless (= (expr-width expr) 32)
-				     (error "cannot shiftr width ~A~%" (expr-width expr)))
-				   (format nil "{
-reg_t ~A, ~A;
-~A~Aemit(COMPOSE_ZAPNOT_IMM(~A, 15, ~A));
-~A = ref_integer_reg_for_writing(~A);
-emit(COMPOSE_SRL(~A, ~A, ~A));
+					  value-reg amount-reg
+					  (generate-compiler value-reg value bindings)
+					  (generate-compiler amount-reg amount bindings)
+					  target foreign-target
+					  value-reg amount-reg target
+					  value-reg
+					  amount-reg)
+				  (let ((right-amount-reg (make-tmp-name)))
+				    (format nil "{
+reg_t ~A, ~A, ~A;
+~A~A~A = ref_integer_reg_for_writing(~A);
+emit(COMPOSE_SLL(~A, ~A, ~A));
+emit(COMPOSE_ADDQ_IMM(~A, ~A, ~A));
 unref_integer_reg(~A);
-unref_integer_reg(~A);
-emit(COMPOSE_ADDL(~A, 31, ~A));
-}~%"
-					   value-reg amount-reg
-					   (generate-compiler value-reg value bindings)
-					   (generate-compiler amount-reg amount bindings) value-reg value-reg
-					   target foreign-target
-					   value-reg amount-reg target
-					   value-reg
-					   amount-reg
-					   target target)))))
+emit(COMPOSE_SRA(~A, ~A, ~A));
+~A}~%"
+					    value-reg amount-reg right-amount-reg
+					    (generate-compiler value-reg value bindings)
+					    (generate-compiler amount-reg amount bindings)
+					    target foreign-target
+					    value-reg (- 64 (expr-width expr)) target
+					    amount-reg (- 64 (expr-width expr)) right-amount-reg
+					    amount-reg
+					    target right-amount-reg target
+					    (normalize-value (expr-width expr) target target))))))
 		   (rotl (value amount)
 			 (let ((tmp-reg (make-tmp-name))
 			       (value-reg (make-tmp-name))
@@ -1842,8 +2122,30 @@ emit_branch(COMPOSE_BR(31, 0), ~A);
 				type-branch-str result-reg false-label
 				(dcs type) result-reg
 				true-label))))
-		   ((logor logand logxor ashiftr) (left right)
-		    (let ((op (cadr (assoc (expr-kind expr) '((logor "BIS") (logand "AND") (logxor "XOR") (ashiftr "SRA"))))))
+		   (and (left right)
+			(let ((tmp-label (make-tmp-name)))
+			  (format nil "{
+label_t ~A = alloc_label();
+~Aemit_label(~A);
+~Afree_label(~A);
+}~%"
+				  tmp-label
+				  (generate-compiler nil left bindings :true-label tmp-label :false-label false-label) tmp-label
+				  (generate-compiler nil right bindings :true-label true-label :false-label false-label) tmp-label)))
+		   (or (left right)
+			(let ((tmp-label (make-tmp-name)))
+			  (format nil "{
+label_t ~A = alloc_label();
+~Aemit_label(~A);
+~Afree_label(~A);
+}~%"
+				  tmp-label
+				  (generate-compiler nil left bindings :true-label true-label :false-label tmp-label) tmp-label
+				  (generate-compiler nil right bindings :true-label true-label :false-label false-label) tmp-label)))
+		   (not (cond)
+			(generate-compiler nil cond bindings :true-label false-label :false-label true-label))
+		   ((logor logand logxor) (left right)
+		    (let ((op (cadr (assoc (expr-kind expr) '((logor "BIS") (logand "AND") (logxor "XOR"))))))
 		      (let ((left-reg (make-tmp-name))
 			    (right-reg (make-tmp-name)))
 			(format nil "{
@@ -1895,30 +2197,31 @@ unref_~A_reg(~A);
 			      op left-reg right-reg target
 			      (dcs type) left-reg
 			      (dcs type) right-reg)))
-		   ((/ /s) (left right)
-		    (let ((const (cadr (assoc (expr-kind expr) '((/ "DIV_UNSIGNED_32_CONST") (/s "DIV_SIGNED_32_CONST"))))))
-		      (let ((left-reg (make-tmp-name))
-			    (right-reg (make-tmp-name)))
-			(format nil "{
+		   ((/ /s % %s) (left right)
+		    (let ((const (cadr (assoc (expr-kind expr) '((/ "DIV_UNSIGNED_~A_CONST") (/s "DIV_SIGNED_~A_CONST")
+								 (% "MOD_UNSIGNED_~A_CONST") (%s "MOD_SIGNED_~A_CONST")))))
+			  (left-reg (make-tmp-name))
+			  (right-reg (make-tmp-name)))
+		      (format nil "{
 reg_t ~A, ~A;
 ~A~Aemit(COMPOSE_MOV(~A, 16));
 emit(COMPOSE_MOV(~A, 17));
 unref_integer_reg(~A);
 unref_integer_reg(~A);
-emit(COMPOSE_LDQ(0, ~A * 4, CONSTANT_AREA_REG));
+emit(COMPOSE_LDQ(0, ~? * 4, CONSTANT_AREA_REG));
 emit(COMPOSE_LDQ(PROCEDURE_VALUE_REG, C_STUB_CONST * 4, CONSTANT_AREA_REG));
 emit(COMPOSE_JMP(RETURN_ADDR_REG, PROCEDURE_VALUE_REG));
 ~A = ref_integer_reg_for_writing(~A);
 emit(COMPOSE_MOV(0, ~A));
 }~%"
-				left-reg right-reg
-				(generate-compiler left-reg left bindings)
-				(generate-compiler right-reg right bindings)
-				left-reg right-reg
-				left-reg right-reg
-				const
-				target foreign-target
-				target)))))))))))
+			      left-reg right-reg
+			      (generate-compiler left-reg left bindings)
+			      (generate-compiler right-reg right bindings)
+			      left-reg right-reg
+			      left-reg right-reg
+			      const (list (expr-width expr))
+			      target foreign-target
+			      target))))))))))
 
 (defun generate-expr-code (expr &optional required-width (required-type 'integer))
   (generate-interpreter (generate-expr expr nil required-width required-type) nil))
@@ -1932,17 +2235,24 @@ emit(COMPOSE_MOV(0, ~A));
 	 (cons (expr-kind expr) (mapcar #'expr-to-sexp (expr-operands expr))))
 	((register-class-p expr)
 	 (register-class-name expr))
+	((register-p expr)
+	 (register-name expr))
+	((subregister-p expr)
+	 (subregister-name expr))
 	(t
 	 expr)))
 
 (defun lookup-register-mapping (expr)
   (case (expr-kind expr)
-    ((register subregister)
+    ((register subregister numbered-subregister)
      (let* ((reg (first (expr-operands expr)))
 	    (class (second (expr-operands expr)))
-	    (name (if (null reg) (register-class-name class) (register-name reg))))
+	    (class-entry (assoc (register-class-name class) *register-mapping*))
+	    (entry (if (null reg)
+		       class-entry
+		       (or (assoc (register-name reg) *register-mapping*) class-entry))))
        (destructuring-bind (name class-name sex)
-	   (assoc name *register-mapping*)
+	   entry
 	 (values (lookup-register-class class-name *target-machine*) sex))))
     (target-register
      (values (second (expr-operands expr)) nil))
@@ -1996,9 +2306,9 @@ emit(COMPOSE_MOV(0, ~A));
 					      (values nil (cons 'set-reg-rhs-fail read-bindings)))))
 				       ((and (eq (expr-kind lvalue) 'mem)
 					     (eq (expr-kind expr-lvalue) 'mem)
-					     (= (first (expr-operands lvalue)) (first (expr-operands expr-lvalue))))
+					     (= (expr-width lvalue)) (expr-width expr-lvalue))
 					(multiple-value-bind (success addr-read-bindings addr-write-bindings)
-					    (match-pattern (second (expr-operands expr-lvalue)) (second (expr-operands lvalue)))
+					    (match-pattern (first (expr-operands expr-lvalue)) (first (expr-operands lvalue)))
 					  (if success
 					      (multiple-value-bind (success rhs-read-bindings rhs-write-bindings)
 						  (match-pattern expr-rhs rhs)
@@ -2020,15 +2330,27 @@ emit(COMPOSE_MOV(0, ~A));
 					      (match-pattern expr op1)
 					      (values nil 'logand-values-fail)))
 					(match-binop expr pattern))))
-			  ((+ - * shiftl shiftr logand logor logxor) (op1 op2)
+			  (+ (op1 op2)
+			     (multiple-value-bind (success read-bindings write-bindings)
+				 (match-binop expr pattern)
+			       (if success
+				   (values success read-bindings write-bindings)
+				   (match-binop (make-expr :kind '+ :type 'integer :width (expr-width pattern)
+							   :operands (list expr (make-integer-expr (expr-width pattern) 0))) pattern))))
+			  ((- * shiftl shiftr logor logxor) (op1 op2)
 			   (match-binop expr pattern))
 			  ((sex zex bitneg mem) (value)
 			       (match-pattern (first (expr-operands expr)) value)))
-			(values nil 'expr-kind-fail))))
+			(expr-case pattern
+			  (+ (op1 op2)
+			     (match-binop (make-expr :kind '+ :type 'integer :width (expr-width pattern)
+						     :operands (list expr (make-integer-expr (expr-width pattern) 0))) pattern))
+			  (t
+			   (values nil 'expr-kind-fail))))))
 		 (values nil 'expr-type-or-width-fail))))
     (dolist (alternative (expr-alternatives expr))
       (multiple-value-bind (success read-bindings write-bindings)
-	  (match alternative pattern)
+	  (match (64bitify alternative) pattern)
 	(when (and success
 		   (every #'(lambda (x)
 			      (let ((pattern (car x))
@@ -2044,325 +2366,430 @@ emit(COMPOSE_MOV(0, ~A));
 	  (return-from match-pattern (values success read-bindings write-bindings)))))
     nil))
 
-(defun generate-match-code (insn generator read-bindings write-bindings fail-label)
-  (let* ((bindings nil)
-	 (delayed-bindings nil)
-	 (input-bindings nil)
-	 (register-frees nil)
-	 (obeyed-constraints nil)
-	 (can-fail nil)
-	 (num-insns 1)
-	 (text (with-output-to-string (out)
-		 (labels ((match-fields (pattern expr binding)
-			    (labels ((evade ()
-;				       (format t "evading with ~A and ~A (~A)~%" pattern expr input-bindings)
-				       (compute-fields pattern (generate-interpreter expr nil) binding)))
-			      (let ((expr (if (eq (expr-kind expr) 'input)
-					      (cdr (assoc (first (expr-operands expr)) input-bindings))
-					      expr)))
-				(if (not (null expr))
-				    (cond ((eq (expr-kind (simplify expr)) 'integer)
-					   (let* ((expr (simplify expr))
-						  (value (first (expr-operands expr))))
-					     (expr-case pattern
-					       (sex (pattern-op)
-						    (let* ((op-width (expr-width pattern-op))
-							   (diff (- (expr-width pattern) op-width))
-							   (extension (ash value (- op-width))))
-						      (if (or (zerop extension)
-							      (= extension (1- (expt 2 diff))))
-							  (match-fields pattern-op
-									(make-integer-expr (expr-width expr) (logand value (1- (ash 1 op-width))))
-									binding)
-							  (error "static mismatch: ~A ~A~%" pattern expr))))
-					       (zex (pattern-op)
-						    (if (zerop (ash value (- (expr-width pattern-op))))
-							(match-fields pattern-op expr binding)
-							(return-from generate-match-code nil)))
-					       (shiftl (pattern-value amount)
-						       (if (eq (expr-kind amount) 'integer)
-							   (let ((amount (first (expr-operands amount))))
-							     (if (zerop (logand value (1- (ash 1 amount))))
-								 (match-fields pattern-value
-									       (make-integer-expr (expr-width expr) (ash value amount))
-									       binding)
-								 (return-from generate-match-code nil)))
-							   (evade)))
-					       (maskmask (bit-width mask)
-							 (let ((inverted (invert-maskmask bit-width value)))
-							   (if (null inverted)
-							       (return-from generate-match-code nil)
-							       (match-fields mask (make-integer-expr (expr-width mask) inverted) binding))))
+(defun non-zero-bits (expr bindings)
+  (labels ((bits (expr)
+	     (expr-case expr
+	       (input (name)
+		      (let ((binding (assoc name bindings)))
+			(if binding
+			    (bits (cdr binding))
+			    (1- (ash 1 (expr-width expr))))))
+	       (integer (value)
+			value)
+	       (zex (op)
+		    (bits op))
+	       (* (op1 op2)
+		  (1- (ash 2 (+ (highest-bit (bits op1)) (highest-bit (bits op2))))))
+	       (t
+		(1- (ash 1 (expr-width expr)))))))
+    (bits expr)))
+
+(defun highest-bit (x)
+  (floor (log x 2)))
+
+(defvar *generated-insns* nil)
+
+(defun generate-match-code (insn generator read-bindings write-bindings fail-label &key shallow)
+  (let ((*generated-insns* (cons insn *generated-insns*)))
+;    (format t "generating ~A~%" (reverse (mapcar #'insn-name *generated-insns*)))
+    (let* ((bindings nil)
+	   (delayed-bindings nil)
+	   (input-bindings nil)
+	   (register-frees nil)
+	   (obeyed-constraints nil)
+	   (can-fail nil)
+	   (num-insns 1)
+	   (new-effects nil)
+	   (text (with-output-to-string (out)
+		   (labels ((match-fields (pattern expr binding)
+			      (labels ((evade ()
+;					 (format t "evading with ~A and ~A (~A) (~A)~%" pattern expr input-bindings (non-zero-bits expr input-bindings))
+					 (compute-fields pattern
+							 (let ((*take-fields-from-variables* nil))
+							   (generate-interpreter expr nil))
+							 (non-zero-bits expr input-bindings)
+							 binding)))
+				(let ((expr (if (eq (expr-kind expr) 'input)
+						(cdr (assoc (first (expr-operands expr)) input-bindings))
+						expr)))
+				  (if (not (null expr))
+				      (cond ((eq (expr-kind (simplify expr)) 'integer)
+					     (let* ((expr (simplify expr))
+						    (value (first (expr-operands expr))))
+					       (expr-case pattern
+						 (sex (pattern-op)
+						      (let* ((op-width (expr-width pattern-op))
+							     (diff (- (expr-width pattern) op-width))
+							     (extension (ash value (- op-width))))
+							(if (or (zerop extension)
+								(= extension (1- (expt 2 diff))))
+							    (match-fields pattern-op
+									  (make-integer-expr (expr-width expr) (logand value (1- (ash 1 op-width))))
+									  binding)
+							    (error "static mismatch: ~A ~A~%" pattern expr))))
+						 (zex (pattern-op)
+						      (if (zerop (ash value (- (expr-width pattern-op))))
+							  (match-fields pattern-op expr binding)
+							  (return-from generate-match-code nil)))
+						 (shiftl (pattern-value amount)
+							 (if (eq (expr-kind amount) 'integer)
+							     (let ((amount (first (expr-operands amount))))
+							       (if (zerop (logand value (1- (ash 1 amount))))
+								   (match-fields pattern-value
+										 (make-integer-expr (expr-width expr) (ash value amount))
+										 binding)
+								   (return-from generate-match-code nil)))
+							     (evade)))
+						 (maskmask (bit-width mask)
+							   (let ((inverted (invert-maskmask bit-width value)))
+							     (if (null inverted)
+								 (return-from generate-match-code nil)
+								 (match-fields mask (make-integer-expr (expr-width mask) inverted) binding))))
+						 (t
+						  (evade)))))
+					    ((and (eq (expr-kind pattern) (expr-kind expr))
+						  (eq (expr-type pattern) (expr-type expr))
+						  (= (expr-width pattern) (expr-width expr)))
+					     (expr-case expr
+					       (sex (expr-op)
+						    (let ((pattern-op (first (expr-operands pattern))))
+						      (if (= (expr-width pattern-op) (expr-width expr-op))
+							  (match-fields pattern-op expr-op binding)
+							  (evade))))
 					       (t
-						(evade)))))
-					  ((and (eq (expr-kind pattern) (expr-kind expr))
-						(eq (expr-type pattern) (expr-type expr))
-						(= (expr-width pattern) (expr-width expr)))
-					   (expr-case expr
-					     (sex (expr-op)
-						  (let ((pattern-op (first (expr-operands pattern))))
-						    (if (= (expr-width pattern-op) (expr-width expr-op))
-							(match-fields pattern-op expr-op binding)
-							(evade))))
-					     (t
-					      (evade))))
-					  (t
-					   (evade)))
-				    (evade)))))
-			  (compute-fields (expr value binding)
-			    (expr-case expr
-			      (field (name begin end)
-				     (let ((c-name (format nil "field_~A" (dcs name))))
-				       (push (cons name binding) bindings)
-				       (format nil "~A = ~A;~%" c-name value)))
-			      (sex (op)
-				   (let* ((name (make-tmp-name))
-					  (op-width (expr-width op))
-					  (diff (- (expr-width expr) op-width)))
+						(evade))))
+					    (t
+					     (evade)))
+				      (evade)))))
+			    (compute-fields (expr value non-zero-bits binding)
+			      (expr-case expr
+				(field (name begin end)
+				       (let ((c-name (format nil "field_~A" (dcs name))))
+					 (push (cons name binding) bindings)
+					 (format nil "~A = ~A;~%" c-name value)))
+				(* (op1 op2)
+				   (unless (eq (expr-kind op2) 'integer)
+				     (format t "op2 in * not integer~%")
+				     (return-from generate-match-code nil))
+				   (let ((name (make-tmp-name))
+					 (divisor (first (expr-operands op2))))
 				     (setf can-fail t)
 				     (format nil "{
+~A ~A = ~A;
+if (~A % ~A == 0)
+~Aelse goto ~A;
+}~%"
+					     (c-type (expr-width expr) 'integer) name value
+					     name divisor
+					     (compute-fields op1 (format nil "(~A / ~A)" name divisor)
+							     (ash (1- (ash 2 (highest-bit non-zero-bits))) (- (highest-bit divisor)))
+							     binding)
+					     fail-label)))
+				(- (op1 op2)
+				   (unless (eq (expr-kind op1) 'integer)
+				     (format t "op1 in * not integer~%")
+				     (return-from generate-match-code nil))
+				   (compute-fields op2 (format nil "((~A - ~A) & 0x~X)" (first (expr-operands op1)) value (1- (ash 1 (expr-width expr))))
+						   (1- (ash 1 (expr-width expr))) binding))
+				(sex (op)
+				     (let* ((name (make-tmp-name))
+					    (op-width (expr-width op))
+					    (diff (- (expr-width expr) op-width)))
+				       (setf can-fail t)
+				       (format nil "{
 ~A ~A = ~A;
 if ((~A >> ~A) == 0x~X || (~A >> ~A) == 0)
 ~Aelse goto ~A;
 }~%"
-					     (c-type (expr-width expr) 'integer) name value
-					     name op-width (1- (expt 2 diff)) name op-width
-					     (compute-fields op (format nil "(~A & 0x~X)" name (1- (ash 1 op-width))) binding)
-					     fail-label)))
-			      (zex (op)
-				   (let ((name (make-tmp-name)))
-				     (setf can-fail t)
-				     (format nil "{
+					       (c-type (expr-width expr) 'integer) name value
+					       name op-width (1- (expt 2 diff)) name op-width
+					       (compute-fields op (format nil "(~A & 0x~X)" name (1- (ash 1 op-width)))
+							       (logand non-zero-bits (1- (ash 1 op-width)))
+							       binding)
+					       fail-label)))
+				(zex (op)
+				     (if (= (logand non-zero-bits (1- (ash 1 (expr-width op)))) non-zero-bits)
+					 (compute-fields op value non-zero-bits bindings)
+					 (let ((name (make-tmp-name)))
+					   (setf can-fail t)
+					   (format nil "{
 ~A ~A = ~A;
 if ((~A >> ~A) == 0)
 ~Aelse goto ~A;
 }~%"
-					     (c-type (expr-width expr) 'integer) name value
-					     name (expr-width op)
-					     (compute-fields op name binding)
-					     fail-label)))
-			      (bitneg (op)
-				      (compute-fields op (format nil "(~~~A & 0x~X)" value (1- (ash 1 (expr-width expr)))) binding))
-			      (shiftl (op amount)
-				      (unless (eq (expr-kind amount) 'integer)
-					(format t "trying to invert shiftl with non-constant amount~%")
-					(return-from generate-match-code nil))
-				      (let ((amount (first (expr-operands amount)))
-					    (name (make-tmp-name)))
-					(setf can-fail t)
-					(format nil "{
+						   (c-type (expr-width expr) 'integer) name value
+						   name (expr-width op)
+						   (compute-fields op name non-zero-bits binding)
+						   fail-label))))
+				(bitneg (op)
+					(compute-fields op (format nil "(~~~A & 0x~X)" value (1- (ash 1 (expr-width expr))))
+							(1- (ash 1 (expr-width expr)))
+							binding))
+				(logand (op1 op2)
+;					(format t "matching ~A with ~A (~A)~%" expr value non-zero-bits)
+					(unless (eq (expr-kind op2) 'integer)
+					  (format t "op2 in logand not integer~%")
+					  (return-from generate-match-code nil))
+					(let ((name (make-tmp-name))
+					      (op2 (first (expr-operands op2))))
+					  (if (= (logand non-zero-bits op2) non-zero-bits)
+					      (compute-fields op1 value non-zero-bits bindings)
+					      (progn
+						(setf can-fail t)
+						(format nil "{
 ~A ~A = ~A;
-if ((~A & 0x~X) == 0)
+if ((~A & ~A) == ~A)
 ~Aelse goto ~A;
 }~%"
-						(c-type (expr-width expr) 'integer) name value
-						name (1- (ash 1 amount))
-						(compute-fields op (format nil "(~A >> ~A)" name amount) binding)
-						fail-label)))
-			      (shiftr (op amount)
-				      (unless (eq (expr-kind amount) 'integer)
-					(format t "trying to invert shiftr with non-constant amount~%")
-					(return-from generate-match-code nil))
-				      (let ((amount (first (expr-operands amount)))
-					    (name (make-tmp-name)))
-					(setf can-fail t)
-					(format nil "{
-~A ~A = ~A;
-if ((~A & 0x~X) == 0)
-~Aelse goto ~A;
-}~%"
-						(c-type (expr-width expr) 'integer) name value
-						name (integer-bit-range (- (expr-width expr) amount) (1- (expr-width expr)))
-						(compute-fields op (format nil "(~A << ~A)" name amount) binding)
-						fail-label)))
-			      (maskmask (bit-width mask)
-					(let ((name (make-tmp-name)))
+							(c-type (expr-width expr) 'integer) name value
+							name op2 name
+							(compute-fields op1 name non-zero-bits binding)
+							fail-label)))))
+				(shiftl (op amount)
+					(unless (eq (expr-kind amount) 'integer)
+					;					(format t "trying to invert shiftl with non-constant amount~%")
+					  (return-from generate-match-code nil))
+					(let ((amount (first (expr-operands amount)))
+					      (name (make-tmp-name)))
 					  (setf can-fail t)
 					  (format nil "{
+~A ~A = ~A;
+if ((~A & 0x~X) == 0)
+~Aelse goto ~A;
+}~%"
+						  (c-type (expr-width expr) 'integer) name value
+						  name (1- (ash 1 amount))
+						  (compute-fields op (format nil "(~A >> ~A)" name amount)
+								  (ash non-zero-bits (- amount))
+								  binding)
+						  fail-label)))
+				(shiftr (op amount)
+					(unless (eq (expr-kind amount) 'integer)
+					;					(format t "trying to invert shiftr with non-constant amount~%")
+					  (return-from generate-match-code nil))
+					(let ((amount (first (expr-operands amount)))
+					      (name (make-tmp-name)))
+					  (setf can-fail t)
+					  (format nil "{
+~A ~A = ~A;
+if ((~A & 0x~X) == 0)
+~Aelse goto ~A;
+}~%"
+						  (c-type (expr-width expr) 'integer) name value
+						  name (integer-bit-range (- (expr-width expr) amount) (1- (expr-width expr)))
+						  (compute-fields op (format nil "(~A << ~A)" name amount)
+								  (ash non-zero-bits amount)
+								  binding)
+						  fail-label)))
+				(maskmask (bit-width mask)
+					  (let ((name (make-tmp-name)))
+					    (setf can-fail t)
+					    (format nil "{
 ~A ~A = ~A;
 if (can_inv_maskmask(~A, ~A))
 ~Aelse goto ~A;
 }~%"
-						  (c-type (expr-width expr) 'integer) name value
-						  bit-width name
-						  (compute-fields mask (format nil "inv_maskmask(~A, ~A)" bit-width name) binding)
-						  fail-label))))))
-		   (let ((variables (remove-duplicates (append (mappend #'(lambda (x)
-									    (all-inputs-and-fields (car x)))
-									(append read-bindings write-bindings))
-							       (mappend #'all-inputs-and-fields (cadr generator))))))
-		     (dolist (variable variables)
-		       (format out "~A ~A;~%"
-			       (c-type (expr-width variable) (expr-type variable))
-			       (expr-case variable
-				 (input (name) name)
-				 (field (name begin end) (format nil "field_~A" (dcs name)))))))
-		   (dolist (binding read-bindings)
-		     (let ((pattern (car binding))
-			   (expr (simplify (cdr binding))))
-		       (expr-case pattern
-			 (input (name)
-				(format out "~A = ~A;~%" name (generate-interpreter expr nil))
-				(push (cons name '(input)) bindings)
-				(push (cons name expr) input-bindings))
-			 (integer (value)
-				  (if (eq (expr-kind expr) 'integer)
-				      (when (/= value (first (expr-operands expr)))
-					(return-from generate-match-code nil))
-				      (progn
-					(setf can-fail t)
-					(format out "if (~A != ~A) goto ~A;~%" value (generate-interpreter expr nil) fail-label))))
-			 (register (reg class number)
-				   (push (cons (first (expr-operands number)) `(register ,class)) bindings))
-			 (subregister (reg class number begin end named)
-				      (push (cons (first (expr-operands number)) `(register ,class)) bindings)))))
-		   (dolist (binding write-bindings)
-		     (let ((pattern (car binding)))
-		       (push (cons (first (expr-operands (third (expr-operands pattern)))) `(register ,(second (expr-operands pattern)))) bindings)))
-		   (let ((*take-fields-from-variables* t))
-		     (labels ((loop ()
-				(let ((changes nil))
-				  (dolist (constraint (cadr generator))
-				    (when (eq (expr-kind constraint) '=)
-				      (let* ((bounds (mapcar #'car bindings))
-					     (unbounds (set-difference (all-input-and-field-names constraint) bounds)))
-					(when (= (length unbounds) 1)
-					  (let ((unbound (car unbounds)))
-					    (cond ((eq (expr-kind (first (expr-operands constraint))) 'input)
-						   (let* ((binding-type (cdr (assoc (first (expr-operands (first (expr-operands constraint))))
-										    bindings)))
-							  (binding-text (match-fields (second (expr-operands constraint))
-										      (first (expr-operands constraint))
-										      binding-type)))
-						     (if (eq (car binding-type) 'register)
-							 (push binding-text delayed-bindings)
-							 (princ binding-text out))))
-						  ((null (set-difference (all-input-and-field-names (first (expr-operands constraint))) bounds))
-						   (princ (match-fields (second (expr-operands constraint))
-									(first (expr-operands constraint))
-									'(input))
-							  out))
-						  (t
-						   (princ (match-fields (first (expr-operands constraint))
-									(second (expr-operands constraint))
-									'(input))
-							  out)))
-					    (setf changes t)
-					    (push constraint obeyed-constraints))))))
-				  (when changes
-				    (loop)))))
-		       (loop))
-		     (let ((bounds (mapcar #'car bindings))
-			   (register-bounds (mapcar #'car (remove-if-not #'(lambda (x) (eq (cadr x) 'register)) bindings))))
-		       (dolist (constraint (cadr generator))
-			 (unless (member constraint obeyed-constraints)
-			   (let ((all-inputs-and-fields (all-input-and-field-names constraint)))
-			     (unless (null (set-difference all-inputs-and-fields bounds))
-			       (error "unbounds in constraint ~A~%" constraint))
-			     (unless (or (null (intersection all-inputs-and-fields register-bounds))
-					 (null (set-difference all-inputs-and-fields register-bounds)))
-			       (error "register bounds in constraint ~A~%" constraint))
-			     (when (null (intersection all-inputs-and-fields register-bounds))
-			       (setf can-fail t)
-			       (format out "if (!~A) goto ~A;~%" (generate-interpreter constraint nil) fail-label)))))))
+						    (c-type (expr-width expr) 'integer) name value
+						    bit-width name
+						    (compute-fields mask (format nil "inv_maskmask(~A, ~A)" bit-width name)
+								    (1- (ash 1 (expr-width mask)))
+								    binding)
+						    fail-label))))))
+		     (let ((variables (remove-duplicates (append (mappend #'(lambda (x)
+									      (all-inputs-and-fields (car x)))
+									  (append read-bindings write-bindings))
+								 (mappend #'all-inputs-and-fields (cadr generator)))
+							 :key #'(lambda (x) (first (expr-operands x))))))
+		       (dolist (variable variables)
+			 (format out "~A ~A;~%"
+				 (c-type (expr-width variable) (expr-type variable))
+				 (expr-case variable
+				   (input (name) name)
+				   (field (name begin end) (format nil "field_~A" (dcs name)))))))
+		     (dolist (binding read-bindings)
+		       (let ((pattern (car binding))
+			     (expr (simplify (cdr binding))))
+			 (expr-case pattern
+			   (input (name)
+				  (format out "~A = ~A;~%" name (generate-interpreter expr nil))
+				  (push (cons name '(input)) bindings)
+				  (push (cons name expr) input-bindings))
+			   (integer (value)
+				    (if (eq (expr-kind expr) 'integer)
+					(when (/= value (first (expr-operands expr)))
+					  (return-from generate-match-code nil))
+					(progn
+					  (setf can-fail t)
+					  (format out "if (~A != ~A) goto ~A;~%" value (generate-interpreter expr nil) fail-label))))
+			   (register (reg class number)
+				     (push (cons (first (expr-operands number)) `(register ,class)) bindings))
+			   (subregister (reg class number begin end named)
+					(push (cons (first (expr-operands number)) `(register ,class)) bindings)))))
+		     (dolist (binding write-bindings)
+		       (let ((pattern (car binding)))
+			 (push (cons (first (expr-operands (third (expr-operands pattern)))) `(register ,(second (expr-operands pattern)))) bindings)))
+		     (let ((*take-fields-from-variables* t))
+		       (labels ((loop ()
+				  (let ((changes nil))
+				    (dolist (constraint (cadr generator))
+				      (when (eq (expr-kind constraint) '=)
+					(let* ((bounds (mapcar #'car bindings))
+					       (unbounds (set-difference (all-input-and-field-names constraint) bounds)))
+					  (when (= (length unbounds) 1)
+					    (let ((unbound (car unbounds)))
+					      (cond ((eq (expr-kind (first (expr-operands constraint))) 'input)
+						     (let* ((binding-type (cdr (assoc (first (expr-operands (first (expr-operands constraint))))
+										      bindings)))
+							    (binding-text (match-fields (second (expr-operands constraint))
+											(first (expr-operands constraint))
+											binding-type)))
+						       (if (eq (car binding-type) 'register)
+							   (push binding-text delayed-bindings)
+							   (princ binding-text out))))
+						    ((null (set-difference (all-input-and-field-names (first (expr-operands constraint))) bounds))
+						     (princ (match-fields (second (expr-operands constraint))
+									  (first (expr-operands constraint))
+									  '(input))
+							    out))
+						    (t
+						     (princ (match-fields (first (expr-operands constraint))
+									  (second (expr-operands constraint))
+									  '(input))
+							    out)))
+					      (setf changes t)
+					      (push constraint obeyed-constraints))))))
+				    (when changes
+				      (loop)))))
+			 (loop))
+		       (let ((bounds (mapcar #'car bindings))
+			     (register-bounds (mapcar #'car (remove-if-not #'(lambda (x) (eq (cadr x) 'register)) bindings))))
+			 (dolist (constraint (cadr generator))
+			   (unless (member constraint obeyed-constraints)
+			     (let ((all-inputs-and-fields (all-input-and-field-names constraint)))
+			       (unless (null (set-difference all-inputs-and-fields bounds))
+				 (error "unbounds in constraint ~A~%" constraint))
+			       (unless (or (null (intersection all-inputs-and-fields register-bounds))
+					   (null (set-difference all-inputs-and-fields register-bounds)))
+				 (error "register bounds in constraint ~A~%" constraint))
+			       (when (null (intersection all-inputs-and-fields register-bounds))
+				 (setf can-fail t)
+				 (format out "if (!~A) goto ~A;~%" (generate-interpreter constraint nil) fail-label)))))))
 					;      (format t "~%~%~A~%~%" bindings)
-		   (format out "/* commit */~%")
-		   (dolist (binding read-bindings)
-		     (let ((pattern (car binding))
-			   (expr (cdr binding)))
-		       (expr-case pattern
-			 (input (name)
-				t)
-			 (integer (value)
+		     (format out "/* commit */~%")
+		     (dolist (binding read-bindings)
+		       (let ((pattern (car binding))
+			     (expr (cdr binding)))
+			 (expr-case pattern
+			   (input (name)
 				  t)
-			 (register (reg class number)
-				   (cond ((expr-constp expr)
-					  (let ((name (first (expr-operands number))))
-					    (format out "~A = ref_~A_reg_for_writing(-1);~%emit_load_~A_~A(~A, ~A);~%"
-						    name
-						    (dcs (register-class-name class))
-						    (dcs (register-class-type class))
-						    (expr-width expr)
-						    name
-						    (generate-interpreter expr nil))
-					    (incf num-insns)))
-					 ((eq (expr-kind expr) 'register)
-					  (format out "~A = ref_~A_reg_for_reading(~A);~%"
-						  (first (expr-operands number))
-						  (dcs (register-class-name class))
-						  (generate-interpreter (third (expr-operands expr)) nil)))
-					 (t
-					  (let* ((source-class (lookup-register-class 'gpr *source-machine*))
-						 (reg-var-name (first (expr-operands number)))
-						 (source-reg (make-expr :kind 'target-register
-									:type (expr-type expr) :width (expr-width expr)
-									:operands (list reg-var-name class)))
-						 (effect (list (make-expr :kind 'set :operands (list source-reg expr))))
-						 (label (make-tmp-name)))
-					    (if (may-generate-effect (car effect))
-						(progn
-						  (format t "matching with reg: ~A~%" effect)
-						  (format out "{~%")
-						  (incf num-insns (generate-effect-compiler effect label out))
-						  (format out "~A:~%}~%" label))
-						(return-from generate-match-code nil)))))
-				   (push (format nil "unref_~A_reg(~A);~%" (dcs (register-class-name class)) (first (expr-operands number)))
-					 register-frees))
-			 (subregister (reg class number begin end named)
-				      (cond ((expr-constp expr)
-					     (let ((name (first (expr-operands number))))
-					       (format out "~A = ref_~A_reg_for_writing(-1);~%emit_load_~A_~A(~A, ~A);~%"
-						       name
-						       (dcs (register-class-name class))
-						       (dcs (register-class-type class))
-						       (expr-width expr)
-						       name
-						       (generate-interpreter expr nil))
-					       (incf num-insns)))
-					    ((eq (expr-kind expr) 'subregister)
-					     (format out "~A = ref_~A_reg_for_reading(~A);~%"
-						     (first (expr-operands number))
-						     (dcs (register-class-name class))
-						     (generate-interpreter (third (expr-operands expr)) nil)))
-					    (t
-					     (let* ((source-class (lookup-register-class 'gpr *source-machine*))
-						    (reg-var-name (first (expr-operands number)))
-						    (source-reg (make-expr :kind 'target-subregister
-									   :type (expr-type expr) :width (expr-width expr)
-									   :operands (list reg-var-name class begin end)))
-						    (effect (list (make-expr :kind 'set :operands (list source-reg expr))))
-						    (label (make-tmp-name)))
-					       (if (may-generate-effect (car effect))
-						   (progn
-						     (format t "matching with subreg: ~A~%" effect)
-						     (format out "{~%")
-						     (incf num-insns (generate-effect-compiler effect label out))
-						     (format out "~A:~%}~%" label))
-						   (return-from generate-match-code nil)))))
-				      (push (format nil "unref_~A_reg(~A);~%" (dcs (register-class-name class)) (first (expr-operands number)))
-					    register-frees)))))
-		   (dolist (binding write-bindings)
-		     (let ((pattern (car binding))
-			   (expr (cdr binding)))
-		       (case (expr-kind expr)
-			 (target-register
-			  (format out "~A = ref_~A_reg_for_writing(-1);~%"
-				  (first (expr-operands expr))
-				  (dcs (register-class-name (second (expr-operands expr))))))
-			 (t
-			  (let ((reg-var-name (first (expr-operands (third (expr-operands pattern)))))
-				(reg-class-name (dcs (register-class-name (second (expr-operands pattern))))))
-			    (format out "~A = ref_~A_reg_for_writing(~A);~%"
-				    reg-var-name
-				    reg-class-name
-				    (generate-interpreter (third (expr-operands expr)) nil))
-			    (push (format nil "unref_~A_reg(~A);~%" reg-class-name reg-var-name) register-frees))))))
-		   (mapc #'(lambda (x) (princ x out)) (reverse delayed-bindings))
-		   (format out "emit(COMPOSE_~A(~{~A~^, ~}));~%" (insn-name insn) (mapcar #'(lambda (x) (format nil "field_~A" (dcs x)))
-											  (insn-operands insn)))
-		   (mapc #'(lambda (x) (princ x out)) register-frees))
-		 (format out "/* can fail: ~A   num insns: ~A */~%" can-fail num-insns))))
-    (values text can-fail num-insns)))
+			   (integer (value)
+				    t)
+			   (register (reg class number)
+				     (cond ((expr-constp expr)
+					    (let ((name (first (expr-operands number))))
+					      (format out "~A = ref_~A_reg_for_writing(-1);~%emit_load_~A_~A(~A, ~A);~%"
+						      name
+						      (dcs (register-class-name class))
+						      (dcs (register-class-type class))
+						      (expr-width expr)
+						      name
+						      (generate-interpreter expr nil))
+					      (incf num-insns)))
+					   ((eq (expr-kind expr) 'register)
+					    (let ((source-class (second (expr-operands expr))))
+					      (format out "~A = ref_~A_reg_for_reading(~A + ~A);~%"
+						      (first (expr-operands number))
+						      (dcs (register-class-name class))
+						      (register-class-start-index source-class)
+						      (generate-interpreter (third (expr-operands expr)) nil))))
+					   (t
+					    (let* ((source-class (lookup-register-class 'gpr *source-machine*))
+						   (reg-var-name (first (expr-operands number)))
+						   (source-reg (make-expr :kind 'target-register
+									  :type (expr-type expr) :width (expr-width expr)
+									  :operands (list reg-var-name class)))
+						   (effect (list (make-expr :kind 'set :operands (list source-reg expr))))
+						   (label (make-tmp-name)))
+					      (if (may-generate-effect (car effect))
+						  (progn
+;						    (format t "matching with reg: ~A~%" effect)
+						    (push effect new-effects)
+						    (unless shallow
+						      (format out "{~%")
+						      (let ((result (generate-effect-compiler effect label out)))
+							(when (null result)
+;							(format t "could not generate compiler for ~A~%" effect)
+							  (return-from generate-match-code nil))
+							(incf num-insns result)
+							(format out "~A:~%}~%" label))))
+						  (return-from generate-match-code nil)))))
+				     (push (format nil "unref_~A_reg(~A);~%" (dcs (register-class-name class)) (first (expr-operands number)))
+					   register-frees))
+			   (subregister (reg class number begin end named)
+					(cond ((expr-constp expr)
+					       (let ((name (first (expr-operands number))))
+						 (format out "~A = ref_~A_reg_for_writing(-1);~%emit_load_~A_~A(~A, ~A);~%"
+							 name
+							 (dcs (register-class-name class))
+							 (dcs (register-class-type class))
+							 (expr-width expr)
+							 name
+							 (generate-interpreter expr nil))
+						 (incf num-insns)))
+					      ((eq (expr-kind expr) 'subregister)
+					       (let ((source-class (second (expr-operands expr))))
+						 (format out "~A = ref_~A_reg_for_reading(~A + ~A);~%"
+							 (first (expr-operands number))
+							 (dcs (register-class-name class))
+							 (register-class-start-index source-class)
+							 (generate-interpreter (third (expr-operands expr)) nil))))
+					      (t
+					       (let* ((source-class (lookup-register-class 'gpr *source-machine*))
+						      (reg-var-name (first (expr-operands number)))
+						      (source-reg (make-expr :kind 'target-subregister
+									     :type (expr-type expr) :width (expr-width expr)
+									     :operands (list reg-var-name class begin end)))
+						      (effect (list (make-expr :kind 'set :operands (list source-reg expr))))
+						      (label (make-tmp-name)))
+						 (if (may-generate-effect (car effect))
+						     (progn
+;						       (format t "matching with subreg: ~A~%" effect)
+						       (push effect new-effects)
+						       (unless shallow
+							 (format out "{~%")
+							 (let ((result (generate-effect-compiler effect label out)))
+							   (when (null result)
+;							   (format t "could not generate compiler for ~A~%" effect)
+							     (return-from generate-match-code nil))
+							   (incf num-insns result))
+							 (format out "~A:~%}~%" label)))
+						     (return-from generate-match-code nil)))))
+					(push (format nil "unref_~A_reg(~A);~%" (dcs (register-class-name class)) (first (expr-operands number)))
+					      register-frees)))))
+		     (dolist (binding write-bindings)
+		       (let ((pattern (car binding))
+			     (expr (cdr binding)))
+			 (case (expr-kind expr)
+			   (target-register
+			    (format out "~A = ~A = ref_~A_reg_for_writing(-1);~%"
+				    (first (expr-operands (third (expr-operands pattern))))
+				    (first (expr-operands expr))
+				    (dcs (register-class-name (second (expr-operands expr))))))
+			   (t
+			    (let ((reg-var-name (first (expr-operands (third (expr-operands pattern)))))
+				  (reg-class-name (dcs (register-class-name (second (expr-operands pattern))))))
+			      (format out "~A = ref_~A_reg_for_writing(~A + ~A);~%"
+				      reg-var-name
+				      reg-class-name
+				      (register-class-start-index (second (expr-operands expr)))
+				      (generate-interpreter (third (expr-operands expr)) nil))
+			      (push (format nil "unref_~A_reg(~A);~%" reg-class-name reg-var-name) register-frees))))))
+		     (mapc #'(lambda (x) (princ x out)) (reverse delayed-bindings))
+		     (format out "emit(COMPOSE_~A(~{~A~^, ~}));~%" (insn-name insn) (mapcar #'(lambda (x) (format nil "field_~A" (dcs x)))
+											    (insn-operands insn)))
+		     (mapc #'(lambda (x) (princ x out)) register-frees))
+		   (format out "/* can fail: ~A   num insns: ~A */~%" can-fail num-insns))))
+      (values text can-fail num-insns new-effects))))
 
 (defun all-generator-matches (source-effect)
   (let ((matches nil))
@@ -2375,13 +2802,13 @@ if (can_inv_maskmask(~A, ~A))
 	    (multiple-value-bind (success read-bindings write-bindings)
 		(match-pattern source-effect (caar generator))
 	      (when success
-		(if (= (length *effects-in-generation*) 1)
-		  (format t "toplevel success: ~A~%" (insn-name insn))
-		  (format t "effects in generation: ~A~%" (length *effects-in-generation*)))
+;		(if (= (length *effects-in-generation*) 1)
+;		  (format t "toplevel success: ~A~%" (insn-name insn))
+;		  (format t "effects in generation: ~A~%" (length *effects-in-generation*)))
 		(push (list insn generator read-bindings write-bindings) matches)))))))
     matches))
 
-(defun decompose-insn-effect (insn make-inputs)
+(defun decompose-effect (effect make-inputs)
   (labels ((generate (expr)
 	     (cond ((member (expr-kind expr) '(integer float))
 		    (choices (list expr nil)))
@@ -2403,8 +2830,16 @@ if (can_inv_maskmask(~A, ~A))
 												:operands (list reg class number-pattern))
 										     rhs-pattern))
 							  (append rhs-constraints number-constraints)))))
-			       (subregister (subreg)
-					    (choices (list (make-expr :kind 'set :operands (list subreg rhs-pattern)) rhs-constraints)))
+			       (subregister (reg class number begin end named)
+					    (collect-choices (number-pattern number-constraints)
+						(generate number)
+					      (choices (list (make-expr :kind 'set :operands (list (make-expr :kind 'subregister
+													      :type (expr-type lvalue)
+													      :width (expr-width lvalue)
+													      :operands (list reg class number-pattern
+															      begin end named))
+												   rhs-pattern))
+							     (append rhs-constraints number-constraints)))))
 			       (numbered-subregister (reg class number width index)
 						     (collect-choices (number-pattern number-constraints)
 							 (generate number)
@@ -2419,12 +2854,12 @@ if (can_inv_maskmask(~A, ~A))
 															      width index-pattern))
 												   rhs-pattern))
 									(append rhs-constraints number-constraints index-constraints))))))
-			       (mem (width addr)
+			       (mem (addr)
 				    (collect-choices (addr-pattern addr-constraints)
 					(generate addr)
 				      (choices (list (make-expr :kind 'set
-								:operands (list (make-expr :kind 'mem :type (expr-type lvalue) :width width
-											   :operands (list width addr-pattern))
+								:operands (list (make-expr :kind 'mem :type (expr-type lvalue) :width (expr-width lvalue)
+											   :operands (list addr-pattern))
 										rhs-pattern))
 						     (append rhs-constraints addr-constraints))))))))
 		      (if (cond cons alt)
@@ -2456,9 +2891,9 @@ if (can_inv_maskmask(~A, ~A))
 							       :operands (list reg class number-pattern begin end named)) number-constraints))))
 		      (numbered-subregister (reg class number width index)
 					    (collect-choices (number-pattern number-constraints)
-						(generate-number)
+						(generate number)
 					      (collect-choices (index-pattern index-constraints)
-						  (generate-number)
+						  (generate index)
 						(choices (list (make-expr :kind 'numbered-subregister :type (expr-type expr) :width (expr-width expr)
 									  :operands (list reg class number-pattern width index-pattern))
 							       (append number-constraints index-constraints))))))
@@ -2500,13 +2935,13 @@ if (can_inv_maskmask(~A, ~A))
 		       (decompose (cdr effect))
 		     (choices (list (cons pattern rest-patterns)
 				    (append constraints rest-constraints))))))))
-    (when (= (length (insn-effect insn)) 1)
-      (let ((generators (all-choices (decompose (insn-effect insn)))))
+;    (assert (= (length (insn-effect insn)) 1))
+    (let ((generators (all-choices (decompose effect))))
 ;	(dolist (generator generators)
 ;	  (destructuring-bind (pattern constraints)
 ;	      generator
 ;	    (format t "***pattern: ~A~%***constraints: ~A~%~%~%" (expr-to-sexp pattern) (mapcar #'expr-to-sexp constraints))))
-	generators))))
+      generators)))
 
 (defun register-inputs (expr)
   (let ((operand-inputs (mappend #'register-inputs (remove-if-not #'expr-p (expr-operands expr)))))
@@ -2534,7 +2969,7 @@ if (can_inv_maskmask(~A, ~A))
 			(destructuring-bind (effect constraints)
 			    x
 			  (list (mapcar #'simplify effect) constraints)))
-		    (decompose-insn-effect insn t))))))
+		    (decompose-effect (insn-effect insn) t))))))
 
 ;	    (mapcar #'(lambda (generator)
 ;			(destructuring-bind (pattern constraints)
@@ -2548,63 +2983,78 @@ if (can_inv_maskmask(~A, ~A))
 (defvar *effects-in-generation* nil)
 
 (defun may-generate-effect (effect)
-  (notany #'(lambda (e)
-	      (if (and (eq (expr-kind e) 'set) (eq (expr-kind effect) 'set))
-		  (expr-equal-p (second (expr-operands e)) (second (expr-operands effect))) ;FIXME: we need to be more specific
-		  (expr-equal-p e effect)))
-	  *effects-in-generation*))
+  (and (<= (length *effects-in-generation*) 20)
+       (notany #'(lambda (e)
+		   (if (and (eq (expr-kind e) 'set) (eq (expr-kind effect) 'set))
+		       (expr-equal-p (second (expr-operands e)) (second (expr-operands effect))) ;FIXME: we need to be more specific
+		       (expr-equal-p e effect)))
+	       *effects-in-generation*)))
 
 ;;; returns the number of instructions generated in the worst case.
 (defun generate-effect-compiler (effect finish-label out)
   (let ((total-insns 0))
-    (dolist (single-effect effect)
-      (let ((*effects-in-generation* (cons single-effect *effects-in-generation*)))
-	(let* ((matches (all-generator-matches single-effect))
-	       (emitters (mapcar* #'(lambda (match)
-				      (destructuring-bind (insn generator read-bindings write-bindings)
-					  match
-					(let ((fail-label (format nil "fail_~A" (make-tmp-name))))
-					  (multiple-value-bind (text can-fail num-insns)
-					      (generate-match-code insn generator read-bindings write-bindings fail-label)
-					    (if text
-						(list text can-fail num-insns fail-label insn)
-						nil)))))
-				  matches))
-	       (sorted-emitters (sort emitters #'(lambda (a b)
-						   (destructuring-bind (a-text a-can-fail a-num-insns a-fail-label a-insn)
-						       a
-						     (destructuring-bind (b-text b-can-fail b-num-insns b-fail-label b-insn)
-							 b
-						       (or (< a-num-insns b-num-insns)
-							   (and (= a-num-insns b-num-insns)
-								(and a-can-fail (not b-can-fail)))))))))
-	       (last-label nil))
-	  (format t "~A matches, ~A emitters~%" (length matches) (length emitters))
-	  (labels ((loop (emitters label)
-		     (when (null emitters)
-		       (error "all emitters can fail for ~A~%" single-effect))
-		     (destructuring-bind (text can-fail num-insns fail-label insn)
-			 (car emitters)
-		       (when label
-			 (format out "~A:~%" label))
-		       (format out "/* ~A */~%" (insn-name insn))
-		       (princ text out)
-		       (format out "goto ~A;~%" finish-label)
-		       (if can-fail
-			   (loop (cdr emitters) fail-label)
-			   (incf total-insns num-insns)))))
-	    (loop sorted-emitters nil)))))
+    (labels ((effect-loop (effect next-label)
+	       (if (null effect)
+		   (format out "goto ~A;~%" finish-label)
+		   (progn
+;		     (format t "single effect is ~A~%" (car effect))
+		     (let* ((single-effect (car effect))
+			    (*effects-in-generation* (cons single-effect *effects-in-generation*))
+			    (matches (all-generator-matches single-effect))
+			    (emitters (mapcar* #'(lambda (match)
+						   (destructuring-bind (insn generator read-bindings write-bindings)
+						       match
+						     (let ((fail-label (format nil "fail_~A" (make-tmp-name))))
+						       (multiple-value-bind (text can-fail num-insns)
+							   (generate-match-code insn generator read-bindings write-bindings fail-label)
+							 (if text
+							     (list text can-fail num-insns fail-label insn)
+							     nil)))))
+					       matches))
+			    (sorted-emitters (sort emitters #'(lambda (a b)
+								(destructuring-bind (a-text a-can-fail a-num-insns a-fail-label a-insn)
+								    a
+								  (destructuring-bind (b-text b-can-fail b-num-insns b-fail-label b-insn)
+								      b
+								    (or (< a-num-insns b-num-insns)
+									(and (= a-num-insns b-num-insns)
+									     (and a-can-fail (not b-can-fail)))))))))
+			    (last-label nil))
+;		       (format t "~A matches, ~A emitters~%" (length matches) (length emitters))
+		       (when (null emitters)
+;			 (format t "no emitters for ~A~%" effect)
+;			 (error "heusl")
+			 (return-from generate-effect-compiler nil))
+		       (labels ((loop (emitters label)
+				  (when (null emitters)
+				    (error "all emitters can fail for ~A~%" single-effect))
+				  (destructuring-bind (text can-fail num-insns fail-label insn)
+				      (car emitters)
+				    (when label
+				      (format out "~A:~%" label))
+				    (format out "/* ~A */~%{~%" (insn-name insn))
+				    (princ text out)
+				    (format out "goto ~A;~%}~%" next-label)
+				    (if can-fail
+					(loop (cdr emitters) fail-label)
+					(incf total-insns num-insns)))))
+			 (loop sorted-emitters nil))
+		       (format out "~A:~%" next-label)
+		       (effect-loop (cdr effect) (format nil "next_~A" (make-tmp-name))))))))
+      (effect-loop effect (format nil "next_~A" (make-tmp-name))))
     total-insns))
 
 (defun generate-insn-compiler (insn)
-  (let ((decomposed-effect (decompose-insn-effect insn nil)))
+  (let ((decomposed-effect (decompose-effect (insn-effect insn) nil)))
     (dolist (effect-with-constraints decomposed-effect)
       (destructuring-bind (effect constraints)
 	  effect-with-constraints
 	(let ((finish-label (format nil "finish_~A" (make-tmp-name))))
-	  (format t "if (~{~A~^ && ~})~%{~%" (mapcar #'(lambda (x) (generate-interpreter x nil)) constraints))
-	  (format t "*** effect: ~A~%" (mapcar #'simplify (mapcar #'64bitify effect)))
-	  (generate-effect-compiler (mapcar #'simplify (mapcar #'64bitify effect)) finish-label *standard-output*)
+	  (format t "if (1 ~{&& ~A~})~%{~%" (mapcar #'(lambda (x) (generate-interpreter x nil)) constraints))
+;	  (format t "*** effect: ~A~%" (mapcar #'simplify (mapcar #'64bitify effect)))
+	  (unless (generate-effect-compiler (mapcar #'simplify (mapcar #'(lambda (x) (64bitify (source-to-target-transform x))) effect))
+					    finish-label *standard-output*)
+	    (error "could not generate compiler for ~A" effect))
 	  (format t "~A:~%}~%" finish-label))))))
 
 (defun source-to-target-transform (expr)
@@ -2612,33 +3062,34 @@ if (can_inv_maskmask(~A, ~A))
       expr
       (expr-case expr
 	(set (lvalue rhs)
-	     (make-expr :kind 'set
-			:operands (list (source-to-target-transform lvalue)
-					(source-to-target-transform rhs))))
-	(if (cond cons alt)
-	    (make-expr :kind 'if :type (expr-type expr)
-		       :width (expr-width expr)
-		       :operands (list (source-to-target-transform cond) (source-to-target-transform cons) (source-to-target-transform alt))))
+	     (if (eq (expr-kind lvalue) 'mem)
+		 (destructuring-bind (addr)
+		     (expr-operands lvalue)
+		   (let* ((width (expr-width lvalue))
+			  (xor-value (cadr (assoc width '((8 3) (16 2)))))
+			  (transformed-addr (source-to-target-transform addr))
+			  (xored-addr (if xor-value
+					  (make-expr :kind 'logxor :type 'integer :width (expr-width addr)
+						     :operands (list transformed-addr
+								     (make-integer-expr (expr-width addr) xor-value)))
+					  transformed-addr)))
+		     (make-expr :kind 'set
+				:operands (list (make-expr :kind 'mem :type 'integer :width width :operands (list xored-addr))
+						rhs))))
+		 (make-expr :kind 'set
+			    :operands (list (source-to-target-transform lvalue)
+					    (source-to-target-transform rhs)))))
+	(mem (addr)
+	     (let* ((xor-value (cadr (assoc (expr-width expr) '((8 3) (16 2)))))
+		    (transformed-addr (source-to-target-transform addr))
+		    (xored-addr (if xor-value
+				    (make-expr :kind 'logxor :type 'integer :width (expr-width addr)
+					       :operands (list transformed-addr
+							       (make-integer-expr (expr-width addr) xor-value)))
+				    transformed-addr)))
+	       (make-expr :kind 'mem :type 'integer :width (expr-width expr) :operands (list xored-addr))))
 	((integer float) (value)
 		 expr)
-	(register (reg class number)
-		  (let* ((target-class (lookup-register-mapping expr))
-			 (class-width (register-class-width class))
-			 (target-class-width (register-class-width target-class)))
-		    (if (= class-width target-class-width)
-			(make-expr :kind 'register
-				   :type (expr-type rhs)
-				   :width class-width
-				   :operands (list reg class (source-to-target-transform number)))
-			(make-expr :kind 'subregister
-				   :type (expr-type rhs)
-				   :width class-width
-				   :operands (list reg class (source-to-target-transform number)
-						   0 (1- class-width) nil)))))
-	(subregister (reg class number begin end named)
-		     (let ((target-class (lookup-register-mapping expr)))
-		       (make-expr :kind 'subregister :type (expr-type expr) :width (expr-width expr)
-				  :operands (list nil class (source-to-target-transform number nil) begin end named))))
 	(field (name begin end)
 	       expr)
 	(t
@@ -2649,7 +3100,7 @@ if (can_inv_maskmask(~A, ~A))
   (let ((source-bits (machine-word-bits *source-machine*))
 	(target-bits (machine-word-bits *target-machine*)))
     (labels ((convert (expr widen &optional mode)
-	       (if (not (expr-p expr))
+	       (if (or (not (expr-p expr)) (expr-widened expr))
 		   expr
 		   (expr-case expr
 		     (set (lvalue rhs)
@@ -2659,93 +3110,201 @@ if (can_inv_maskmask(~A, ~A))
 					  (lookup-register-mapping lvalue)
 					(make-expr :kind 'set
 						   :operands (list (make-expr :kind 'register
-									      :type (expr-type rhs)
+									      :type (expr-type lvalue)
 									      :width (register-class-width target-class)
-									      :operands (list reg class (convert number :keep)))
+									      :operands (list reg class (convert number nil))
+									      :widened t
+									      :transformations (expr-transformations lvalue))
 								   (convert rhs
 									    (/= (register-class-width class) (register-class-width target-class))
-									    (if sex :sex :zex))))))
-			    (mem (width addr)
+									    (if sex :sex :zex)))
+						   :widened t
+						   :transformations (expr-transformations expr))))
+			    (subregister (reg class number begin end named)
+					 (make-expr :kind 'set
+						    :operands (list (make-expr :kind 'subregister
+									       :type (expr-type lvalue)
+									       :width (expr-width lvalue)
+									       :operands (list reg class (convert number nil)
+											       begin end named)
+									       :widened t
+									       :transformations (expr-transformations lvalue))
+								    (convert rhs nil))
+						    :widened t
+						    :transformations (expr-transformations expr)))
+			    (target-register (reg class)
+					     expr)
+			    (target-subregister (reg class begin end)
+						expr)
+			    (numbered-subregister (reg class number width index)
+						  (make-expr :kind 'set
+							     :operands (list (make-expr :kind 'numbered-subregister
+											:type (expr-type lvalue)
+											:width (expr-width lvalue)
+											:operands (list reg class (convert number nil)
+													width (convert index nil))
+											:widened t
+											:transformations (expr-transformations lvalue))
+									     (convert rhs nil))
+							     :widened t
+							     :transformations (expr-transformations expr)))
+			    (mem (addr)
 				 (make-expr :kind 'set
 					    :operands (list (make-expr :kind 'mem
 								       :type (expr-type lvalue)
 								       :width (expr-width lvalue)
-								       :operands (list width (convert addr t :brutal)))
-							    (convert rhs nil))))))
+								       :operands (list (convert addr t :brutal))
+								       :widened t
+								       :transformations (expr-transformations lvalue))
+							    (convert rhs nil))
+					    :widened t
+					    :transformations (expr-transformations expr)))))
 		     (if (cond cons alt)
 			 (make-expr :kind 'if :type (expr-type expr)
 				    :width (if (and widen (= (expr-width expr) source-bits)) target-bits (expr-width expr))
-				    :operands (list (convert cond nil) (convert cons widen mode) (convert alt widen mode))))
+				    :operands (list (convert cond nil) (convert cons widen mode) (convert alt widen mode))
+				    :widened t
+				    :transformations (expr-transformations expr)))
 		     (integer (value)
 			      (if (and widen (= (expr-width expr) source-bits))
 				  (make-expr :kind 'integer :type 'integer :width target-bits
-					     :operands (list (sign-extend value (expr-width expr) target-bits)))
+					     :operands (list (sign-extend value (expr-width expr) target-bits))
+					     :widened t
+					     :transformations (expr-transformations expr))
 				  expr))
 		     (register (reg class number)
 			       (multiple-value-bind (target-class sex)
 				   (lookup-register-mapping expr)
-				 (if (or widen (= (register-class-width class) (register-class-width target-class)))
-				     (make-expr :kind 'register :type (expr-type expr) :width (register-class-width target-class)
-						:operands (list nil class (convert number nil)))
-				     (make-expr :kind 'subregister :type (expr-type expr) :width (expr-width expr)
-						:operands (list nil class (convert number nil) 0 (1- (expr-width expr)) nil)))))
+				 (cond ((or widen (= (register-class-width class) (register-class-width target-class)))
+					(make-expr :kind 'register :type (expr-type expr) :width (register-class-width target-class)
+						   :operands (list nil class (convert number nil))
+						   :widened t
+						   :transformations (expr-transformations expr)))
+				       ((/= (expr-width expr) (register-class-width class))
+					expr)
+				       (t
+					(make-expr :kind 'subregister :type (expr-type expr) :width (expr-width expr)
+						   :operands (list nil class (convert number nil) 0 (1- (expr-width expr)) nil)
+						   :widened t
+						   :transformations (expr-transformations expr))))))
 		     (subregister (reg class number begin end named)
 				  (multiple-value-bind (target-class sex)
 				      (lookup-register-mapping expr)
 				    (if (and widen (= begin 0) (= end (1- (register-class-width class))))
 					(make-expr :kind 'register :type (expr-type expr) :width (register-class-width target-class)
-						   :operands (list nil class (convert number nil)))
+						   :operands (list nil class (convert number nil))
+						   :widened t
+						   :transformations (expr-transformations expr))
 					(make-expr :kind 'subregister :type (expr-type expr) :width (expr-width expr)
-						   :operands (list nil class (convert number nil) begin end named)))))
+						   :operands (list nil class (convert number nil) begin end named)
+						   :widened t
+						   :transformations (expr-transformations expr)))))
+		     (numbered-subregister (reg class number width index)
+					   (multiple-value-bind (target-class sex)
+					       (lookup-register-mapping expr)
+					     (make-expr :kind 'numbered-subregister :type (expr-type expr) :width (expr-width expr)
+							:operands (list nil class (convert number nil) width (convert index nil))
+							:widened t
+							:transformations (expr-transformations expr))))
 		     (mem (addr)
 			  (let ((converted-mem-expr (make-expr :kind 'mem :type (expr-type expr) :width (expr-width expr)
-							       :operands (list (convert addr t :brutal)))))
+							       :operands (list (convert addr t :brutal))
+							       :widened t
+							       :transformations (expr-transformations expr))))
 			    (if (and widen (= (expr-width expr) source-bits))
 				(make-expr :kind (if (eq mode :sex) 'sex 'zex) :type (expr-type expr) :width target-bits
-					   :operands (list converted-mem-expr))
+					   :operands (list converted-mem-expr)
+					   :widened t
+					   :transformations (expr-transformations expr))
 				converted-mem-expr)))
 		     ((sex zex) (value)
 		      (make-expr :kind (expr-kind expr)
 				 :type (expr-type expr) :width (if (and widen (= (expr-width expr) source-bits))
 								   target-bits
 								   (expr-width expr))
-				 :operands (list (convert value nil))))
-		     (bitneg (value)
+				 :operands (list (convert value nil))
+				 :widened t
+				 :transformations (expr-transformations expr)))
+		     ((bitneg neg) (value)
 			     (if (and widen (= (expr-width expr) source-bits))
 				 (if (eq mode :sex)
 				     (make-expr :kind (expr-kind expr) :type (expr-type expr) :width target-bits
-						:operands (list (convert value t :sex)))
+						:operands (list (convert value t :sex))
+						:widened t
+						:transformations (expr-transformations expr))
 				     (make-expr :kind 'zex :type (expr-type expr) :width target-bits
 						:operands (list (make-expr :kind (expr-kind expr) :type (expr-type expr) :width (expr-width expr)
-									   :operands (list (convert value nil))))))
-				 (make-expr :kind (expr-kind expr) :type (expr-kind expr) :width (expr-width expr)
-					    :operands (list (convert value nil)))))
+									   :operands (list (convert value nil))))
+						:widened t
+						:transformations (expr-transformations expr)))
+				 (make-expr :kind (expr-kind expr) :type (expr-type expr) :width (expr-width expr)
+					    :operands (list (convert value nil))
+					    :widened t
+					    :transformations (expr-transformations expr))))
 		     ((+ - *) (op1 op2)
 		      (if (and widen (= (expr-width expr) source-bits))
 			  (if (eq mode :brutal)
 			      (make-expr :kind (expr-kind expr) :type (expr-type expr) :width target-bits
-					 :operands (list (convert op1 t :brutal) (convert op2 t :brutal)))
-			      (make-expr :kind (if (eq mode :sex) 'sex zex) :type (expr-type expr) :width target-bits
+					 :operands (list (convert op1 t :brutal) (convert op2 t :brutal))
+					 :widened t
+					 :transformations (expr-transformations expr))
+			      (make-expr :kind (if (eq mode :sex) 'sex 'zex) :type (expr-type expr) :width target-bits
 					 :operands (list (make-expr :kind (expr-kind expr) :type (expr-type expr) :width source-bits
-								    :operands (list (convert op1 nil) (convert op2 nil))))))
+								    :operands (list (convert op1 nil) (convert op2 nil))
+								    :widened t
+								    :transformations (expr-transformations expr)))
+					 :widened t
+					 :transformations (expr-transformations expr)))
 			  (make-expr :kind (expr-kind expr) :type (expr-type expr) :width (expr-width expr)
-				     :operands (list (convert op1 nil) (convert op2 nil)))))
-		     ((shiftl shiftr rotl mask) (op1 op2)
+				     :operands (list (convert op1 nil) (convert op2 nil))
+				     :widened t
+				     :transformations (expr-transformations expr))))
+		     ((shiftl shiftr rotl) (op1 op2)
 		      (if (and widen (= (expr-width expr) source-bits))
-			  (make-expr :kind (if (eq mode :sex) 'sex zex) :type (expr-type expr) :width target-bits
+			  (make-expr :kind (if (eq mode :sex) 'sex 'zex) :type (expr-type expr) :width target-bits
 				     :operands (list (make-expr :kind (expr-kind expr) :type (expr-type expr) :width source-bits
-								:operands (list (convert op1 nil) (convert op2 nil)))))
+								:operands (list (convert op1 nil) (convert op2 t :zex))
+								:widened t
+								:transformations (expr-transformations expr)))
+				     :widened t
+				     :transformations (expr-transformations expr))
 			  (make-expr :kind (expr-kind expr) :type (expr-type expr) :width (expr-width expr)
-				     :operands (list (convert op1 nil) (convert op2 nil)))))
+				     :operands (list (convert op1 nil) (convert op2 t :zex))
+				     :widened t
+				     :transformations (expr-transformations expr))))
+		     (mask (op1 op2)
+		      (if (and widen (= (expr-width expr) source-bits))
+			  (make-expr :kind (if (eq mode :sex) 'sex 'zex) :type (expr-type expr) :width target-bits
+				     :operands (list (make-expr :kind (expr-kind expr) :type (expr-type expr) :width source-bits
+								:operands (list (convert op1 t :zex) (convert op2 t :zex))
+								:widened t
+								:transformations (expr-transformations expr)))
+				     :widened t
+				     :transformations (expr-transformations expr))
+			  (make-expr :kind (expr-kind expr) :type (expr-type expr) :width (expr-width expr)
+				     :operands (list (convert op1 t :zex) (convert op2 t :zex))
+				     :widened t
+				     :transformations (expr-transformations expr))))
 		     ((logand logor logxor) (op1 op2)
 		      (if (and widen (= (expr-width expr) source-bits))
 			  (make-expr :kind (expr-kind expr) :type (expr-type expr) :width target-bits
-				     :operands (list (convert op1 t mode) (convert op2 t mode)))
+				     :operands (list (convert op1 t mode) (convert op2 t mode))
+				     :widened t
+				     :transformations (expr-transformations expr))
 			  (make-expr :kind (expr-kind expr) :type (expr-type expr) :width (expr-width expr)
-				     :operands (list (convert op1 nil) (convert op2 nil)))))
+				     :operands (list (convert op1 nil) (convert op2 nil))
+				     :widened t
+				     :transformations (expr-transformations expr))))
+		     (+carry (op1 op2)
+			     (make-expr :kind (expr-kind expr) :type 'integer :width 1
+					:operands (list (convert op1 nil) (convert op2 nil))
+					:widened t
+					:transformations (expr-transformations expr)))
 		     (= (op1 op2)
 			(make-expr :kind '= :type (expr-type expr) :width target-bits
-				   :operands (list (convert op1 nil) (convert op2 nil))))
+				   :operands (list (convert op1 nil) (convert op2 nil))
+				   :widened t
+				   :transformations (expr-transformations expr)))
 		     (field (name begin end)
 			    expr)))))
       (convert expr t))))
@@ -2790,10 +3349,44 @@ if (can_inv_maskmask(~A, ~A))
 	  (format t "break;~%"))
 	(format t "default:~%assert(0);~%}~%"))))
 
+(defun generate-register-dumper (machine)
+  (format t "void dump_~A_registers (interpreter_t *intp) {~%" (dcs (machine-name machine)))
+  (dolist (reg (reverse (machine-registers machine)))
+    (let* ((class (register-register-class reg))
+	   (name (register-name reg))
+	   (class-name (register-class-name class))
+	   (number (register-number reg)))
+      (if (eq (register-class-type class) 'float)
+	  (format t "printf(\"~A: 0x%lx (%f)\\n\", *(word_64*)&intp->regs_~A[~A], intp->regs_~A[~A]);~%"
+		  name class-name number class-name number)
+	  (format t "printf(\"~A: 0x%x\\n\", intp->regs_~A[~A]);~%"
+		  name class-name number))))
+  (format t "printf(\"PC: 0x%x\\n\", intp->pc);~%}~%"))
+
+(defun generate-cse-bindings-code ()
+  (let ((old-bindings nil))
+    (do ()
+	((eq old-bindings *cse-bindings*))
+      (setf old-bindings *cse-bindings*)
+      (dolist (binding *cse-bindings*)
+	(generate-interpreter (cdar binding) nil t))))
+  (dolist (binding *cse-bindings*)
+    (destructuring-bind ((lvalue . expr) . name)
+	binding
+      (if lvalue
+	  (let ((*assign-value* (make-tmp-name)))
+	    (format t "void ~A (interpreter_t *intp, ~A ~A) {~%~A;~%}~%"
+		    name (c-type (expr-width expr) (expr-type expr)) *assign-value*
+		    (generate-interpreter expr nil t)))
+	  (format t "~A ~A (interpreter_t *intp) {~%return ~A;~%}~%"
+		  (c-type (expr-width expr) (expr-type expr)) name
+		  (generate-interpreter expr nil t))))))
+
 (defun generate-interpreter-file (machine)
   (let ((*this-machine* machine))
     (with-open-file (out (format nil "~A_interpreter.c" (dcs (machine-name machine))) :direction :output :if-exists :supersede)
       (let ((*standard-output* out)
+	    (*cse-bindings* nil)
 	    (decision-tree (build-decision-tree (machine-insns machine))))
 	(format t "void interpret_~A_insn (interpreter_t *intp) {~%~A insn = mem_get_32(intp, intp->pc);~%word_32 pc = intp->pc, next_pc = pc + ~A;~%"
 		(dcs (machine-name machine)) (c-type (machine-insn-bits *this-machine*) 'integer) (/ (machine-insn-bits *this-machine*) 8))
@@ -2802,18 +3395,8 @@ if (can_inv_maskmask(~A, ~A))
 						      (format t "intp->have_jumped = 1;~%"))
 						    (generate-code-for-insn insn)))
 	(format t "intp->pc = next_pc;~%++intp->insn_count;~%}~%")
-	(format t "void dump_~A_registers (interpreter_t *intp) {~%" (dcs (machine-name machine)))
-	(dolist (reg (reverse (machine-registers machine)))
-	  (let* ((class (register-register-class reg))
-		 (name (register-name reg))
-		 (class-name (register-class-name class))
-		 (number (register-number reg)))
-	    (if (eq (register-class-type class) 'float)
-		(format t "printf(\"~A: 0x%lx (%f)\\n\", *(word_64*)&intp->regs_~A[~A], intp->regs_~A[~A]);~%"
-			name class-name number class-name number)
-		(format t "printf(\"~A: 0x%x\\n\", intp->regs_~A[~A]);~%"
-			name class-name number))))
-	(format t "printf(\"PC: 0x%x\\n\", intp->pc);~%}~%")))))
+	(generate-cse-bindings-code)
+	(generate-register-dumper machine)))))
     
 (defun generate-disassembler-file (machine)
   (let ((*this-machine* machine))
@@ -2825,46 +3408,61 @@ if (can_inv_maskmask(~A, ~A))
 	(generate-insn-recognizer decision-tree #'disassemble-insn)
 	(format t "}~%")))))
 
+(defun generate-registers-and-insns-code (machine)
+  (format t "#define SCRATCH_OFFSET   ~A~%" (* 8 (length (machine-registers machine))))
+  (format t "void move_~A_regs_interpreter_to_compiler (interpreter_t *intp) {~%" (dcs (machine-name machine)))
+  (dolist (reg (machine-registers machine))
+    (let* ((class (register-register-class reg))
+	   (width (register-class-width class))
+	   (type (register-class-type class)))
+      (format t "*(~A*)&constant_area[~A * 2] = ~A;~%"
+	      (c-type width type) (register-index reg class nil)
+	      (generate-interpreter (make-expr :kind 'register :type type :width width
+					       :operands (list reg class (register-number-expr reg))) nil))))
+  (format t "}~%void move_~A_regs_compiler_to_interpreter (interpreter_t *intp) {~%" (dcs (machine-name machine)))
+  (dolist (reg (machine-registers machine))
+    (let* ((class (register-register-class reg))
+	   (width (register-class-width class))
+	   (type (register-class-type class)))
+      (format t "~A = *(~A*)&constant_area[~A * 2];~%"
+	      (generate-interpreter (make-expr :kind 'register :type type :width width :operands (list reg class (register-number-expr reg))) nil)
+	      (c-type width type) (register-index reg class nil))))
+  (format t "}~%char *insn_names[] = { ~{\"~A\"~^, ~} };~%"
+	  (mapcar #'(lambda (x) (if (insn-p x) (insn-name x) (intel-insn-name x))) (machine-insns machine))))
+
 (defun generate-compiler-file (machine)
   (let ((*this-machine* machine))
     (with-open-file (out (format nil "~A_compiler.c" (dcs (machine-name machine))) :direction :output :if-exists :supersede)
       (let ((*standard-output* out)
 	    (decision-tree (build-decision-tree (machine-insns machine))))
-	(format t "#define SCRATCH_OFFSET   ~A~%" (* 8 (length (machine-registers machine))))
-	(format t "void move_~A_regs_interpreter_to_compiler (interpreter_t *intp) {~%" (dcs (machine-name machine)))
-	(dolist (reg (machine-registers machine))
-	  (let* ((class (register-register-class reg))
-		 (width (register-class-width class))
-		 (type (register-class-type class)))
-	    (format t "*(~A*)&constant_area[~A * 2] = ~A;~%"
-		    (c-type width type) (register-index reg class nil)
-		    (generate-interpreter (make-expr :kind 'register :type type :width width
-						     :operands (list reg class (register-number-expr reg))) nil))))
-	(format t "}~%void move_~A_regs_compiler_to_interpreter (interpreter_t *intp) {~%" (dcs (machine-name machine)))
-	(dolist (reg (machine-registers machine))
-	  (let* ((class (register-register-class reg))
-		 (width (register-class-width class))
-		 (type (register-class-type class)))
-	    (format t "~A = *(~A*)&constant_area[~A * 2];~%"
-		    (generate-interpreter (make-expr :kind 'register :type type :width width :operands (list reg class (register-number-expr reg))) nil)
-		    (c-type width type) (register-index reg class nil))))
-	(format t "}~%void compile_~A_insn (~A insn, ~A pc) {~%"
-		(dcs (machine-name machine)) (c-type (machine-insn-bits *this-machine*) 'integer) (c-type (machine-word-bits *this-machine*) 'integer))
+	(generate-registers-and-insns-code machine)
+	(format t "void compile_~A_insn (~A insn, ~A pc) {~%"
+		(dcs (machine-name machine)) (c-type (machine-insn-bits machine) 'integer)
+		(c-type (machine-word-bits *this-machine*) 'integer))
 	(generate-insn-recognizer decision-tree #'(lambda (insn)
-						    (dolist (expr (insn-effect insn))
-						      (princ (generate-compiler nil expr nil)))
+						    (format *error-output* "~A~%" (insn-name insn))
+						    (multiple-value-bind (result error)
+							(ignore-errors
+							  (with-output-to-string (out)
+							    (let ((*standard-output* out))
+							      (generate-insn-compiler insn))))
+						      (if error
+							  (progn
+							    (format *error-output* "error with matcher~%")
+							    (dolist (expr (insn-effect insn))
+							      (princ (generate-compiler nil expr nil))))
+							  (princ result)))
 						    (format t "generated_insn_index = ~A;~%" (position insn (machine-insns machine)))))
-	(format t "~%#ifdef COLLECT_STATS~%++num_translated_insns;~%#endif~%}~%")
-	(format t "char *insn_names[] = { ~{\"~A\"~^, ~} };~%" (mapcar #'insn-name (machine-insns machine)))))))
+	(format t "~%#ifdef COLLECT_STATS~%++num_translated_insns;~%#endif~%}~%")))))
 
 (defun generate-defines-file (machine)
   (let ((*this-machine* machine))
     (with-open-file (out (format nil "~A_defines.h" (dcs (machine-name machine))) :direction :output :if-exists :supersede)
       (let ((*standard-output* out))
 	(format t "typedef ~A ~A_word;~%" (c-type (machine-word-bits *this-machine*) 'integer) (dcs (machine-name machine)))
-	(format t "#define NUM_~A_REGISTERS ~A~%" (machine-name machine) (length (machine-registers machine)))
+	(format t "#define NUM_EMU_REGISTERS ~A~%" (length (machine-registers machine)))
 	(format t "#define NUM_INSNS ~A~%" (length (machine-insns machine)))
-	(format t "#define ~A_REGISTER_SET" (machine-name machine))
+	(format t "#define EMU_REGISTER_SET")
 	(dolist (class (machine-register-classes machine))
 	  (let ((type (c-type (register-class-width class) (register-class-type class))))
 	    (format t " ~A regs_~A[~A];" type (register-class-name class) (length (remove-if-not #'(lambda (reg)

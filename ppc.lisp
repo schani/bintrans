@@ -99,7 +99,7 @@
 
 (defmacro define-rc-insn (name result-reg-field fields effect asm)
   (let* ((name-string (string-downcase (symbol-name name)))
-	 (name-dot (intern (string-concat (symbol-name name) ".")))
+	 (name-dot (intern (concatenate 'string (symbol-name name) ".")))
 	 (name-dot-string (string-downcase (symbol-name name-dot))))
     `(progn
       (define-insn ,name
@@ -135,7 +135,7 @@
   ((let ((old-ca (width 32 (zex xer-ca))))
      (set (reg rd gpr) (+ (+ (reg ra gpr) (reg rb gpr)) (zex xer-ca)))
      (set xer-ca (logor (+carry (reg ra gpr) (reg rb gpr))
-			(+carry (+ (reg ra gpr) (reg rb gpr)) (zex old-ca))))))
+			(+carry (+ (reg ra gpr) (reg rb gpr)) (width 32 (zex old-ca)))))))
   ("~A r%u,r%u,r%u" rd ra rb))
 
 (define-insn addi
@@ -147,13 +147,13 @@
 
 (define-insn addic
     ((opcd 12))
-  ((set xer-ca (+carry (reg ra gpr) (sex simm)))
+  ((set xer-ca (+carry (reg ra gpr) (width 32 (sex simm))))
    (set (reg rd gpr) (+ (reg ra gpr) (sex simm))))
   ("addic r%u,r%u,%d" rd ra simm))
 
 (define-insn addic.
     ((opcd 13))
-  ((set xer-ca (+carry (reg ra gpr) (sex simm)))
+  ((set xer-ca (+carry (reg ra gpr) (width 32 (sex simm))))
    (set (reg rd gpr) (+ (reg ra gpr) (sex simm)))
    (set cr-0 (logor (if (<s (reg rd gpr) 0)
 			8
@@ -177,7 +177,7 @@
      (xo9 202)
      (rc 0))
   ((set (reg rd gpr) (+ (reg ra gpr) (zex xer-ca)))
-   (set xer-ca (+carry (reg ra gpr) (zex xer-ca))))
+   (set xer-ca (+carry (reg ra gpr) (width 32 (zex xer-ca))))) ;FIXME: aliasing??????
   ("addze r%u,r%u" rd ra))
 
 (define-rc-insn and ra
@@ -427,7 +427,9 @@
      (xo1 289)
      (rc 0))
   ((set (numbered-subreg 1 (- (width 5 31) crbd) cr)
-	(if (= (numbered-subreg 1 (- (width 5 31) crba) cr) (numbered-subreg 1 (- (width 5 31) crbb) cr)) 1 0)))
+	(logxor (logxor (numbered-subreg 1 (- (width 5 31) crba) cr)
+			(numbered-subreg 1 (- (width 5 31) crbb) cr))
+		1)))
   ("creqv crb%u,crb%u,crb%u" crbd crba crbb))
 
 (define-insn crnor
@@ -471,7 +473,7 @@
      (xo1 1014)
      (rc 0)
      (rd 0))
-  ((set (mem (+ (if (= ra (width 5 0)) 0 (reg ra gpr)) (reg rb gpr)) 8) 0))
+  ((set (width 8 (mem (+ (if (= ra (width 5 0)) 0 (reg ra gpr)) (reg rb gpr)))) 0))
   ("dcbz r%u,r%u" ra rb))
 
 (define-insn divw
@@ -493,7 +495,7 @@
 (define-rc-insn eqv ra
   ((opcd 31)
    (xo1 284))
-  ((set (reg ra gpr) (bitneg (logxor (reg rs gpr) (reg rb gpr)))))
+  ((set (reg ra gpr) (logxor (reg rs gpr) (bitneg (reg rb gpr)))))
   ("~A r%u,r%u,r%u" ra rs rb))
 
 (define-insn extsb
@@ -888,8 +890,8 @@
      (oe 0)
      (xo9 11)
      (rc 0))
-  ((set (reg rd gpr) (promote 32 (shiftr (* (promote 64 (reg ra gpr))
-					    (promote 64 (reg rb gpr)))
+  ((set (reg rd gpr) (promote 32 (shiftr (* (width 64 (zex (reg ra gpr)))
+					    (width 64 (zex (reg rb gpr))))
 					 32))))
   ("mulhwu r%u,r%u,r%u" rd ra rb))
 
@@ -952,14 +954,14 @@
 (define-insn rlwimi			;rotate left word immediate then mask insert
     ((opcd 20)
      (rc 0))
-  ((set (reg ra gpr) (logor (logand (rotl (reg rs gpr) sh) (mask (width 5 (- 31 me)) (width 5 (- 31 mb))))
-			    (logand (reg ra gpr) (bitneg (mask (width 5 (- 31 me)) (width 5 (- 31 mb))))))))
+  ((set (reg ra gpr) (logor (logand (rotl (reg rs gpr) (zex sh)) (mask (- 31 (zex me)) (- 31 (zex mb))))
+			    (logand (reg ra gpr) (bitneg (mask (- 31 (zex me)) (- 31 (zex mb))))))))
   ("rlwimi r%u,r%u,%u,%u,%u" ra rs sh mb me))
   
 
 (define-rc-insn rlwinm ra		;rotate left word immediate then AND with mask
     ((opcd 21))
-  ((set (reg ra gpr) (logand (rotl (reg rs gpr) sh) (mask (width 5 (- 31 me)) (width 5 (- 31 mb))))))
+  ((set (reg ra gpr) (logand (rotl (reg rs gpr) (zex sh)) (mask (- 31 (zex me)) (- 31 (zex mb))))))
   ("~A r%u,r%u,%u,%u,%u" ra rs sh mb me))
 
 (define-insn sc
@@ -978,7 +980,7 @@
      (rc 0))
   ((set (reg ra gpr) (if (bit-set-p (reg rb gpr) 5)
 			 0
-			 (shiftl (reg rs gpr) (subreg 0 4 rb gpr)))))
+			 (shiftl (reg rs gpr) (zex (subreg 0 4 rb gpr))))))
   ("slw r%u,r%u,r%u" ra rs rb))
 
 (define-rc-insn sraw ra
@@ -996,11 +998,11 @@
     ((opcd 31)
      (xo1 824))
   ((set xer-ca (if (<s (reg rs gpr) 0)
-		   (if (= (bitneg (logand (- (shiftl 1 sh) 1) (reg rs gpr))) 0)
+		   (if (= (bitneg (logand (- (shiftl 1 (zex sh)) 1) (reg rs gpr))) 0)
 		       0
 		       1)
 		   0))
-   (set (reg ra gpr) (ashiftr (reg rs gpr) sh)))
+   (set (reg ra gpr) (ashiftr (reg rs gpr) (zex sh))))
   ("~A r%u,r%u,%u" ra rs sh))
 
 (define-insn srw
@@ -1012,15 +1014,15 @@
 
 (define-insn stb
     ((opcd 38))
-  ((set (mem (if (= ra (width 5 0))
-		 (sex d)
-		 (+ (reg ra gpr) (sex d))) 8)
+  ((set (width 8 (mem (if (= ra (width 5 0))
+			  (sex d)
+			  (+ (reg ra gpr) (sex d)))))
 	(subreg 0 7 rs gpr)))
   ("stb r%u,%d(r%u)" rs d ra))
 
 (define-insn stbu
     ((opcd 39))
-  ((set (mem (+ (reg ra gpr) (sex d)) 8) (subreg 0 7 rs gpr))
+  ((set (width 8 (mem (+ (reg ra gpr) (sex d)))) (subreg 0 7 rs gpr))
    (set (reg ra gpr) (+ (reg ra gpr) (sex d))))
   ("stbu r%u,%d(r%u)" rs d ra))
 
@@ -1028,19 +1030,19 @@
     ((opcd 31)
      (xo1 215)
      (rc 0))
-  ((set (mem (+ (if (= ra (width 5 0)) 0 (reg ra gpr)) (reg rb gpr)) 8) (subreg 0 7 rs gpr)))
+  ((set (width 8 (mem (+ (if (= ra (width 5 0)) 0 (reg ra gpr)) (reg rb gpr)))) (subreg 0 7 rs gpr)))
   ("stbx r%u,r%u,r%u" rs ra rb))
 
 (define-insn stfd
     ((opcd 54))
-  ((set (mem (+ (if (= ra (width 5 0)) 0 (reg ra gpr)) (sex d)) 64) (double-to-bits (reg rs fpr))))
+  ((set (width 64 (mem (+ (if (= ra (width 5 0)) 0 (reg ra gpr)) (sex d)))) (double-to-bits (reg rs fpr))))
   ("stfd fr%u,%d(r%u)" rs d ra))
 
 (define-insn stfdx
     ((opcd 31)
      (xo1 727)
      (rc 0))
-  ((set (mem (+ (if (= ra (width 5 0)) 0 (reg ra gpr)) (reg rb gpr)) 64) (double-to-bits (reg frs fpr))))
+  ((set (width 64 (mem (+ (if (= ra (width 5 0)) 0 (reg ra gpr)) (reg rb gpr)))) (double-to-bits (reg frs fpr))))
   ("stfdx fr%u,r%u,r%u" frs ra rb))
 
 (define-insn stfs
@@ -1057,9 +1059,9 @@
 
 (define-insn sth
     ((opcd 44))
-  ((set (mem (if (= ra (width 5 0))
-		 (sex d)
-		 (+ (reg ra gpr) (sex d))) 16)
+  ((set (width 16 (mem (if (= ra (width 5 0))
+			   (sex d)
+			   (+ (reg ra gpr) (sex d)))))
 	(subreg 0 15 rs gpr)))
   ("sth r%u,%d(r%u)" rs d ra))
 
@@ -1067,7 +1069,7 @@
     ((opcd 31)
      (xo1 407)
      (rc 0))
-  ((set (mem (+ (if (= ra (width 5 0)) 0 (reg ra gpr)) (reg rb gpr)) 16) (subreg 0 15 rs gpr)))
+  ((set (width 16 (mem (+ (if (= ra (width 5 0)) 0 (reg ra gpr)) (reg rb gpr)))) (subreg 0 15 rs gpr)))
   ("sthx r%u,r%u,r%u" rs ra rb))
 
 (define-insn stw
@@ -1108,7 +1110,7 @@
      (xo9 8)
      (oe 0))
   ((set xer-ca (logor (+carry (bitneg (reg ra gpr)) (reg rb gpr))
-		      (+carry (+ (bitneg (reg ra gpr)) (reg rb gpr)) 1)))
+		      (+carry (+ (bitneg (reg ra gpr)) (reg rb gpr)) (width 32 1))))
    (set (reg rd gpr) (- (reg rb gpr) (reg ra gpr))))
   ("~A r%u,r%u,r%u" rd ra rb))
 
@@ -1117,16 +1119,15 @@
      (xo9 136)
      (oe 0)
      (rc 0))
-  ((let ((old-ca (width 32 (zex xer-ca))))
-     (set (reg rd gpr) (- (reg rb gpr) (+ (reg ra gpr) (- 1 (zex xer-ca)))))
-     (set xer-ca (logor (+carry (bitneg (reg ra gpr)) (reg rb gpr))
-			(+carry (+ (bitneg (reg ra gpr)) (reg rb gpr)) old-ca)))))
+  ((set (reg rd gpr) (- (reg rb gpr) (+ (reg ra gpr) (- 1 (zex xer-ca)))))
+   (set xer-ca (logor (+carry (bitneg (reg ra gpr)) (reg rb gpr))
+		      (+carry (+ (bitneg (reg ra gpr)) (reg rb gpr)) (width 32 (zex xer-ca))))))
   ("subfe r%u,r%u,r%u" rd ra rb))
 
 (define-insn subfic
     ((opcd 8))
-  ((set xer-ca (logor (+carry (bitneg (reg ra gpr)) (sex simm))
-		      (+carry (+ (bitneg (reg ra gpr)) (sex simm)) 1)))
+  ((set xer-ca (logor (+carry (bitneg (reg ra gpr)) (width 32 (sex simm)))
+		      (+carry (width 32 (+ (bitneg (reg ra gpr)) (sex simm))) (width 32 1))))
    (set (reg rd gpr) (- (sex simm) (reg ra gpr))))
   ("subfic r%u,r%u,%d" rd ra simm))
 

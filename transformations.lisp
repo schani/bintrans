@@ -1,24 +1,24 @@
 (setf *transformations* nil)
 
 (define-transformation
-    (match x :type integer)
-    (+ x 0))
+    (neg (match x))
+    (- 0 x))
 
 (define-transformation
-    (set (subregister (match reg) (match class) (match number) 0 (match w)) (shiftr (match v) (match a)))
-    (set (register reg class number) (shiftr (logand (widen v) (mask 0 w)) (widen a))))
+    (set (subregister (match reg) (match class) (match number) (match begin) (match end) (match named)) (match rhs))
+    (set (register reg class number) (logor (logand (register reg class number) (bitneg (mask begin end))) (shiftl (zex rhs) begin))))
 
 (define-transformation
     (set (target-subregister (match reg) (match class) 0 (match w)) (shiftr (match v) (match a)))
     (set (target-register reg class) (shiftr (logand (widen v) (mask 0 w)) (widen a))))
 
 (define-transformation
-    (set (subregister (match reg) (match class) (match number) 0 (match w)) (match rhs))
-    (set (register reg class number) (zex rhs)))
+    (set (target-subregister (match reg) (match class) 0 (match w)) (shiftl (match v) (match a)))
+    (set (target-register reg class) (shiftl (zex v) a)))
 
 (define-transformation
-    (set (subregister (match reg) (match class) (match number) 0 (match w)) (match rhs))
-    (set (register reg class number) (sex rhs)))
+    (set (target-subregister (match reg) (match class) 0 (match w)) (logor (match x) (match y)))
+    (set (register reg class number) (logor (zex x) (zex y))))
 
 (define-transformation
     (set (target-subregister (match reg) (match class) 0 (match w)) (match rhs))
@@ -28,7 +28,37 @@
     (set (target-subregister (match reg) (match class) 0 (match w)) (match rhs))
     (set (target-register reg class) (sex rhs)))
 
+(define-transformation
+    (set (target-register (match reg) (match class)) (zex (subregister (match sreg) (match sclass) (match snumber) 0 (match end) (match named))))
+    (set (target-register reg class) (logand (widen (register sreg sclass snumber)) (mask 0 end))))
+
+(define-transformation
+    (set (numbered-subregister (match reg) (match class) (match number) (match w) (match index)) (match rhs))
+    (set (register reg class number) (logor (logand (register reg class number) (bitneg (mask (* (zex index) (zex w))
+											      (+ (* (zex index) (zex w)) (- (zex w) 1)))))
+					    (shiftl (zex rhs) (* (zex index) (zex w))))))
+
+(define-transformation
+    (zex (numbered-subregister (match reg) (match class) (match number) (match w) (match index)))
+    (logand (shiftr (widen (register reg class number)) (* (zex w) (zex index)))
+	    (mask 0 (- (zex w) 1))))
+
+(define-transformation
+    (zex (logor (match op1) (match op2)))
+    (logor (zex op1) (zex op2)))
+
+(define-transformation
+    (zex (logxor (match op1) (match op2)))
+    (logxor (zex op1) (zex op2)))
+
+(define-transformation
+    (zex (+carry (match op1 :width w) (match op2)))
+    (shiftr (+ (zex op1) (zex op2)) w))
+
+
 #|
+(eval (make-integer-expr required-width w))
+
 (<- (widen (shiftl ?v ?a :width source-bits)
 	   (strip source-bits (shiftl ?wv ?a :width target-bits)))
     (widen ?v ?wv))

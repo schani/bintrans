@@ -27,7 +27,7 @@ typedef int label_t;
 #define CONSTANT_AREA_REG      27
 #define PROCEDURE_VALUE_REG    27
 
-#define NUM_REG_CONSTANTS          (NUM_PPC_REGISTERS * 2 + 2) /* registers + scratch area */
+#define NUM_REG_CONSTANTS          (NUM_EMU_REGISTERS * 2 + 2) /* registers + scratch area */
 
 #define DIRECT_DISPATCHER_CONST    (NUM_REG_CONSTANTS + 0)
 #define INDIRECT_DISPATCHER_CONST  (NUM_REG_CONSTANTS + 2)
@@ -93,8 +93,8 @@ word_32 code_area[MAX_CODE_INSNS];
 word_32 *emit_loc;
 word_64 fragment_start;
 
-int num_constants = NUM_PPC_REGISTERS * 2 + 2;
-word_32 constant_area[NUM_PPC_REGISTERS * 2 + 2 + MAX_CONSTANTS];
+int num_constants = NUM_EMU_REGISTERS * 2 + 2;
+word_32 constant_area[NUM_EMU_REGISTERS * 2 + 2 + MAX_CONSTANTS];
 
 word_64 unresolved_jump_addrs[MAX_UNRESOLVED_JUMPS];
 word_32 unresolved_jump_targets[MAX_UNRESOLVED_JUMPS];
@@ -402,11 +402,16 @@ ref_integer_reg (int foreign_reg, int reading, int writing)
 #define ref_integer_reg_for_writing(f)                    ref_integer_reg(f,0,1)
 #define ref_integer_reg_for_reading_and_writing(f)        ref_integer_reg(f,1,1)
 
+#define ref_gpr_reg_for_reading                           ref_integer_reg_for_reading
+#define ref_gpr_reg_for_writing                           ref_integer_reg_for_writing
+
 void
 unref_integer_reg (reg_t reg)
 {
     unref_reg(integer_regs[alloc_sp], NUM_INTEGER_REGS, reg);
 }
+
+#define unref_gpr_reg(f)                                  unref_integer_reg(f)
 
 reg_t
 ref_float_reg (int foreign_reg, int reading, int writing)
@@ -465,11 +470,14 @@ emit_load_integer_64 (reg_t reg, word_64 val)
 {
     if ((val >> 15) == 0 || (val >> 15) == ((word_64)-1 >> 15))
 	emit(COMPOSE_LDA(reg, val & 0xffff, 31));
-    else if ((val & 0xffff) == 0 && (val >> 32) == 0)
-	emit(COMPOSE_LDAH(reg, val >> 16, 31));
+    else if ((val & 0xffff) == 0 && ((val >> 31) == 0 || (val >> 31) == ((word_64)-1 >> 31)))
+	emit(COMPOSE_LDAH(reg, (val >> 16) & 0xffff, 31));
     else
     {
-	assert(num_constants + 1 < MAX_CONSTANTS);
+	assert(num_constants + 2 < MAX_CONSTANTS);
+
+	if (num_constants % 2 == 1)
+	    constant_area[num_constants++] = 0xdeadbeef;
 
 	emit(COMPOSE_LDQ(reg, num_constants * 4, CONSTANT_AREA_REG));
 	constant_area[num_constants++] = val & 0xffffffff;
@@ -703,7 +711,9 @@ emit_load_mem_64 (reg_t value_reg, reg_t addr_reg)
     unref_integer_reg(tmp_reg);
 }
 
+#ifdef EMU_PPC
 #include "ppc_compiler.c"
+#endif
 
 void
 add_const_64 (word_64 val)
@@ -875,7 +885,11 @@ compile_basic_block (word_32 addr)
 
     while (!have_jumped)
     {
+#ifdef EMU_PPC
 	compile_ppc_insn(mem_get_32(compiler_intp, insnp), insnp);
+#else
+	assert(0);
+#endif
 
 #ifdef COLLECT_STATS
 	++insn_infos[generated_insn_index].num_translated;
@@ -1031,7 +1045,11 @@ start_compiler (word_32 addr)
 {
     word_64 native_addr = compile_basic_block(addr);
 
+#ifdef EMU_PPC
     move_ppc_regs_interpreter_to_compiler(compiler_intp);
+#else
+    assert(0);
+#endif
     start_execution(native_addr); /* this call never returns */
 }
 
@@ -1048,7 +1066,7 @@ print_compiler_stats (void)
     printf("translated insns:       %lu\n", num_translated_insns);
     printf("generated insns:        %lu\n", emit_loc - code_area);
     printf("load/store reg insns:   %lu\n", num_load_store_reg_insns);
-    printf("constants:              %d\n", num_constants - (NUM_PPC_REGISTERS * 2 + 2));
+    printf("constants:              %d\n", num_constants - (NUM_EMU_REGISTERS * 2 + 2));
     printf("divisions:              %lu\n", num_divisions);
 
     for (i = 0; i < NUM_INSNS; ++i)
@@ -1060,7 +1078,11 @@ print_compiler_stats (void)
 void
 handle_compiler_system_call (void)
 {
+#ifdef EMU_PPC
     move_ppc_regs_compiler_to_interpreter(compiler_intp);
+#else
+    assert(0);
+#endif
     /*
     printf("*** system call\n");
     dump_ppc_registers(compiler_intp);
@@ -1068,5 +1090,9 @@ handle_compiler_system_call (void)
 
     handle_system_call(compiler_intp);
 
+#ifdef EMU_PPC
     move_ppc_regs_interpreter_to_compiler(compiler_intp);
+#else
+    assert(0);
+#endif
 }

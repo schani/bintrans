@@ -1,4 +1,6 @@
-(load "generator.lisp")
+(load "generator")
+(load "ui.lisp")
+
 (load "transformations.lisp")
 (load "ppc.lisp")
 (load "alpha.lisp")
