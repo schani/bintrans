@@ -106,7 +106,7 @@ let sex_simplify_stmt mapping fields stmt =
             (fun stmt0 stmt1 ->
 	       if stmt0 = stmt1 then
 		 (if sstmt <> stmt0 then
-		    ( print_stmt sstmt ; print_stmt stmt0 )
+		    ( (* print_stmt sstmt ; print_stmt stmt0 *) )
 		  else
 		    () ;
 		  cm_return stmt0)

@@ -22,6 +22,8 @@
 
 open List
 
+exception Hell
+
 let map0_int f start stop =
   let rec map i =
     if i > stop then
@@ -53,3 +55,14 @@ let rec uniq lst =
 	    uxs
 	  else
 	    x :: uxs
+
+let rec filtermap f l =
+  map (fun x ->
+	 match f x with
+	     Some y -> y
+	   | None -> raise Hell)
+    (filter (fun x ->
+	       match f x with
+		   Some _ -> true
+		 | None -> false)
+       l)

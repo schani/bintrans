@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include <assert.h>
-#include "mlgen_macros.h"
+#include "../mlgen_macros.h"
 
 typedef unsigned int word_32;
 typedef unsigned long long word_64;
@@ -143,9 +143,17 @@ rotl_32 (word_32 x, word_32 i)
 }
 
 word_64
-calc (word_64 sh, word_64 mb, word_64 me, word_64 val)
+calc_rlwinm (word_64 sh, word_64 mb, word_64 me, word_64 val)
 {
     return rotl_32((word_32)val, (word_32)sh) & mask_32(31 - me, 31 - mb);
+}
+
+word_64
+calc_rlwimi (word_64 sh, word_64 mb, word_64 me, word_64 rs, word_64 ra)
+{
+    word_32 mask = mask_32(31 - me, 31 - mb);
+
+    return (rotl_32((word_32)rs, (word_32)sh) & mask) | ((word_32)ra & ~mask);
 }
 
 int
@@ -157,8 +165,15 @@ main (void)
 	for (mb = 0; mb < 32; ++mb)
 	    for (me = 0; me < 32; ++me)
 	    {
+/*
 		word_64 gen_result = test_rlwinm(sh, mb, me, 0xdeadbeefcafebabeLL);
-		word_64 real_result = calc(sh, mb, me, 0xdeadbeefcafebabeLL);
+		word_64 real_result = calc_rlwinm(sh, mb, me, 0xdeadbeefcafebabeLL);
+
+		assert(gen_result == sex_32(real_result));
+*/
+
+		word_64 gen_result = test_rlwimi(sh, mb, me, 0xdeadbeefcafebabeLL, 0x0123456789abcdefLL);
+		word_64 real_result = calc_rlwimi(sh, mb, me, 0xdeadbeefcafebabeLL, 0x0123456789abcdefLL);
 
 		assert(gen_result == sex_32(real_result));
 	    }

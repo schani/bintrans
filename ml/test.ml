@@ -53,7 +53,7 @@ let make_ppc_mask mb me =
 let make_ppc_rlwimi ra rs sh mb me =
   Assign (ra,
 	  bitor_expr (bitand_expr (make_rotl4 rs sh) (make_ppc_mask mb me))
-	    (bitand_expr (Register ra) (make_ppc_mask mb me)))
+	    (bitand_expr (Register ra) (bitneg_expr (make_ppc_mask mb me))))
 
 let make_ppc_rlwinm ra rs sh mb me =
   Assign (ra, Binary (BitAnd, make_rotl4 rs sh, make_ppc_mask mb me))
@@ -80,53 +80,52 @@ let sort_match_datas match_datas =
     match_datas
 
 let print_target_insns printers allocation best_matches_alist match_datas =
-  let rec print_bindings exprs_printed bindings =
-    match bindings with
-	[] -> exprs_printed
-      | ExprBinding (name, expr) :: rest ->
-	  let exprs_printed =
-	    if not (mem expr exprs_printed) then
-	      expr :: (print_exprs exprs_printed best_matches_alist
-			 (sort_match_datas (map (fun m -> m.expr_match_data)
-					      (assoc expr best_matches_alist))))
-	    else
-	      exprs_printed
-	  in print_bindings exprs_printed rest
-      | _ :: _ -> raise Wrong_binding
-  and print exprs_printed best_matches_alist match_data =
-    let expr_bindings  = filter (fun b -> match b with
-				     ExprBinding _ -> true
-				   | _ -> false) match_data.bindings
+  let rec print_bindings bindings =
+    iter (function (name, expr) ->
+	    let reg_num_str = string_of_int (lookup_intermediate_reg allocation expr)
+	    in print_string ("IF_NEED_REG(" ^ reg_num_str ^ ") {\n") ;
+	      print_exprs best_matches_alist
+		(sort_match_datas (map (fun m -> m.expr_match_data)
+				     (assoc expr best_matches_alist)))
+		("ALLOC_REG(" ^ reg_num_str ^ ");\n") ;
+	      print_string "}\n")
+      bindings
+  and print best_matches_alist match_data alloc_reg_string =
+    let expr_bindings  = filtermap (fun b -> match b with
+					ExprBinding (name, expr) -> Some (name, expr)
+				      | _ -> None)
+			   match_data.bindings
     and printer = assoc match_data.target_insn.name printers
-    in let expr_bindings = print_bindings exprs_printed expr_bindings
-    in print_string (printer allocation match_data.bindings) ; print_newline () ;
-      expr_bindings
-  and print_exprs exprs_printed best_matches_alist match_datas =
+    in print_bindings expr_bindings ;
+      print_string alloc_reg_string ;
+      print_string (printer allocation match_data.bindings) ; print_newline () ;
+      iter (function (_, expr) ->
+	      print_string "FREE_REG(" ; print_int (lookup_intermediate_reg allocation expr) ; print_string ");\n")
+	expr_bindings
+  and print_exprs best_matches_alist match_datas alloc_reg_string =
     match match_datas with
 	match_data :: rest ->
 	  (match match_data.cumulative_cost with
 	       Maybe (_, cond) ->
 		 if rest <> [] then
 		   (print_string "if (" ; print_string (expr_to_c [] cond) ; print_string ") {\n" ;
-		    let _ = print exprs_printed best_matches_alist match_data
-		    in print_string "} else " ;
-		      let _ = print_exprs exprs_printed best_matches_alist rest ;
-		      in exprs_printed)
+		    print best_matches_alist match_data alloc_reg_string ;
+		    print_string "} else " ;
+		    print_exprs best_matches_alist rest alloc_reg_string)
 		 else
 		   raise No_match
 	     | Certainly _ ->
 		 if rest = [] then
 		   (print_string "{\n" ;
-		    let exprs_printed = print exprs_printed best_matches_alist match_data
-		    in print_string "}\n" ;
-		      exprs_printed)
+		    print best_matches_alist match_data alloc_reg_string ;
+		    print_string "}\n")
 		 else
 		   raise No_match)
       |	[] -> raise No_match
-  in let _ = print_exprs [] best_matches_alist (sort_match_datas match_datas)
+  in let _ = print_exprs best_matches_alist (sort_match_datas match_datas) ""
   in ()
 
-let print_c_func reg_type reg_alloc_string free_reg_func result_passed printers name stmt fields num_int_regs =
+let print_c_func reg_type result_passed printers name stmt fields num_int_regs =
   let rec print_fields fields =
     match fields with
 	[] -> ()
@@ -161,13 +160,11 @@ let print_c_func reg_type reg_alloc_string free_reg_func result_passed printers 
 						   1 (length allocation))
 		    in print_string "{\n" ;
 		      if allocation <> [] then
-			(print_string (reg_type ^ " ") ;
-			 print_string (join_strings ", " (map (fun r -> r ^ " = " ^ reg_alloc_string) interm_reg_strings)) ;
-			 print_string ";\n\n" ;)
+			(print_string (reg_type ^ " " ^ (join_strings ", " interm_reg_strings) ^ ";\n") ;
+			 print_string ("int " ^ (join_strings ", " (map (fun r -> r ^ "_set = 0") interm_reg_strings)) ^ ";\n\n"))
 		      else
 			() ;
 		      print_target_insns printers allocation form_match.best_sub_matches form_match.match_datas ;
-		      print_string (join_strings "" (map free_reg_func interm_reg_strings)) ;
 		      print_string "}\n")
 		 switch)
 	 switch ;
@@ -178,10 +175,10 @@ let print_c_func reg_type reg_alloc_string free_reg_func result_passed printers 
       print_string "}\n\n"
 
 let print_test_func =
-  print_c_func "word_64" "0LL" (fun _ -> "") false
+  print_c_func "word_64" false
 
 let print_gen_func =
-  print_c_func "reg_t" "alloc_tmp_integer_reg()" (fun name -> "free_tmp_integer_reg(" ^ name ^ ");\n") true
+  print_c_func "reg_t" true
 
 let make_registers () =
   let r1 = GuestRegister (1, Int)
@@ -206,12 +203,12 @@ let test_explore () =
   and stmt7 = make_ppc_rlwnm r1 (Register r2) (Register r3) (IntConst (IntField "mb")) (IntConst (IntField "me"))
   and stmt8 = make_ppc_rlwimi r1 (Register r2) (IntConst (IntField "sh")) (IntConst (IntField "mb")) (IntConst (IntField "me"))
   in
-    print_gen_func alpha_gen_gens "rlwinm" (alpha_wrap stmt6) [("sh", 0L, 32L); ("mb", 0L, 32L); ("me", 0L, 32L)] 2
 (*
+    print_gen_func alpha_gen_gens "rlwinm" (alpha_wrap stmt6) [("sh", 0L, 32L); ("mb", 0L, 32L); ("me", 0L, 32L)] 2
 ;
-    print_test_func "rlwnm" (alpha_wrap stmt7) [("mb", 0L, 32L); ("me", 0L, 32L)] 3 ;
-    print_test_func "rlwimi" (alpha_wrap stmt8) [("sh", 0L, 32L); ("mb", 0L, 32L); ("me", 0L, 32L)] 2
+    print_test_func alpha_printers "rlwnm" (alpha_wrap stmt7) [("mb", 0L, 32L); ("me", 0L, 32L)] 3 ;
 *)
+    print_gen_func alpha_gen_gens "rlwimi" (alpha_wrap stmt8) [("sh", 0L, 32L); ("mb", 0L, 32L); ("me", 0L, 32L)] 2
 
 let test_maybe () =
   let (r1, r2, r3) = make_registers ()
