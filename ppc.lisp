@@ -504,7 +504,15 @@
      (xo1 1014)
      (rc 0)
      (rd 0))
-  ((set (width 8 (mem (+ (if (= ra (width 5 0)) 0 (reg ra gpr)) (reg rb gpr)))) 0))
+  ((let ((ea (logand (+ (if (= ra (width 5 0)) 0 (reg ra gpr)) (reg rb gpr)) #xffffffe0)))
+     (set (mem ea) 0)
+     (set (mem (+ ea 4)) 0)
+     (set (mem (+ ea 8)) 0)
+     (set (mem (+ ea 12)) 0)
+     (set (mem (+ ea 16)) 0)
+     (set (mem (+ ea 20)) 0)
+     (set (mem (+ ea 24)) 0)
+     (set (mem (+ ea 28)) 0)))
   ("dcbz r%u,r%u" ra rb))
 
 (define-insn divw
@@ -791,6 +799,13 @@
 					     (sex d)
 					     (+ (reg ra gpr) (sex d))))))))
   ("lhz r%u,%d(r%u)" rd d ra))
+
+(define-insn lhzu
+    ((opcd 41))
+  ((let ((ea (width 32 (+ (reg ra gpr) (sex d)))))
+     (set (reg rd gpr) (zex (width 16 (mem ea))))
+     (set (reg ra gpr) ea)))
+  ("lhzu r%u,%d(r%u)" rd d ra))
 
 (define-insn lhzx
     ((opcd 31)
@@ -1102,6 +1117,12 @@
   ((set (width 64 (mem (+ (if (= ra (width 5 0)) 0 (reg ra gpr)) (sex d)))) (double-to-bits (reg frs fpr))))
   ("stfd fr%u,%d(r%u)" rs d ra))
 
+(define-insn stfdu
+    ((opcd 55))
+  ((set (width 64 (mem (+ (reg ra gpr) (sex d)))) (double-to-bits (reg frs fpr)))
+   (set (reg ra gpr) (+ (reg ra gpr) (sex d))))
+  ("stfdu fr%u,%d(r%u)" frs d ra))
+
 (define-insn stfdx
     ((opcd 31)
      (xo1 727)
@@ -1128,6 +1149,12 @@
 			   (+ (reg ra gpr) (sex d)))))
 	(subreg 0 15 rs gpr)))
   ("sth r%u,%d(r%u)" rs d ra))
+
+(define-insn sthu
+    ((opcd 45))
+  ((set (width 16 (mem (+ (reg ra gpr) (sex d)))) (subreg 0 15 rs gpr))
+   (set (reg ra gpr) (+ (reg ra gpr) (sex d))))
+  ("sthu r%u,%d(r%u)" rs d ra))
 
 (define-insn sthx
     ((opcd 31)

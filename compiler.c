@@ -27,6 +27,9 @@
 
 #include "bintrans.h"
 
+/* #define NO_REGISTER_CACHING */
+/* #define NO_PATCHING */
+
 #ifdef NEED_COMPILER
 #include "compiler.h"
 #include "fragment_hash.h"
@@ -39,8 +42,6 @@
 #define MAX_CONSTANTS        16384
 
 #define MAX_UNRESOLVED_JUMPS 16384 /* should be a lot less if we actually do resolve branches */
-
-#define MAX_CODE_INSNS     600000
 
 #define JUMP_TARGET_REG        16
 #define RETURN_ADDR_REG        26
@@ -74,6 +75,9 @@
 #define EMULATED_INSNS_CONST       (NUM_REG_CONSTANTS + 42)
 #define NATIVE_INSNS_CONST         (NUM_REG_CONSTANTS + 44)
 #define FRAGMENTS_CONST            (NUM_REG_CONSTANTS + 46)
+#define PREMATURE_EXITS_CONST      (NUM_REG_CONSTANTS + 48)
+#define END_EXITS_CONST            (NUM_REG_CONSTANTS + 50)
+#define EMULATED_TRACE_INSNS_CONST (NUM_REG_CONSTANTS + 52)
 #endif
 
 typedef struct
@@ -172,11 +176,17 @@ unsigned long num_patched_direct_jumps = 0;
 unsigned long num_direct_jumps = 0;
 #endif
 unsigned long num_direct_and_indirect_jumps = 0;
-unsigned long num_translated_fragments = 0;
+unsigned long num_translated_blocks = 0;
+unsigned long num_translated_traces = 0;
 unsigned long num_translated_insns = 0;
+unsigned long num_translated_trace_insns = 0;
 unsigned long num_load_store_reg_insns = 0;
 unsigned long num_stub_calls = 0;
+unsigned long num_loop_profiler_calls = 0;
+unsigned long num_const_adds = 0;
 #endif
+
+void (*branch_profile_func) (void) = 0;
 
 #ifdef MEASURE_TIME
 long compiler_time = 0;
@@ -690,6 +700,9 @@ emit_direct_jump (word_32 target)
 {
     int i;
 
+    if (branch_profile_func != 0)
+	branch_profile_func();
+
     emit(COMPOSE_LDQ(PROCEDURE_VALUE_REG, DIRECT_DISPATCHER_CONST * 4, CONSTANT_AREA_REG));
     emit(COMPOSE_JMP(RETURN_ADDR_REG, PROCEDURE_VALUE_REG));
 
@@ -708,6 +721,9 @@ emit_direct_jump (word_32 target)
 void
 emit_indirect_jump (void)
 {
+    if (branch_profile_func != 0)
+	branch_profile_func();
+
     /* we assume that the target address is already in $7 */
 
     emit(COMPOSE_LDQ(PROCEDURE_VALUE_REG, INDIRECT_DISPATCHER_CONST * 4, CONSTANT_AREA_REG));
@@ -849,6 +865,7 @@ emit_load_mem_64 (reg_t value_reg, reg_t addr_reg)
 #else
 #include "ppc_to_alpha_compiler.c"
 #endif
+#include "ppc_jump_analyzer.c"
 #elif defined(EMU_I386)
 #include "i386.h"
 #include "i386_compiler.c"
@@ -883,16 +900,17 @@ void
 enter_fragment (word_32 foreign_addr, word_64 native_addr)
 {
     fragment_hash_entry_t entry;
+#ifdef PROFILE_LOOPS
+    int i;
+#endif
 
 #ifdef PERIODIC_STAT_DUMP
-    if (num_translated_fragments % 100 == 0)
+    if (num_translated_blocks % 100 == 0)
 	print_compiler_stats();
 #endif
 
+    init_fragment_hash_entry(&entry);
     entry.native_addr = native_addr;
-#ifdef PROFILE_FRAGMENTS
-    entry.times_executed = 0;
-#endif
     fragment_hash_put(foreign_addr, &entry);
 }
 #endif
@@ -1127,6 +1145,9 @@ init_compiler (interpreter_t *intp, interpreter_t *dbg_intp)
     add_const_64(0);		/* emulated insns executed */
     add_const_64(0);		/* native insns executed */
     add_const_64(0);		/* fragments executed */
+    add_const_64(0);		/* premature exits */
+    add_const_64(0);		/* end exits */
+    add_const_64(0);		/* emulated trace insns executed */
 
     for (i = 0; i < NUM_INSNS; ++i)
     {
@@ -1137,8 +1158,21 @@ init_compiler (interpreter_t *intp, interpreter_t *dbg_intp)
 #endif
 }
 
+void
+disassemble_alpha_code (word_64 start, word_64 end)
+{
+    word_64 x;
+
+    for (x = start; x < end; x += 4)
+    {
+	printf("%016lx  ", x);
+	disassemble_alpha_insn(*(word_32*)x, x);
+	printf("\n");
+    }
+}
+
 word_64
-compile_until_jump (word_32 *addr, int optimize_taken_jump, label_t taken_jump_label)
+compile_until_jump (word_32 *addr, int optimize_taken_jump, label_t taken_jump_label, word_32 *target_addr)
 {
     word_64 start = (word_64)emit_loc;
     word_32 insnp = *addr;
@@ -1163,14 +1197,18 @@ compile_until_jump (word_32 *addr, int optimize_taken_jump, label_t taken_jump_l
     {
 #if defined(EMU_PPC)
 #ifndef USE_HAND_TRANSLATOR
-	compile_ppc_insn(mem_get_32(compiler_intp, insnp), insnp, 0, 0);
+	compile_ppc_insn(mem_get_32(compiler_intp, insnp), insnp, optimize_taken_jump, taken_jump_label);
 #else
-	compile_to_alpha_ppc_insn(mem_get_32(compiler_intp, insnp), insnp, 0, 0);
+	compile_to_alpha_ppc_insn(mem_get_32(compiler_intp, insnp), insnp, optimize_taken_jump, taken_jump_label);
 #endif
 #elif defined(EMU_I386)
 	word_32 insn_addr = compiler_intp->pc;
 
 	compile_i386_insn(compiler_intp, block_insns[i++].flags_killed);
+#endif
+
+#ifdef NO_REGISTER_CACHING
+	store_and_free_all_foreign_regs();
 #endif
 
 #ifdef COLLECT_STATS
@@ -1189,13 +1227,8 @@ compile_until_jump (word_32 *addr, int optimize_taken_jump, label_t taken_jump_l
 	printf("       0x%08x", block_insns[i - 1].flags_killed);
 #endif
 	printf("\n- - - - - - - - \n");
-	while (x < (word_64)emit_loc)
-	{
-	    printf("%016lx  ", x);
-	    disassemble_alpha_insn(*(word_32*)x, x);
-	    printf("\n");
-	    x += 4;
-	}
+	disassemble_alpha_code(x, emit_loc);
+	x = (word_64)emit_loc;
 #endif
 
 #if defined(COLLECT_STATS) || defined(DUMP_CODE)
@@ -1209,18 +1242,28 @@ compile_until_jump (word_32 *addr, int optimize_taken_jump, label_t taken_jump_l
 #endif
     }
 
-    *addr = insnp;
-
 #ifdef DUMP_CODE
     printf("++++++++++++++++\nepilogue\n- - - - - - - - \n");
-    while (x < (word_64)emit_loc)
+    disassemble_alpha_code(x, (word_64)emit_loc);
+    x = (word_64)emit_loc;
+#endif
+
+#ifdef EMU_PPC
+    if (optimize_taken_jump)
     {
-	printf("%016lx  ", x);
-	disassemble_alpha_insn(*(word_32*)x, x);
-	printf("\n");
-	x += 4;
+	int num_targets, can_jump_indirectly, can_fall_through;
+	word_32 target;
+
+	jump_analyze_ppc_insn(mem_get_32(compiler_intp, insnp - 4), insnp - 4, &num_targets, &target, &can_fall_through, &can_jump_indirectly);
+
+	assert(!can_jump_indirectly);
+	assert(num_targets == 1);
+
+	*target_addr = target;
     }
 #endif
+
+    *addr = insnp;
 
     return start;
 }
@@ -1236,11 +1279,31 @@ dump_constants (int old_num_constants)
 }
 #endif
 
+void
+emit_const_add (int const_index, int amount, word_32 **lda_loc)
+{
+    assert(amount >= -32768 && amount < 32768);
+
+    emit(COMPOSE_LDQ(16, const_index * 4, CONSTANT_AREA_REG));
+    if (lda_loc != 0)
+	*lda_loc = emit_loc;
+    emit(COMPOSE_LDA(16, amount, 16));
+    emit(COMPOSE_STQ(16, const_index * 4, CONSTANT_AREA_REG));
+
+#ifdef COLLECT_STATS
+    ++num_const_adds;
+#endif
+}
+
 word_32
 patch_mem_disp (word_32 insn, word_16 val)
 {
     return (insn & 0xffff0000) | val;
 }
+
+#ifdef COUNT_INSNS
+unsigned long old_num_translated_insns;
+#endif
 
 word_64
 compile_basic_block (word_32 addr)
@@ -1248,10 +1311,12 @@ compile_basic_block (word_32 addr)
     word_64 native_addr;
 #ifdef DUMP_CODE
     int old_num_constants = num_constants;
+    word_64 dump_start;
 #endif
 #ifdef COUNT_INSNS
     word_32 *emulated_lda_insn, *native_lda_insn, *old_emit_loc;
-    unsigned long old_num_translated_insns = num_translated_insns;
+
+    old_num_translated_insns = num_translated_insns;
 #endif
 
     start_timer();
@@ -1262,27 +1327,25 @@ compile_basic_block (word_32 addr)
     native_addr = (word_64)emit_loc;
 
 #ifdef COUNT_INSNS
-    emit(COMPOSE_LDQ(16, FRAGMENTS_CONST * 4, CONSTANT_AREA_REG));
-    emit(COMPOSE_ADDQ_IMM(16, 1, 16));
-    emit(COMPOSE_STQ(16, FRAGMENTS_CONST * 4, CONSTANT_AREA_REG));
-
-    emit(COMPOSE_LDQ(16, EMULATED_INSNS_CONST * 4, CONSTANT_AREA_REG));
-    emulated_lda_insn = emit_loc;
-    emit(COMPOSE_LDA(16, 0, 16));
-    emit(COMPOSE_STQ(16, EMULATED_INSNS_CONST * 4, CONSTANT_AREA_REG));
-
-    emit(COMPOSE_LDQ(16, NATIVE_INSNS_CONST * 4, CONSTANT_AREA_REG));
-    native_lda_insn = emit_loc;
-    emit(COMPOSE_LDA(16, 0, 16));
-    emit(COMPOSE_STQ(16, NATIVE_INSNS_CONST * 4, CONSTANT_AREA_REG));
+    emit_const_add(FRAGMENTS_CONST, 1, 0);
+    emit_const_add(EMULATED_INSNS_CONST, 0, &emulated_lda_insn);
+    emit_const_add(NATIVE_INSNS_CONST, 0, &native_lda_insn);
 
     old_emit_loc = emit_loc;
 #endif
 
-    compile_until_jump(&addr, 0, 0);
+    compile_until_jump(&addr, 0, 0, 0);
+
+#ifdef DUMP_CODE
+    dump_start = (word_64)emit_loc;
+#endif
 
     store_all_foreign_regs();
     emit_direct_jump(addr);	/* this is not necessary if the jump at the end of the basic block was unconditional */
+
+#ifdef DUMP_CODE
+    disassemble_alpha_code(dump_start, (word_64)emit_loc);
+#endif
 
     finish_fragment();
 
@@ -1295,7 +1358,7 @@ compile_basic_block (word_32 addr)
 #endif
 
 #ifdef COLLECT_STATS
-    ++num_translated_fragments;
+    ++num_translated_blocks;
 #endif
 
 #ifdef COUNT_INSNS
@@ -1306,6 +1369,24 @@ compile_basic_block (word_32 addr)
     return native_addr;
 }
 
+void
+branch_profile_within_trace (void)
+{
+#ifdef COUNT_INSNS
+    emit_const_add(PREMATURE_EXITS_CONST, 1, 0);
+    emit_const_add(EMULATED_TRACE_INSNS_CONST, num_translated_insns - old_num_translated_insns, 0);
+#endif
+}
+
+void
+branch_profile_end_trace (void)
+{
+#ifdef COUNT_INSNS
+    emit_const_add(END_EXITS_CONST, 1, 0);
+    emit_const_add(EMULATED_TRACE_INSNS_CONST, num_translated_insns - old_num_translated_insns, 0);
+#endif
+}
+
 word_64
 compile_trace (word_32 addr, int length, int bits)
 {
@@ -1313,32 +1394,60 @@ compile_trace (word_32 addr, int length, int bits)
     int bit;
 #ifdef DUMP_CODE
     int old_num_constants = num_constants;
+    word_64 dump_start;
+#endif
+
+#ifdef COUNT_INSNS
+    old_num_translated_insns = num_translated_insns;
 #endif
 
     start_timer();
+
+    branch_profile_func = branch_profile_within_trace;
 
     for (bit = 1 << (length - 1); bit != 0; bit >>= 1)
     {
 	if (bits & bit)
 	{
 	    label_t taken_jump_label = alloc_label();
+	    word_32 target_addr;
 
-	    compile_until_jump(&addr, 1, taken_jump_label);
+	    compile_until_jump(&addr, 1, taken_jump_label, &target_addr);
 
+#ifdef DUMP_CODE
+	    dump_start = (word_64)emit_loc;
+#endif
+
+	    push_alloc();
 	    store_all_foreign_regs();
 	    emit_direct_jump(addr);
+	    pop_alloc();
 
 	    emit_label(taken_jump_label);
 	    free_label(taken_jump_label);
+
+#ifdef DUMP_CODE
+	    disassemble_alpha_code(dump_start, (word_64)emit_loc);
+#endif
+
+	    addr = target_addr;
 	}
 	else
-	    compile_until_jump(&addr, 0, 0);
+	    compile_until_jump(&addr, 0, 0, 0);
     }
 
-    compile_until_jump(&addr, 0, 0);
+    branch_profile_func = branch_profile_end_trace;
+
+    compile_until_jump(&addr, 0, 0, 0);
+
+#ifdef DUMP_CODE
+    dump_start = (word_64)emit_loc;
+#endif
 
     store_all_foreign_regs();
     emit_direct_jump(addr);	/* this is not necessary if the jump at the end of the basic block was unconditional */
+
+    branch_profile_func = 0;
 
     finish_fragment();
 
@@ -1347,11 +1456,14 @@ compile_trace (word_32 addr, int length, int bits)
     stop_timer();
 
 #ifdef DUMP_CODE
+    disassemble_alpha_code(dump_start, (word_64)emit_loc);
     dump_constants(old_num_constants);
 #endif
 
 #ifdef COLLECT_STATS
-    ++num_translated_fragments;
+    ++num_translated_traces;
+
+    num_translated_trace_insns += num_translated_insns - old_num_translated_insns;
 #endif
 
     return start;
@@ -1419,6 +1531,7 @@ interpret_until_threshold (word_32 addr)
 	{
 	    fragment_hash_entry_t new;
 
+	    init_fragment_hash_entry(&new);
 	    new.native_addr = 0;
 	    new.times_executed = 1;
 	    fragment_hash_put(compiler_intp->pc, &new);
@@ -1479,7 +1592,11 @@ provide_fragment (word_32 addr)
 	return native_addr;
 
 #ifdef COMPILER_THRESHOLD
+#ifdef PROFILE_LOOPS
+    return loop_profiler(compiler_intp, addr);
+#else
     return interpret_until_threshold(addr);
+#endif
 #else
     native_addr = compile_basic_block(addr);
     enter_fragment(addr, native_addr);
@@ -1513,7 +1630,11 @@ provide_fragment_and_patch (word_64 jump_addr)
     native_addr = lookup_fragment(foreign_addr);
 
     if (native_addr == 0)
+#ifdef PROFILE_LOOPS
+	return loop_profiler(compiler_intp, foreign_addr);
+#else
 	return interpret_until_threshold(foreign_addr);
+#endif
     else
 #endif
     {
@@ -1525,7 +1646,7 @@ provide_fragment_and_patch (word_64 jump_addr)
 	native_addr = provide_fragment(foreign_addr);
 #endif
 
-#ifndef CROSSDEBUGGER
+#if !defined(CROSSDEBUGGER) && !defined(NO_PATCHING)
 	/* printf("patching at %lx\n", jump_addr); */
 
 	jump_addr -= 8;
@@ -1551,8 +1672,13 @@ start_compiler (word_32 addr)
     word_64 native_addr;
 
 #ifdef COMPILER_THRESHOLD
+#ifdef PROFILE_LOOPS
+    move_regs_interpreter_to_compiler(compiler_intp);
+    native_addr = loop_profiler(compiler_intp, addr);
+#else
     move_regs_interpreter_to_compiler(compiler_intp);
     native_addr = interpret_until_threshold(addr);
+#endif
 #else
     native_addr = compile_basic_block(addr);
     move_regs_interpreter_to_compiler(compiler_intp);
@@ -1568,23 +1694,22 @@ print_compiler_stats (void)
     int i;
 
 #ifdef COMPILER_THRESHOLD
-    printf("patched direct jumps:    %lu\n", num_patched_direct_jumps);
-    printf("indirect jumps:          %lu\n", num_direct_and_indirect_jumps);
+    printf("patched direct jumps:          %lu\n", num_patched_direct_jumps);
+    printf("indirect jumps:                %lu\n", num_direct_and_indirect_jumps);
 #else
-    printf("patched direct jumps:    %lu\n", num_direct_jumps);
-    printf("indirect jumps:          %lu\n", num_direct_and_indirect_jumps - num_direct_jumps);
+    printf("patched direct jumps:          %lu\n", num_direct_jumps);
+    printf("indirect jumps:                %lu\n", num_direct_and_indirect_jumps - num_direct_jumps);
 #endif
-    printf("fragment hash misses:    %lu\n", num_fragment_hash_misses);
-    printf("translated fragments:    %lu\n", num_translated_fragments);
-    printf("translated insns:        %lu\n", num_translated_insns);
-    printf("generated insns:         %lu\n", emit_loc - code_area
-#ifdef COUNT_INSNS
-                                             - 9 * num_translated_fragments
-#endif
-	   );
-    printf("load/store reg insns:    %lu\n", num_load_store_reg_insns);
-    printf("constants:               %d\n", num_constants - (NUM_EMU_REGISTERS * 2 + 2));
-    printf("stub calls:              %lu\n", num_stub_calls);
+    printf("fragment hash misses:          %lu\n", num_fragment_hash_misses);
+    printf("translated blocks:             %lu\n", num_translated_blocks);
+    printf("translated traces:             %lu\n", num_translated_traces);
+    printf("translated insns:              %lu\n", num_translated_insns);
+    printf("translated insns in traces:    %lu\n", num_translated_trace_insns);
+    printf("generated insns:               %lu\n", emit_loc - code_area - 3 * num_const_adds);
+    printf("load/store reg insns:          %lu\n", num_load_store_reg_insns);
+    printf("constants:                     %d\n", num_constants - (NUM_EMU_REGISTERS * 2 + 2));
+    printf("stub calls:                    %lu\n", num_stub_calls);
+    printf("loop profiler calls:           %lu\n", num_loop_profiler_calls);
 
 #ifdef COLLECT_PPC_FPR_STATS
     for (i = 0; i < 32; ++i)
@@ -1593,9 +1718,12 @@ print_compiler_stats (void)
 #endif
 
 #ifdef COUNT_INSNS
-    printf("fragments executed:      %lu\n", get_const_64(FRAGMENTS_CONST));
-    printf("emulated insns executed: %lu\n", get_const_64(EMULATED_INSNS_CONST));
-    printf("native insns executed:   %lu\n", get_const_64(NATIVE_INSNS_CONST));
+    printf("blocks executed:               %lu\n", get_const_64(FRAGMENTS_CONST));
+    printf("premature trace exits:         %lu\n", get_const_64(PREMATURE_EXITS_CONST));
+    printf("end trace exits:               %lu\n", get_const_64(END_EXITS_CONST));
+    printf("emulated block insns executed: %lu\n", get_const_64(EMULATED_INSNS_CONST));
+    printf("emulated trace insns executed: %lu\n", get_const_64(EMULATED_TRACE_INSNS_CONST));
+    printf("native block insns executed:   %lu\n", get_const_64(NATIVE_INSNS_CONST));
 #endif
 
 #ifdef COLLECT_STATS

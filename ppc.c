@@ -67,10 +67,12 @@
 #define AT_PLATFORM 15  /* string identifying CPU for optimizations */
 #define AT_HWCAP  16    /* arch dependent hints at CPU capabilities */
 
+#define DLINFO_ITEMS       13
+
 #if defined(EMU_I386)
 #define EMU_HWCAPS 0x0080f9ff
 #elif defined(EMU_PPC)
-#define EMU_HWCAPS 0x10
+#define EMU_HWCAPS 0x0
 #endif
 
 #if defined(EMU_PPC)
@@ -216,6 +218,7 @@ int emu_errnos[] = { 0,
 #define SYSCALL_SELECT           142
 #define SYSCALL_READV            145
 #define SYSCALL_WRITEV           146
+#define SYSCALL_MREMAP           163
 #define SYSCALL_RT_SIGACTION     173
 #elif defined(EMU_I386)
 int emu_errnos[] = { 0,
@@ -270,7 +273,7 @@ int emu_errnos[] = { 0,
 #define SYSCALL_RT_SIGACTION     173
 #endif
 
-#undef SYSCALL_OUTPUT
+#define SYSCALL_OUTPUT
 #ifdef SYSCALL_OUTPUT
 #define ANNOUNCE_SYSCALL(n)         printf("%s\n", (n))
 #else
@@ -952,8 +955,13 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 	case SYSCALL_TIME :
 	    ANNOUNCE_SYSCALL("time");
-	    assert(arg1 == 0);
-	    result = (int)time(0);
+	    {
+		time_t tm = time(0);
+
+		result = (int)tm;
+		if (arg1 != 0)
+		    mem_set_32(intp, arg1, (word_32)tm);
+	    }
 	    break;
 
 	case SYSCALL_GETPID :
@@ -992,12 +1000,21 @@ process_system_call (interpreter_t *intp, word_32 number,
 		word_32 new_top = arg1;
 		word_32 new_top_aligned = PPC_PAGE_ALIGN(new_top);
 
-		assert(new_top > intp->data_segment_top);
+		if (new_top > intp->data_segment_top)
+		{
+		    if (new_top_aligned > old_top_aligned)
+		    {
+			word_32 addr;
 
-		if (new_top_aligned > old_top_aligned)
-		    mmap_anonymous(intp, new_top_aligned - old_top_aligned, PAGE_READABLE | PAGE_WRITEABLE, 1, old_top_aligned);
+			addr = mmap_anonymous(intp, new_top_aligned - old_top_aligned, PAGE_READABLE | PAGE_WRITEABLE, 1, old_top_aligned);
 
-		intp->data_segment_top = new_top;
+			assert(addr != (word_32)-1);
+		    }
+
+		    intp->data_segment_top = new_top;
+		}
+		else
+		    ;		/* FIXME: unmap freed area */
 
 		result = (int)new_top;
 	    }
@@ -1161,26 +1178,24 @@ process_system_call (interpreter_t *intp, word_32 number,
 		    assert(arg6 == 0);
 
 		    addr = mmap_anonymous(intp, len, prot_to_flags(arg3), arg4 & PPC_MAP_FIXED, arg1);
+
+		    result = (int)addr;
 		}
 		else
 		{
 		    fd = lookup_fd(intp, arg5);
 		    if (fd == -1)
 		    {
-			addr = 0;
-			result = EBADF;
+			result = -1;
+			errno = EBADF;
 		    }
 		    else
+		    {
 			addr = mmap_file(intp, len, prot_to_flags(arg3), arg4 & PPC_MAP_FIXED, arg1, fd, arg6);
-		}
 
-		if (addr == 0)
-		{
-		    result = -1;
-		    assert(0);
+			result = (int)addr;
+		    }
 		}
-		else
-		    result = (int)addr;
 	    }
 	    break;
 
@@ -1193,7 +1208,8 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 		mem_len = PPC_PAGE_ALIGN(arg2);
 
-		mprotect_pages(intp, arg1, mem_len, 0);
+		mprotect_pages(intp, arg1, mem_len, 0, 0);
+		natively_mprotect_pages(intp, arg1, mem_len, 0);
 
 		result = 0;
 	    }
@@ -1458,14 +1474,16 @@ process_system_call (interpreter_t *intp, word_32 number,
 	    ANNOUNCE_SYSCALL("mprotect");
 	    {
 		word_32 mem_len;
-
-		assert(0);
+		int flags = prot_to_flags(arg3);
 
 		assert((arg1 & PPC_PAGE_MASK) == 0);
 
 		mem_len = PPC_PAGE_ALIGN(arg2);
 
-		mprotect_pages(intp, arg1, mem_len, prot_to_flags(arg3));
+		assert(is_mapped(intp, arg1, mem_len, 0));
+
+		mprotect_pages(intp, arg1, mem_len, flags | PAGE_MMAPPED, 0);
+		natively_mprotect_pages(intp, arg1, mem_len, flags);
 
 		result = 0;
 	    }
@@ -1639,6 +1657,55 @@ process_system_call (interpreter_t *intp, word_32 number,
 	    }
 	    break;
 
+	case SYSCALL_MREMAP :
+	    ANNOUNCE_SYSCALL("mremap");
+	    {
+		word_32 old_len, new_len;
+		int flags;
+
+		assert((arg1 & PPC_PAGE_MASK) == 0);
+
+		old_len = PPC_PAGE_ALIGN(arg2);
+		new_len = PPC_PAGE_ALIGN(arg3);
+
+		if (is_mapped(intp, arg1, old_len, &flags))
+		{
+		    if (old_len < new_len)
+		    {
+			if (is_unmapped(intp, arg1 + old_len, new_len - old_len))
+			{
+			    word_32 addr;
+
+			    addr = mmap_anonymous(intp, new_len - old_len, flags, 1, arg1 + old_len);
+
+			    assert(addr != (word_32)-1);
+
+			    result = arg1;
+			}
+			else
+			{
+			    result = -1;
+			    errno = ENOMEM;
+			}
+		    }
+		    else if (old_len > new_len)
+		    {
+			mprotect_pages(intp, arg1 + new_len, old_len - new_len, 0, 0);
+			natively_mprotect_pages(intp, arg1 + new_len, old_len - new_len, 0);
+
+			result = arg1;
+		    }
+		    else
+			result = arg1;
+		}
+		else
+		{
+		    result = -1;
+		    errno = EFAULT;
+		}
+	    }
+	    break;
+
 	case SYSCALL_RT_SIGACTION :
 	    ANNOUNCE_SYSCALL("rt_sigaction");
 	    result = 0;		/* FIXME: this is certainly a bit naive. */
@@ -1704,6 +1771,7 @@ handle_system_call (interpreter_t *intp)
 	{ SYSCALL_SELECT, 5 },
 	{ SYSCALL_READV, 3 },
 	{ SYSCALL_WRITEV, 3 },
+	{ SYSCALL_MREMAP, 4 },
 	{ SYSCALL_RT_SIGACTION, 3 },
 	{ (word_32)-1, 0 }
     };
@@ -1810,7 +1878,7 @@ lsbify_elf32_phdr (Elf32_Phdr *hdr)
 }
 
 word_32
-setup_stack (interpreter_t *intp, word_32 p, char *argv[])
+setup_stack (interpreter_t *intp, word_32 p, char *argv[], Elf32_Ehdr *ehdr, word_32 load_addr)
 {
     /*
     static char *env[] = { "PWD=/bigben/home/schani",
@@ -1836,6 +1904,17 @@ setup_stack (interpreter_t *intp, word_32 p, char *argv[])
     */
 
 #if defined(EMU_PPC)
+    static char *env[] = { "PWD=/bigben/home/schani",
+			   "HOSTNAME=samhain.ifs.tuwien.ac.at",
+			   "MACHTYPE=powerpc-redhat-linux-gnu",
+			   "SHLVL=0",
+			   "SHELL=/bin/bash",
+			   "HOSTTYPE=powerpc",
+			   "OSTYPE=linux-gnu",
+			   "TERM=dumb",
+			   "PATH=/usr/gnu/bin:/usr/local/bin:/usr/ucb:/bin:/usr/bin:.",
+			   0 };
+    /*
     static char *env[] = { "PWD=/",
 			   "HOSTNAME=quinta.schani.net",
 			   "HISTFILESIZE=1000",
@@ -1853,6 +1932,7 @@ setup_stack (interpreter_t *intp, word_32 p, char *argv[])
 			   "TERM=xterm",
 			   "PATH=/bin",
 			   0 };
+    */
 #elif defined(EMU_I386)
     static char *env[] = { "PWD=/mnt/homes/nethome/hansolo/schani/Work/unix/bintrans/i386-root/bin",
 			   "HOSTNAME=vader",
@@ -1869,7 +1949,6 @@ setup_stack (interpreter_t *intp, word_32 p, char *argv[])
     int argc;
     int envc;
 
-    word_32 exec;
     word_32 sp;
     word_32 csp;
     word_32 argvp, envp;
@@ -1884,7 +1963,7 @@ setup_stack (interpreter_t *intp, word_32 p, char *argv[])
 
     p -= 4;
     p = copy_string(intp, argv[0], p);
-    exec = p;
+    /* exec = p; */
     p = copy_strings(intp, envc, env, p);
     argtop = p = copy_strings(intp, argc, argv, p);
 
@@ -1898,10 +1977,7 @@ setup_stack (interpreter_t *intp, word_32 p, char *argv[])
     sp = (~15 & p) - 16;
 
     csp = sp;
-    csp -= 4 * 4 + (platform != 0 ? 2 * 4 : 0);	/* no interpreter */
-    csp -= (envc + 1) * 4;
-    csp -= (argc + 1) * 4;
-    csp -= 1 * 4;		/* ibcs */
+    csp -= ((ehdr != 0 ? DLINFO_ITEMS * 2 : 4) + (platform != 0 ? 2 : 0)) * 4;
     if (csp & 15)
 	sp -= csp & 15;
 
@@ -1919,6 +1995,30 @@ setup_stack (interpreter_t *intp, word_32 p, char *argv[])
 
     sp -= 2 * 4;
     NEW_AUX_ENT(0, AT_HWCAP, EMU_HWCAPS);
+
+    if (ehdr != 0)
+    {
+	sp -= 11 * 2 * 4;
+
+	NEW_AUX_ENT(0, AT_PHDR, load_addr + ehdr->e_phoff);
+	NEW_AUX_ENT(1, AT_PHENT, sizeof(Elf32_Phdr));
+	NEW_AUX_ENT(2, AT_PHNUM, ehdr->e_phnum);
+	NEW_AUX_ENT(3, AT_PAGESZ, PPC_PAGE_SIZE);
+	NEW_AUX_ENT(4, AT_BASE, MMAP_START);
+	NEW_AUX_ENT(5, AT_FLAGS, 0);
+	NEW_AUX_ENT(6, AT_ENTRY, ehdr->e_entry);
+	NEW_AUX_ENT(7, AT_UID, getuid());
+	NEW_AUX_ENT(8, AT_EUID, geteuid());
+	NEW_AUX_ENT(9, AT_GID, getgid());
+	NEW_AUX_ENT(10, AT_EGID, getegid());
+    }
+
+    csp = sp;
+    csp -= (envc + 1) * 4;
+    csp -= (argc + 1) * 4;
+    csp -= 1 * 4;		/* ibcs */
+    if (csp & 15)
+	sp -= csp & 15;
 
     sp -= (envc + 1) * 4;
     envp = sp;
@@ -2472,6 +2572,90 @@ init_interpreter_struct (interpreter_t *intp, int direct_memory, int compiler)
 	intp->fd_map[i].free = 1;
 }
 
+void
+read_elf_info (int fd, Elf32_Ehdr *ehdr, Elf32_Phdr **phdrs)
+{
+    ssize_t num_read;
+    int i;
+
+    num_read = read_all(fd, (byte*)ehdr, sizeof(Elf32_Ehdr));
+    assert(num_read == sizeof(Elf32_Ehdr));
+
+    assert(ehdr->e_ident[EI_MAG0] == ELFMAG0);
+    assert(ehdr->e_ident[EI_MAG1] == ELFMAG1);
+    assert(ehdr->e_ident[EI_MAG2] == ELFMAG2);
+    assert(ehdr->e_ident[EI_MAG3] == ELFMAG3);
+
+    assert(ehdr->e_ident[EI_CLASS] == ELFCLASS32);
+
+#if defined(EMU_PPC)
+    assert(ehdr->e_ident[EI_DATA] == ELFDATA2MSB);
+#elif defined(EMU_I386)
+    assert(ehdr->e_ident[EI_DATA] == ELFDATA2LSB);
+#endif
+
+    assert(ehdr->e_ident[EI_VERSION] == EV_CURRENT);
+
+    /*
+    assert(ehdr->e_ident[EI_OSABI] == ELFOSABI_SYSV);
+    assert(ehdr->e_ident[EI_ABIVERSION] == 0);
+    */
+
+#ifdef DIFFERENT_BYTEORDER
+    lsbify_elf32_ehdr(ehdr);
+#endif
+
+    assert(ehdr->e_type == ET_EXEC || ehdr->e_type == ET_DYN);
+#if defined(EMU_PPC)
+    assert(ehdr->e_machine == EM_PPC);
+#elif defined(EMU_I386)
+    assert(ehdr->e_machine == EM_386);
+#endif
+
+    assert(ehdr->e_version == EV_CURRENT);
+
+    *phdrs = (Elf32_Phdr*)malloc(sizeof(Elf32_Phdr) * ehdr->e_phnum);
+
+    lseek(fd, ehdr->e_phoff, SEEK_SET);
+    for (i = 0; i < ehdr->e_phnum; ++i)
+    {
+	num_read = read_all(fd, (byte*)&(*phdrs)[i], sizeof(Elf32_Phdr));
+	assert(num_read == sizeof(Elf32_Phdr));
+#ifdef DIFFERENT_BYTEORDER
+	lsbify_elf32_phdr(&(*phdrs)[i]);
+#endif
+    }
+}
+
+void
+read_elf_segment (interpreter_t *intp, int fd, Elf32_Phdr *phdr, word_32 bias)
+{
+    word_32 mem_start;
+    word_32 mem_len;
+    int flags = 0;
+    word_32 read_len;
+
+    if (phdr->p_flags & PF_R)
+	flags |= PAGE_READABLE;
+    if (phdr->p_flags & PF_W)
+	flags |= PAGE_WRITEABLE;
+    if (phdr->p_flags & PF_X)
+	flags |= PAGE_EXECUTABLE;
+
+    mem_start = PPC_PAGE_ALIGN_DOWN(phdr->p_vaddr + bias);
+    mem_len = PPC_PAGE_ALIGN(phdr->p_vaddr + bias + phdr->p_memsz) - mem_start;
+
+    mprotect_pages(intp, mem_start, mem_len, flags | PAGE_MMAPPED, 1);
+    natively_mprotect_pages(intp, mem_start, mem_len, PAGE_WRITEABLE);
+    read_len = copy_file_to_mem(intp, fd, phdr->p_vaddr + bias, phdr->p_filesz, phdr->p_offset, 0);
+    assert(read_len == phdr->p_filesz);
+    natively_mprotect_pages(intp, mem_start, mem_len, mem_flags_union(intp, mem_start, mem_len));
+				/* FIXME: this is not correct.  we may end up with pages with too many access rights */
+
+    if (phdr->p_type == PT_LOAD && (phdr->p_flags & (PF_W | PF_R)) == (PF_W | PF_R) && bias == 0)
+	intp->data_segment_top = phdr->p_vaddr + phdr->p_memsz;
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -2479,9 +2663,11 @@ main (int argc, char *argv[])
     Elf32_Ehdr ehdr;
     Elf32_Phdr *phdrs = 0;
     word_32 stack_bottom;
-    ssize_t num_read;
+    word_32 entry;
+    word_32 load_addr = (word_32)-1;
     int i;
     char **ppc_argv;
+    char *elf_interpreter = 0;
 #ifdef NEED_INTERPRETER
     interpreter_t interpreter;
 #endif
@@ -2504,7 +2690,7 @@ main (int argc, char *argv[])
 
     ppc_argv = (char**)malloc(sizeof(char*) * argc);
 #if defined(EMU_PPC)
-    ppc_argv[0] = "/bigben/home/schani/./a.out";
+    ppc_argv[0] = "/bigben/home/schani/a.out";
 #elif defined(EMU_I386)
     ppc_argv[0] = "/mnt/homes/nethome/hansolo/schani/Work/unix/bintrans/i386-root/bin/go";
 #endif
@@ -2515,122 +2701,94 @@ main (int argc, char *argv[])
     exec_fd = open(translate_filename(argv[1]), O_RDONLY);
     assert(exec_fd != -1);
 
-    num_read = read_all(exec_fd, (byte*)&ehdr, sizeof(Elf32_Ehdr));
-    assert(num_read == sizeof(Elf32_Ehdr));
-
-    assert(ehdr.e_ident[EI_MAG0] == ELFMAG0);
-    assert(ehdr.e_ident[EI_MAG1] == ELFMAG1);
-    assert(ehdr.e_ident[EI_MAG2] == ELFMAG2);
-    assert(ehdr.e_ident[EI_MAG3] == ELFMAG3);
-
-    assert(ehdr.e_ident[EI_CLASS] == ELFCLASS32);
-
-#if defined(EMU_PPC)
-    assert(ehdr.e_ident[EI_DATA] == ELFDATA2MSB);
-#elif defined(EMU_I386)
-    assert(ehdr.e_ident[EI_DATA] == ELFDATA2LSB);
-#endif
-
-    assert(ehdr.e_ident[EI_VERSION] == EV_CURRENT);
-
-    /*
-    assert(ehdr.e_ident[EI_OSABI] == ELFOSABI_SYSV);
-    assert(ehdr.e_ident[EI_ABIVERSION] == 0);
-    */
-
-#ifdef DIFFERENT_BYTEORDER
-    lsbify_elf32_ehdr(&ehdr);
-#endif
-
-    assert(ehdr.e_type == ET_EXEC);
-#if defined(EMU_PPC)
-    assert(ehdr.e_machine == EM_PPC);
-#elif defined(EMU_I386)
-    assert(ehdr.e_machine == EM_386);
-#endif
-
-    assert(ehdr.e_version == EV_CURRENT);
-
-    phdrs = (Elf32_Phdr*)malloc(sizeof(Elf32_Phdr) * ehdr.e_phnum);
-
-    lseek(exec_fd, ehdr.e_phoff, SEEK_SET);
-    for (i = 0; i < ehdr.e_phnum; ++i)
-    {
-	num_read = read_all(exec_fd, (byte*)&phdrs[i], sizeof(Elf32_Phdr));
-	assert(num_read == sizeof(Elf32_Phdr));
-#ifdef DIFFERENT_BYTEORDER
-	lsbify_elf32_phdr(&phdrs[i]);
-#endif
-    }
+    read_elf_info(exec_fd, &ehdr, &phdrs);
 
     for (i = 0; i < ehdr.e_phnum; ++i)
     {
-	int flags = 0;
-	word_32 read_len;
-	word_32 mem_start;
-	word_32 mem_len;
-
-	if (phdrs[i].p_type != PT_LOAD)
+	if (phdrs[i].p_type == PT_INTERP)
+	{
+	    elf_interpreter = (char*)malloc(phdrs[i].p_filesz);
+	    read_all_at(exec_fd, elf_interpreter, phdrs[i].p_filesz, phdrs[i].p_offset);
+	    printf("elf interpreter is %s\n", elf_interpreter);
 	    continue;
+	}
 
-	if (phdrs[i].p_flags & PF_R)
-	    flags |= PAGE_READABLE;
-	if (phdrs[i].p_flags & PF_W)
-	    flags |= PAGE_WRITEABLE;
-	if (phdrs[i].p_flags & PF_X)
-	    flags |= PAGE_EXECUTABLE;
-
-	mem_start = PPC_PAGE_ALIGN_DOWN(phdrs[i].p_vaddr);
-	mem_len = PPC_PAGE_ALIGN(phdrs[i].p_vaddr + phdrs[i].p_memsz) - mem_start;
-
+	if (phdrs[i].p_type == PT_LOAD)
+	{
 #ifdef NEED_INTERPRETER
-	mprotect_pages(&interpreter, mem_start, mem_len, flags | PAGE_MMAPPED);
-	natively_mprotect_pages(&interpreter, mem_start, mem_len, PAGE_WRITEABLE);
-	read_len = copy_file_to_mem(&interpreter, exec_fd, phdrs[i].p_vaddr, phdrs[i].p_filesz, phdrs[i].p_offset, 0);
-	assert(read_len == phdrs[i].p_filesz);
-	natively_mprotect_pages(&interpreter, mem_start, mem_len, flags);
-
-	if (phdrs[i].p_type == PT_LOAD && phdrs[i].p_flags == (PF_W | PF_R))
-	    interpreter.data_segment_top = phdrs[i].p_vaddr + phdrs[i].p_memsz;
+	    read_elf_segment(&interpreter, exec_fd, &phdrs[i], 0);
 #endif
 #ifdef NEED_COMPILER
-	mprotect_pages(&compiler, mem_start, mem_len, flags | PAGE_MMAPPED);
-	natively_mprotect_pages(&compiler, mem_start, mem_len, PAGE_WRITEABLE);
-	read_len = copy_file_to_mem(&compiler, exec_fd, phdrs[i].p_vaddr, phdrs[i].p_filesz, phdrs[i].p_offset, 0);
-	assert(read_len == phdrs[i].p_filesz);
-	natively_mprotect_pages(&compiler, mem_start, mem_len, flags);
-
-	if (phdrs[i].p_type == PT_LOAD && phdrs[i].p_flags == (PF_W | PF_R))
-	    compiler.data_segment_top = phdrs[i].p_vaddr + phdrs[i].p_memsz;
+	    read_elf_segment(&compiler, exec_fd, &phdrs[i], 0);
 #endif
+
+	    if (load_addr == (word_32)-1)
+	    {
+		load_addr = phdrs[i].p_vaddr & ~PPC_PAGE_MASK;
+		printf("load addr is 0x%08x\n", load_addr);
+	    }
+	}
     }
 
     close(exec_fd);
+    free(phdrs);
+
+    if (elf_interpreter != 0)
+    {
+	int intp_fd = open(translate_filename(elf_interpreter), O_RDONLY);
+	Elf32_Ehdr intp_ehdr;
+
+	assert(intp_fd != 0);
+
+	read_elf_info(intp_fd, &intp_ehdr, &phdrs);
+
+	assert(phdrs[0].p_vaddr == 0);
+
+	for (i = 0; i < intp_ehdr.e_phnum; ++i)
+	{
+	    if (phdrs[i].p_type == PT_LOAD)
+	    {
+#ifdef NEED_INTERPRETER
+		read_elf_segment(&interpreter, intp_fd, &phdrs[i], MMAP_START);
+#endif
+#ifdef NEED_COMPILER
+		read_elf_segment(&compiler, intp_fd, &phdrs[i], MMAP_START);
+#endif
+	    }
+	}
+
+	close(intp_fd);
+	free(phdrs);
+
+	entry = MMAP_START + intp_ehdr.e_entry;
+    }
+    else
+	entry = ehdr.e_entry;
 
 #ifdef NEED_INTERPRETER
-    mprotect_pages(&interpreter, STACK_TOP - STACK_SIZE * PPC_PAGE_SIZE, STACK_SIZE * PPC_PAGE_SIZE, PAGE_READABLE | PAGE_WRITEABLE | PAGE_MMAPPED);
+    mprotect_pages(&interpreter, STACK_TOP - STACK_SIZE * PPC_PAGE_SIZE, STACK_SIZE * PPC_PAGE_SIZE, PAGE_READABLE | PAGE_WRITEABLE | PAGE_MMAPPED, 0);
     natively_mprotect_pages(&interpreter, STACK_TOP - STACK_SIZE * PPC_PAGE_SIZE, STACK_SIZE * PPC_PAGE_SIZE, PAGE_READABLE | PAGE_WRITEABLE);
 
     assert(interpreter.data_segment_top != 0);
 
-    stack_bottom = setup_stack(&interpreter, STACK_TOP, ppc_argv);
+    stack_bottom = setup_stack(&interpreter, STACK_TOP, ppc_argv, elf_interpreter != 0 ? &ehdr : 0, load_addr);
     assert((stack_bottom & 15) == 0);
 
     setup_registers(&interpreter, stack_bottom);
-    interpreter.pc = ehdr.e_entry;
+    interpreter.pc = entry;
 #endif
 #ifdef NEED_COMPILER
-    mprotect_pages(&compiler, STACK_TOP - STACK_SIZE * PPC_PAGE_SIZE, STACK_SIZE * PPC_PAGE_SIZE, PAGE_READABLE | PAGE_WRITEABLE | PAGE_MMAPPED);
+    mprotect_pages(&compiler, STACK_TOP - STACK_SIZE * PPC_PAGE_SIZE, STACK_SIZE * PPC_PAGE_SIZE, PAGE_READABLE | PAGE_WRITEABLE | PAGE_MMAPPED, 0);
     natively_mprotect_pages(&compiler, STACK_TOP - STACK_SIZE * PPC_PAGE_SIZE, STACK_SIZE * PPC_PAGE_SIZE, PAGE_READABLE | PAGE_WRITEABLE);
 
     assert(compiler.data_segment_top != 0);
 
-    stack_bottom = setup_stack(&compiler, STACK_TOP, ppc_argv);
+    stack_bottom = setup_stack(&compiler, STACK_TOP, ppc_argv, elf_interpreter != 0 ? &ehdr : 0);
     assert((stack_bottom & 15) == 0);
 
     setup_registers(&compiler, stack_bottom);
     compiler.regs_GPR[1] = stack_bottom;
-    compiler.pc = ehdr.e_entry;
+    compiler.pc = entry;
 #endif
 
     /*

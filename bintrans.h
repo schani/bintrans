@@ -20,6 +20,7 @@
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
+#include <sys/types.h>
 #include <unistd.h>
 
 #include "config_defs.h"
@@ -184,13 +185,17 @@ word_16 mem_get_16_unaligned (interpreter_t *intp, word_32 addr);
 word_32 mem_get_32_unaligned (interpreter_t *intp, word_32 addr);
 
 ssize_t read_all (int fd, byte *buf, size_t count);
+ssize_t read_all_at (int fd, byte *buf, size_t count, off_t offset);
 
 word_32 copy_file_to_mem (interpreter_t *intp, int fd, word_32 addr, word_32 len, word_32 offset, int reset);
 int prot_to_flags (int prot);
-void mprotect_pages (interpreter_t *intp, word_32 addr, word_32 len, int flags);
+void mprotect_pages (interpreter_t *intp, word_32 addr, word_32 len, int flags, int add);
 void natively_mprotect_pages (interpreter_t *intp, word_32 addr, word_32 len, int flags);
 word_32 mmap_anonymous (interpreter_t *intp, word_32 len, int flags, int fixed, word_32 addr);
 word_32 mmap_file (interpreter_t *intp, word_32 len, int flags, int fixed, word_32 addr, int fd, word_32 offset);
+int is_mapped (interpreter_t *intp, word_32 addr, word_32 len, int *flags);
+int is_unmapped (interpreter_t *intp, word_32 addr, word_32 len);
+int mem_flags_union (interpreter_t *intp, word_32 mem_start, word_32 mem_len);
 
 void mem_copy_to_user_8 (interpreter_t *intp, word_32 addr, byte *buf, word_32 len);
 void mem_copy_from_user_8 (interpreter_t *intp, byte *buf, word_32 addr, word_32 len);
@@ -252,7 +257,11 @@ void move_i386_regs_compiler_to_interpreter (interpreter_t *intp);
 void init_unaligned (void);
 
 /* from loops.c */
+#ifdef COMPILER_THRESHOLD
+word_64 loop_profiler (interpreter_t *intp, word_32 addr);
+#else
 void loop_profiler (interpreter_t *intp);
+#endif
 void print_loop_stats (void);
 void init_loops (void);
 

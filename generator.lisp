@@ -4451,9 +4451,33 @@ save_live = live;~%"
       (let ((*standard-output* out)
 	    (decision-tree (build-decision-tree (machine-insns machine))))
 	(format t "void disassemble_~A_insn (~A insn, ~A addr) {~%"
-		(dcs (machine-name machine)) (c-type (machine-insn-bits *this-machine*) 'integer) (c-type (machine-word-bits *this-machine*) 'integer))
+		(dcs (machine-name machine)) (c-type (machine-insn-bits machine) 'integer) (c-type (machine-word-bits machine) 'integer))
 	(generate-insn-recognizer decision-tree #'disassemble-insn)
 	(format t "}~%")))))
+
+(defun generate-jump-analyzer (machine)
+  (let ((*this-machine* machine))
+    (with-open-file (out (format nil "~A_jump_analyzer.c" (dcs (machine-name machine))) :direction :output :if-exists :supersede)
+      (let ((*standard-output* out)
+	    (decision-tree (build-decision-tree (machine-insns machine))))
+	(format t "void jump_analyze_~A_insn (~A insn, ~A pc, int *_num_targets, word_32 *targets, int *_can_fall_through, int *_can_jump_indirectly) {
+int num_targets = 0;
+int can_fall_through, can_jump_indirectly;~%"
+		(dcs (machine-name machine))
+		(c-type (machine-insn-bits machine) 'integer) (c-type (machine-word-bits machine) 'integer))
+	(generate-insn-recognizer decision-tree #'(lambda (insn)
+						    (let* ((exprs (insn-effect insn))
+							   (can-jump-indirectly (can-jump-indirectly-p exprs)))
+						      (format t "can_fall_through = ~:[0~;1~];
+can_jump_indirectly = ~:[0~;1~];~%"
+							      (can-fall-through-p exprs) can-jump-indirectly)
+						      (when (not can-jump-indirectly)
+							(dolist (expr exprs)
+							  (generate-direct-jump-targets expr))))))
+	(format t "*_num_targets = num_targets;
+*_can_fall_through = can_fall_through;
+*_can_jump_indirectly = can_jump_indirectly;~%}~%")))))
+  
 
 (defun generate-registers-and-insns-code (machine)
   (format t "#define SCRATCH_OFFSET   ~A~%" (* 8 (length (machine-registers machine))))

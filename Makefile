@@ -3,8 +3,8 @@ EMU = PPC
 #LOCATION = -DCOMPLANG
 
 #MODE = INTERPRETER
-MODE = COMPILER
-#MODE = DEBUGGER
+#MODE = COMPILER
+MODE = DEBUGGER
 #MODE = CROSSDEBUGGER
 
 ARCH = -DARCH_ALPHA
@@ -12,11 +12,14 @@ ARCH = -DARCH_ALPHA
 ASM_OBJS = alpha_asm.o
 COMPILER_OBJS = compiler.o
 #DEFINES = -DUSE_HAND_TRANSLATOR -DDUMP_CODE -DCOLLECT_STATS
-DEFINES = -DUSE_HAND_TRANSLATOR -O -DFAST_PPC_FPR
-# -DCOLLECT_STATS -DCOLLECT_PPC_FPR_STATS
+#DEFINES = -DUSE_HAND_TRANSLATOR -DPROFILE_LOOPS -DCOMPILER_THRESHOLD=50 -DCOLLECT_STATS -DCOUNT_INSNS
+# -DDUMP_CODE
+# 
+#  -DFAST_PPC_FPR
+#  -DCOLLECT_PPC_FPR_STATS
 #DEFINES =
 #DEFINES = -O -DPROFILE_LOOPS -DPROFILE_FRAGMENTS
-#DEFINES = -DEMULATED_MEM
+DEFINES = -DEMULATED_MEM
 #DEFINES = -DCOLLECT_STATS -DDUMP_CODE
 #DEFINES = -DCOLLECT_STATS -DPERIODIC_STAT_DUMP
 #DEFINES = -DDUMP_CODE
@@ -82,19 +85,19 @@ ppc.o : ppc.c ppc_interpreter.c ppc_disassembler.c alpha_types.h bintrans.h
 i386.o : i386.c i386_interpreter.c i386_disassembler.c i386_livenesser.c bintrans.h
 	gcc $(CFLAGS) -Wall -g -c i386.c
 
-compiler.o : compiler.c alpha_composer.h ppc_compiler.c ppc_to_alpha_compiler.c i386_compiler.c alpha_disassembler.c alpha_types.h bintrans.h fragment_hash.h
+compiler.o : compiler.c alpha_composer.h ppc_compiler.c ppc_to_alpha_compiler.c ppc_jump_analyzer.c i386_compiler.c alpha_disassembler.c alpha_types.h bintrans.h fragment_hash.h compiler.h
 	gcc $(CFLAGS) -Wall -g -c compiler.c
 
 mm.o : mm.c bintrans.h alpha_types.h ppc_defines.h
 	gcc $(CFLAGS) -Wall -g -c mm.c
 
-unaligned.o : unaligned.c bintrans.h
+unaligned.o : unaligned.c bintrans.h compiler.h
 	gcc $(CFLAGS) -Wall -g -c unaligned.c
 
 fragment_hash.o : fragment_hash.c fragment_hash.h bintrans.h
 	gcc $(CFLAGS) -Wall -g -c fragment_hash.c
 
-loops.o : loops.c fragment_hash.h bintrans.h
+loops.o : loops.c fragment_hash.h bintrans.h compiler.h
 	gcc $(CFLAGS) -Wall -g -c loops.c
 
 liveness.o : liveness.c bintrans.h

@@ -20,8 +20,14 @@
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
+#define MAX_CODE_INSNS     600000
+
+extern word_32 code_area[MAX_CODE_INSNS];
+
 typedef word_32 reg_t;
 typedef int label_t;
+
+extern interpreter_t *compiler_intp;
 
 reg_t ref_integer_reg (int foreign_reg, int reading, int writing);
 void unref_integer_reg (reg_t reg);
@@ -57,3 +63,6 @@ word_64 compile_trace (word_32 addr, int length, int bits);
 
 /* ppc_to_alpha_compiler.c */
 void compile_to_alpha_ppc_insn (word_32 insn, word_32 pc, int optimize_taken_jump, label_t taken_jump_label);
+
+/* ppc_jump_analyzer.c */
+void jump_analyze_ppc_insn (word_32 insn, word_32 pc, int *_num_targets, word_32 *targets, int *_can_fall_through, int *_can_jump_indirectly);

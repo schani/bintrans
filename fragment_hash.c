@@ -98,6 +98,28 @@ fragment_hash_put (word_32 foreign_addr, fragment_hash_entry_t *entry)
 }
 
 void
+init_fragment_hash_entry (fragment_hash_entry_t *entry)
+{
+#ifdef PROFILE_LOOPS
+    int i;
+#endif
+
+    entry->foreign_addr = (word_32)-1;
+    entry->next = -1;
+#ifdef NEED_COMPILER
+    entry->native_addr = 0;
+#endif
+#ifdef PROFILE_FRAGMENTS
+    entry->times_executed = 0;
+#endif
+#ifdef PROFILE_LOOPS
+    entry->trace0_count = 0;
+    for (i = 0; i < MAX_TRACE_JUMPS; ++i)
+	entry->trace_pool_indexes[i] = -1;
+#endif
+}
+
+void
 init_fragment_hash (void)
 {
     int i;

@@ -52,6 +52,8 @@ extern unsigned long num_fragment_hash_misses;
 
 fragment_hash_entry_t* fragment_hash_get (word_32 addr);
 fragment_hash_entry_t* fragment_hash_put (word_32 foreign_addr, fragment_hash_entry_t *entry);
+void init_fragment_hash_entry (fragment_hash_entry_t *entry);
+
 void init_fragment_hash (void);
 
 extern fragment_hash_entry_t fragment_hash_table[FRAGMENT_HASH_ENTRIES];

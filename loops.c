@@ -79,24 +79,31 @@ fragment_hash_entry_t*
 make_entry_for_addr (word_32 addr)
 {
     fragment_hash_entry_t new;
+
+    init_fragment_hash_entry(&new);
+    return fragment_hash_put(addr, &new);
+}
+
+void
+clear_history (void)
+{
     int i;
 
-#ifdef PROFILE_FRAGMENTS
-    new.times_executed = 0;
-#endif
-    new.trace0_count = 0;
     for (i = 0; i < MAX_TRACE_JUMPS; ++i)
-	new.trace_pool_indexes[i] = -1;
-    return fragment_hash_put(addr, &new);
+    {
+	branch_history[i] = -1;
+	fragment_history[i] = 0;
+    }
+    fragment_history[i] = 0;
 }
 
 #ifdef COMPILER_THRESHOLD
 word_64
 compile_block_or_trace (fragment_hash_entry_t *entry)
 {
-    trace_count_t best_count;
+    trace_count_t best_count = -1;
     int best_length = -1;
-    int best_bits;
+    int best_bits = 0;
     int i;
 
     if (entry->trace0_count > 0)
@@ -123,13 +130,21 @@ compile_block_or_trace (fragment_hash_entry_t *entry)
 	    }
 	}
 
-    assert(best_length >= 0);
-
-    if (best_length == 0)
+    if (best_length <= 0)
+    {
+	/* printf("compiling basic block at %08x\n", entry->foreign_addr); */
 	return entry->native_addr = compile_basic_block(entry->foreign_addr);
+    }
     else
+    {
+	/* printf("compiling trace at %08x with length %d, bits %x\n", entry->foreign_addr, best_length, best_bits); */
 	return entry->native_addr = compile_trace(entry->foreign_addr, best_length, best_bits);
+    }
 }
+#endif
+
+#ifdef COLLECT_STATS
+extern long num_loop_profiler_calls;
 #endif
 
 #ifdef COMPILER_THRESHOLD
@@ -142,6 +157,17 @@ loop_profiler (interpreter_t *intp)
 {
     fragment_hash_entry_t *entry = 0;
     int i;
+    int num_targets;
+    word_32 target;
+    int can_jump_indirectly, can_fall_through;
+
+#ifdef COLLECT_STATS
+    ++num_loop_profiler_calls;
+#endif
+
+    /* printf("entering loop profiler at %08x\n", addr); */
+
+    clear_history();
 
 #ifdef COMPILER_THRESHOLD
     move_regs_compiler_to_interpreter(compiler_intp);
@@ -161,6 +187,15 @@ loop_profiler (interpreter_t *intp)
 		entry = make_entry_for_addr(intp->pc);
 	}
 
+#ifdef COMPILER_THRESHOLD
+	if (entry->native_addr != 0)
+	{
+	    move_regs_interpreter_to_compiler(intp);
+
+	    return entry->native_addr;
+	}
+#endif
+
 	++entry->times_executed;
 
 #ifdef COMPILER_THRESHOLD
@@ -174,11 +209,11 @@ loop_profiler (interpreter_t *intp)
 	}
 #endif
 
+	intp->have_jumped = 0;
+
 	do
 	{
 	    prev_pc = intp->pc;
-
-	    intp->have_jumped = 0;
 
 	    interpret_insn(intp);
 	} while (!intp->have_jumped);
@@ -188,39 +223,48 @@ loop_profiler (interpreter_t *intp)
 	if (entry == 0)
 	    entry = make_entry_for_addr(intp->pc);
 
-	branch = (intp->pc == prev_pc + 4) ? 0 : 1;
-
-	assert(entry != 0);
-	for (i = 0; i < MAX_TRACE_BLOCKS; ++i)
-	    if (fragment_history[i] == entry)
-		break;
-	if (i < MAX_TRACE_BLOCKS && prev_pc > intp->pc)
+	jump_analyze_ppc_insn(mem_get_32(intp, prev_pc), prev_pc, &num_targets, &target, &can_fall_through, &can_jump_indirectly);
+ 
+	if (can_jump_indirectly)
+	    clear_history();
+	else
 	{
-	    /*
-	      int j;
+	    branch = (intp->pc == prev_pc + 4) ? 0 : 1;
 
-	      printf("loop:\n");
-	      for (j = i; j >= 0; --j)
+	    assert(entry != 0);
+	    for (i = 0; i < MAX_TRACE_BLOCKS; ++i)
+		if (fragment_history[i] == entry)
+		    break;
+	    if (i < MAX_TRACE_BLOCKS && prev_pc > intp->pc)
+	    {
+		/*
+		  int j;
+
+		  printf("loop:\n");
+		  for (j = i; j >= 0; --j)
 	          printf("  0x%08x\n", fragment_history[j]->foreign_addr);
 	    */
 
-	    inc_trace(i);
-	}
+		inc_trace(i);
+	    }
 
-	fragment_history[MAX_TRACE_BLOCKS - 1] = fragment_history[MAX_TRACE_BLOCKS - 2];
-	for (i = MAX_TRACE_JUMPS - 1; i > 0; --i)
-	{
-	    branch_history[i] = branch_history[i - 1];
-	    fragment_history[i] = fragment_history[i - 1];
+	    fragment_history[MAX_TRACE_BLOCKS - 1] = fragment_history[MAX_TRACE_BLOCKS - 2];
+	    for (i = MAX_TRACE_JUMPS - 1; i > 0; --i)
+	    {
+		branch_history[i] = branch_history[i - 1];
+		fragment_history[i] = fragment_history[i - 1];
+	    }
+
+	    branch_history[0] = branch;
+	    fragment_history[0] = entry;
 	}
-	fragment_history[0] = entry;
-	branch_history[0] = branch;
     }
 }
 
 void
 print_loop_stats (void)
 {
+#ifdef COLLECT_STATS
     int i;
 
 #ifdef PROFILE_FRAGMENTS
@@ -275,6 +319,7 @@ print_loop_stats (void)
 	}
 
     printf("\npool: %d/%d\n", pool_mark, COUNT_POOL_SIZE);
+#endif
 }
 
 void
@@ -284,11 +329,6 @@ init_loops (void)
 
     for (i = 0; i < COUNT_POOL_SIZE; ++i)
 	count_pool[i] = 0;
-    for (i = 0; i < MAX_TRACE_JUMPS; ++i)
-    {
-	branch_history[i] = -1;
-	fragment_history[i] = 0;
-    }
-    fragment_history[i] = 0;
+    clear_history();
 }
 #endif

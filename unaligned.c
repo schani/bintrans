@@ -36,6 +36,10 @@ typedef unsigned long old_sigset_t;
 
 #include "bintrans.h"
 
+#ifdef NEED_COMPILER
+#include "compiler.h"
+#endif
+
 _syscall5(int,osf_setsysinfo,unsigned long,op,void*,buffer,unsigned long,nbytes,void*,arg,unsigned long,flag)
 
 /*
@@ -88,11 +92,25 @@ load_unaligned_16_bigendian (unsigned long addr)
     return load_unaligned_32_bigendian(addr) >> 16;
 }
 
+unsigned int
+convert_float_64_to_32 (unsigned long val)
+{
+    /* return ((val >> 32) & 0xc0000000) | ((val >> 29) & 0x3fffffff); */
+    float val32 = (float)*(double*)&val;
+
+    return *(unsigned int*)&val32;
+}
+
 void
 sigbus_handler (int signo, siginfo_t *si, struct ucontext *uc)
 {
     unsigned int insn;
     unsigned int target_reg;
+
+#ifdef NEED_COMPILER
+    if (uc->uc_mcontext.sc_pc < (long)code_area || uc->uc_mcontext.sc_pc >= (long)(code_area + MAX_CODE_INSNS))
+	printf("unaligned access outside code area\n");
+#endif
 
 /*
     printf("0x%016lx\n", uc->uc_mcontext.sc_pc);
@@ -131,7 +149,13 @@ sigbus_handler (int signo, siginfo_t *si, struct ucontext *uc)
 	    break;
 
 	case 0x2c :		/* STL */
+	    printf("stl\n");
 	    store_unaligned_32_bigendian(uc->uc_mcontext.sc_traparg_a0, uc->uc_mcontext.sc_regs[target_reg]);
+	    break;
+
+	case 0x26 :		/* STS */
+	    printf("sts\n");
+	    store_unaligned_32_bigendian(uc->uc_mcontext.sc_traparg_a0, convert_float_64_to_32(uc->uc_mcontext.sc_fpregs[target_reg]));
 	    break;
 
 	default :
