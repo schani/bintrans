@@ -1846,9 +1846,15 @@ process_system_call (interpreter_t *intp, word_32 number,
 		{
 		    sc_strcpy_to_user(intp, arg1 + 0 * 65, "Linux");
 		    sc_strcpy_to_user(intp, arg1 + 1 * 65, un.nodename);
-		    sc_strcpy_to_user(intp, arg1 + 2 * 65, "2.4.18");
+		    sc_strcpy_to_user(intp, arg1 + 2 * 65, "2.2.18");
 		    sc_strcpy_to_user(intp, arg1 + 3 * 65, "#1 Sun Apr 7 14:10:26 EDT 2002");
+#if defined(EMU_PPC)
 		    sc_strcpy_to_user(intp, arg1 + 4 * 65, "ppc");
+#elif defined(EMU_I386)
+		    sc_strcpy_to_user(intp, arg1 + 4 * 65, "i386");
+#else
+		    assert(0);
+#endif
 		    /* sc_strcpy_to_user(intp, arg1 + 5 * 65, ""); */
 		}
 	    }
@@ -2148,6 +2154,9 @@ process_system_call (interpreter_t *intp, word_32 number,
 		sprintf(buf, "unhandled system call %d", number);
 		bt_warning(buf);
 		intp->halt = 1;
+
+		result = -1;
+		errno = ENOSYS;
 	    }
     }
 
@@ -3291,7 +3300,11 @@ main (int argc, char *argv[])
 	int intp_fd = open(translate_filename(elf_interpreter), O_RDONLY);
 	Elf32_Ehdr intp_ehdr;
 
-	bt_assert(intp_fd != 0);
+	if (intp_fd == -1)
+	{
+	    fprintf(stderr, "Could not open elf interpreter `%s'\n", elf_interpreter);
+	    exit(1);
+	}
 
 	read_elf_info(intp_fd, &intp_ehdr, &phdrs);
 

@@ -221,6 +221,7 @@
 				   (simm8 (width 32 (sex imm8)) nil 32 nil nil)
 				   (imm16 imm16 nil 16 nil nil)
 				   (imm32 imm32 nil 32 nil nil)
+				   (imm16-imm8 imm16 imm8 16 nil nil)
 				   (al-imm8 al imm8 8 nil nil)
 				   (ax-imm16 ax imm16 16 t nil)
 				   (eax-imm32 (reg eax) imm32 32 nil nil)
@@ -304,7 +305,9 @@
 	       ((imm16 ax-imm16 rm16-imm16 +r16-imm16)
 		(format t "imm16 = i386_decode_imm16(intp);~%"))
 	       ((eax-imm32 rm32-imm32 +r32-imm32 imm32 ax-moffs32 eax-moffs32 moffs32-ax moffs32-eax)
-		(format t "imm32 = i386_decode_imm32(intp);~%"))))
+		(format t "imm32 = i386_decode_imm32(intp);~%"))
+	       ((imm16-imm8)
+		(format t "imm16 = i386_decode_imm16(intp);~%imm8 = i386_decode_imm8(intp);~%"))))
 	   (generate-16-32-pair (insn1 insn2 modrm-decoded-p)
 	     (multiple-value-bind (insn32 insn16)
 		 (let ((mode (intel-insn-mode insn1)))
@@ -793,6 +796,16 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
      (set (reg eax) (promote 32 (logand (/ dividend divisor) (width 64 (mask 0 31)))))
      (set (reg edx) (promote 32 (% dividend divisor))))))
 
+(define-std-binary-insn enter
+    ((imm16-imm8 (#xc8)))
+  ((if (= src (width 8 0))
+       (nop)
+       (not-implemented))
+   (set (reg esp) (- (reg esp) 4))
+   (set (mem (reg esp)) (reg ebp))
+   (set (reg ebp) (reg esp))
+   (set (reg esp) (- (reg ebp) (zex dst)))))
+
 (define-std-simple-insn f2xm1 (#xd9 #xf0)
   ((not-implemented)))
 
@@ -1232,6 +1245,18 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
     ((r32-rm32 (#x8d)))
   ((set dst (ea))))
 
+(define-std-simple-insn leave (#xc9)
+  ((set (reg esp) (reg ebp))
+   (set (reg ebp) (mem (reg esp)))
+   (set (reg esp) (+ (reg esp) 4))))
+
+(define-std-unary-insn lods		;FIXME: df
+    ((al (#xac))
+     (ax (#xad))
+     (eax (#xad)))
+  ((set dst (mem (reg esi)))
+   (set (reg esi) (+ (reg esi) op-byte-width))))
+
 (define-std-binary-insn mov
     ((rm8-r8 (#x88))
      (rm16-r16 (#x89))
@@ -1574,20 +1599,24 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
 	 (set-zf dst op-width)
 	 (set-pf dst)))))
 
-(define-std-unary-insn stosb		;FIXME: df
-    ((al (#xaa)))
-  ((set (width 8 (mem (reg edi))) dst)
-   (set (reg edi) (+ (reg edi) 1))))
+(define-std-unary-insn scas		;FIXME: df
+    ((al (#xae))
+     (ax (#xaf))
+     (eax (#xaf)))
+  ((let ((temp (width op-width (- dst (mem (reg edi))))))
+     (set cf (-carry dst (width op-width (mem (reg edi)))))
+     (set of (+overflow dst (width op-width (+ (bitneg (mem (reg edi))) 1))))
+     (set-sf temp op-width)
+     (set-zf temp op-width)
+     (set-pf dst)
+     (set (reg edi) (+ (reg edi) op-byte-width)))))
 
-(define-std-unary-insn stosw		;FIXME: df
-    ((ax (#xab)))
-  ((set (width 16 (mem (reg edi))) dst)
-   (set (reg edi) (+ (reg edi) 2))))
-
-(define-std-unary-insn stosd		;FIXME: df
-    ((eax (#xab)))
-  ((set (mem (reg edi)) dst)
-   (set (reg edi) (+ (reg edi) 4))))
+(define-std-unary-insn stos		;FIXME: df
+    ((al (#xaa))
+     (ax (#xab))
+     (eax (#xab)))
+  ((set (width op-width (mem (reg edi))) dst)
+   (set (reg edi) (+ (reg edi) op-byte-width))))
 
 (define-std-binary-insn sub
     ((al-imm8 (#x2c))
