@@ -20,6 +20,8 @@
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
+#ifdef __alpha__
+
 #define __LIBRARY__
 #include <asm/unistd.h>
 #undef __LIBRARY__
@@ -208,3 +210,5 @@ init_unaligned (void)
     error = sigaction(SIGBUS, &act, 0);
     assert(error == 0);
 }
+
+#endif
