@@ -23,53 +23,59 @@
 #define ZERO_REG             0
 
 #define MODE_NIL 0
-#define MODE_M16_NOPREFIX 1
-#define MODE_M32 2
-#define MODE_M64 3
-#define MODE_RM8 4
-#define MODE_RM16 5
-#define MODE_RM32 6
-#define MODE_PR16 7
-#define MODE_PR32 8
-#define MODE_IMM8 9
-#define MODE_SIMM8 10
-#define MODE_IMM16 11
-#define MODE_IMM32 12
-#define MODE_AL_IMM8 13
-#define MODE_AX_IMM16 14
-#define MODE_EAX_IMM32 15
-#define MODE_RM8_1 16
-#define MODE_RM16_1 17
-#define MODE_RM32_1 18
-#define MODE_RM8_CL 19
-#define MODE_RM16_CL 20
-#define MODE_RM32_CL 21
-#define MODE_RM8_IMM8 22
-#define MODE_RM16_IMM8 23
-#define MODE_RM16_IMM16 24
-#define MODE_RM32_IMM8 25
-#define MODE_RM32_IMM32 26
-#define MODE_RM16_SIMM8 27
-#define MODE_RM32_SIMM8 28
-#define MODE_RM8_R8 29
-#define MODE_RM16_R16 30
-#define MODE_RM32_R32 31
-#define MODE_R8_RM8 32
-#define MODE_R16_RM16 33
-#define MODE_R32_RM32 34
-#define MODE_R16_RM8 35
-#define MODE_R32_RM8 36
-#define MODE_R32_RM16 37
-#define MODE_AX_MOFFS32 38
-#define MODE_EAX_MOFFS32 39
-#define MODE_MOFFS32_AX 40
-#define MODE_MOFFS32_EAX 41
-#define MODE_PR16_AX 42
-#define MODE_PR32_EAX 43
-#define MODE_PR8_IMM8 44
-#define MODE_PR16_IMM16 45
-#define MODE_PR32_IMM32 46
-#define MODE_PST 47
+#define MODE_AL 1
+#define MODE_AX 2
+#define MODE_EAX 3
+#define MODE_M16_NOPREFIX 4
+#define MODE_M32 5
+#define MODE_M64 6
+#define MODE_RM8 7
+#define MODE_RM16 8
+#define MODE_RM32 9
+#define MODE_PR16 10
+#define MODE_PR32 11
+#define MODE_IMM8 12
+#define MODE_SIMM8 13
+#define MODE_IMM16 14
+#define MODE_IMM32 15
+#define MODE_AL_IMM8 16
+#define MODE_AX_IMM16 17
+#define MODE_EAX_IMM32 18
+#define MODE_AX_AL 19
+#define MODE_EAX_AX 20
+#define MODE_RM8_1 21
+#define MODE_RM16_1 22
+#define MODE_RM32_1 23
+#define MODE_RM8_CL 24
+#define MODE_RM16_CL 25
+#define MODE_RM32_CL 26
+#define MODE_RM8_IMM8 27
+#define MODE_RM16_IMM8 28
+#define MODE_RM16_IMM16 29
+#define MODE_RM32_IMM8 30
+#define MODE_RM32_IMM32 31
+#define MODE_RM16_SIMM8 32
+#define MODE_RM32_SIMM8 33
+#define MODE_RM8_R8 34
+#define MODE_RM16_R16 35
+#define MODE_RM32_R32 36
+#define MODE_RM32_R32_IMM8 37
+#define MODE_R8_RM8 38
+#define MODE_R16_RM16 39
+#define MODE_R32_RM32 40
+#define MODE_R16_RM8 41
+#define MODE_R32_RM8 42
+#define MODE_R32_RM16 43
+#define MODE_AX_MOFFS32 44
+#define MODE_EAX_MOFFS32 45
+#define MODE_MOFFS32_AX 46
+#define MODE_MOFFS32_EAX 47
+#define MODE_PR16_AX 48
+#define MODE_PR32_EAX 49
+#define MODE_PR8_IMM8 50
+#define MODE_PR16_IMM16 51
+#define MODE_PR32_IMM32 52
+#define MODE_PST 53
 
 #define REG_EAX                   0
 #define REG_ECX                   1
@@ -82,6 +88,7 @@
 
 #define REG_EFLAGS                8
 #define REG_FPSW                  9
+#define REG_FPCW                 10
 
 #define ref_i386_gpr_r(x)         ref_integer_reg_for_reading(x)
 #define ref_i386_gpr_w(x)         ref_integer_reg_for_writing(x)
@@ -89,27 +96,42 @@
 #define ref_i386_fpsw_r()         ref_integer_reg_for_reading(REG_FPSW)
 #define ref_i386_fpsw_w()         ref_integer_reg_for_writing(REG_FPSW)
 #define ref_i386_fpsw_rw()        ref_integer_reg_for_reading_and_writing(REG_FPSW)
+#define ref_i386_fpcw_r()         ref_integer_reg_for_reading(REG_FPCW)
+#define ref_i386_fpcw_w()         ref_integer_reg_for_writing(REG_FPCW)
+#define ref_i386_fpcw_rw()        ref_integer_reg_for_reading_and_writing(REG_FPCW)
 #define ref_i386_eflags_r()       ref_integer_reg_for_reading(REG_EFLAGS)
 #define ref_i386_eflags_w()       ref_integer_reg_for_writing(REG_EFLAGS)
 #define ref_i386_eflags_rw()      ref_integer_reg_for_reading_and_writing(REG_EFLAGS)
 
+/*
 #define KILL_OF                   ((flags_killed >> 11) & 1)
 #define KILL_CF                   (flags_killed & 1)
 #define KILL_SF                   ((flags_killed >> 7) & 1)
 #define KILL_ZF                   ((flags_killed >> 6) & 1)
 #define KILL_SZF                  (KILL_SF || KILL_ZF)
+#define KILL_PF                   (flags_killed & 4)
+*/
+#define KILL_OF                   1
+#define KILL_CF                   1
+#define KILL_SF                   1
+#define KILL_ZF                   1
+#define KILL_SZF                  1
+#define KILL_PF                   1
+
+#define PARITY_REG                25
 
 void
 move_i386_regs_interpreter_to_compiler (interpreter_t *intp)
 {
-    *(double*)&constant_area[28] = (intp->regs_FPST[7]);
-    *(double*)&constant_area[26] = (intp->regs_FPST[6]);
-    *(double*)&constant_area[24] = (intp->regs_FPST[5]);
-    *(double*)&constant_area[22] = (intp->regs_FPST[4]);
-    *(double*)&constant_area[20] = (intp->regs_FPST[3]);
-    *(double*)&constant_area[18] = (intp->regs_FPST[2]);
-    *(double*)&constant_area[16] = (intp->regs_FPST[1]);
-    *(double*)&constant_area[14] = (intp->regs_FPST[0]);
+    *(double*)&constant_area[30] = (intp->regs_FPST[7]);
+    *(double*)&constant_area[28] = (intp->regs_FPST[6]);
+    *(double*)&constant_area[26] = (intp->regs_FPST[5]);
+    *(double*)&constant_area[24] = (intp->regs_FPST[4]);
+    *(double*)&constant_area[22] = (intp->regs_FPST[3]);
+    *(double*)&constant_area[20] = (intp->regs_FPST[2]);
+    *(double*)&constant_area[18] = (intp->regs_FPST[1]);
+    *(double*)&constant_area[16] = (intp->regs_FPST[0]);
+    *(word_16*)&constant_area[10] = (intp->regs_FSPR[1]);
     *(word_16*)&constant_area[9] = (intp->regs_FSPR[0]);
     *(word_32*)&constant_area[8] = (intp->regs_SPR[0]);
     *(word_32*)&constant_area[7] = (intp->regs_GPR[7]);
@@ -120,23 +142,24 @@ move_i386_regs_interpreter_to_compiler (interpreter_t *intp)
     *(word_32*)&constant_area[2] = (intp->regs_GPR[2]);
     *(word_32*)&constant_area[1] = (intp->regs_GPR[1]);
     *(word_32*)&constant_area[0] = (intp->regs_GPR[0]);
-    *(word_32*)&constant_area[13] = ((intp->regs_SPR[0] >> 11) & 0x1);
-    *(word_32*)&constant_area[12] = ((intp->regs_SPR[0] >> 7) & 0x1);
-    *(word_32*)&constant_area[11] = ((intp->regs_SPR[0] >> 6) & 0x1);
-    *(word_32*)&constant_area[10] = ((intp->regs_SPR[0] >> 0) & 0x1);
+    *(word_32*)&constant_area[14] = ((intp->regs_SPR[0] >> 11) & 0x1);
+    *(word_32*)&constant_area[13] = ((intp->regs_SPR[0] >> 7) & 0x1);
+    *(word_32*)&constant_area[12] = ((intp->regs_SPR[0] >> 6) & 0x1);
+    *(word_32*)&constant_area[11] = ((intp->regs_SPR[0] >> 0) & 0x1);
 }
 
 void
 move_i386_regs_compiler_to_interpreter (interpreter_t *intp)
 {
-    (intp->regs_FPST[7]) = *(double*)&constant_area[28];
-    (intp->regs_FPST[6]) = *(double*)&constant_area[26];
-    (intp->regs_FPST[5]) = *(double*)&constant_area[24];
-    (intp->regs_FPST[4]) = *(double*)&constant_area[22];
-    (intp->regs_FPST[3]) = *(double*)&constant_area[20];
-    (intp->regs_FPST[2]) = *(double*)&constant_area[18];
-    (intp->regs_FPST[1]) = *(double*)&constant_area[16];
-    (intp->regs_FPST[0]) = *(double*)&constant_area[14];
+    (intp->regs_FPST[7]) = *(double*)&constant_area[30];
+    (intp->regs_FPST[6]) = *(double*)&constant_area[28];
+    (intp->regs_FPST[5]) = *(double*)&constant_area[26];
+    (intp->regs_FPST[4]) = *(double*)&constant_area[24];
+    (intp->regs_FPST[3]) = *(double*)&constant_area[22];
+    (intp->regs_FPST[2]) = *(double*)&constant_area[20];
+    (intp->regs_FPST[1]) = *(double*)&constant_area[18];
+    (intp->regs_FPST[0]) = *(double*)&constant_area[16];
+    (intp->regs_FSPR[1]) = *(word_16*)&constant_area[10];
     (intp->regs_FSPR[0]) = *(word_16*)&constant_area[9];
     (intp->regs_SPR[0]) = *(word_32*)&constant_area[8];
     (intp->regs_GPR[7]) = *(word_32*)&constant_area[7];
@@ -147,10 +170,10 @@ move_i386_regs_compiler_to_interpreter (interpreter_t *intp)
     (intp->regs_GPR[2]) = *(word_32*)&constant_area[2];
     (intp->regs_GPR[1]) = *(word_32*)&constant_area[1];
     (intp->regs_GPR[0]) = *(word_32*)&constant_area[0];
-    (intp->regs_SPR[0] = (intp->regs_SPR[0] & 0xFFFFF7FF) | ((*(word_32*)&constant_area[13]) << 11));
-    (intp->regs_SPR[0] = (intp->regs_SPR[0] & 0xFFFFFF7F) | ((*(word_32*)&constant_area[12]) << 7));
-    (intp->regs_SPR[0] = (intp->regs_SPR[0] & 0xFFFFFFBF) | ((*(word_32*)&constant_area[11]) << 6));
-    (intp->regs_SPR[0] = (intp->regs_SPR[0] & 0xFFFFFFFE) | ((*(word_32*)&constant_area[10]) << 0));
+    (intp->regs_SPR[0] = (intp->regs_SPR[0] & 0xFFFFF7FF) | ((*(word_32*)&constant_area[14]) << 11));
+    (intp->regs_SPR[0] = (intp->regs_SPR[0] & 0xFFFFFF7F) | ((*(word_32*)&constant_area[13]) << 7));
+    (intp->regs_SPR[0] = (intp->regs_SPR[0] & 0xFFFFFFBF) | ((*(word_32*)&constant_area[12]) << 6));
+    (intp->regs_SPR[0] = (intp->regs_SPR[0] & 0xFFFFFFFE) | ((*(word_32*)&constant_area[11]) << 0));
 }
 
 static word_32 pc, this_pc;
@@ -478,14 +501,11 @@ gen_ea_for_indexing (reg_t *ra, reg_t *rb)
 
     gen_ea(ra, rb, &imm);
 
-    if (imm != 0)
+    if (*rb == NO_REG)
     {
-	assert(*rb == NO_REG);
 	*rb = alloc_tmp_integer_reg();
 	emit_load_integer_32(*rb, SEX32(imm, 16));
     }
-    else
-	assert(*rb != NO_REG);
 }
 
 static reg_t
@@ -859,13 +879,16 @@ ref_dst_op (int for_reading, int for_writing, int zexed,
 	case MODE_PR32_IMM32 :
 	    return ref_i386_gpr(opcode_reg, for_reading, for_writing);
 
+	case MODE_AL :
 	case MODE_AL_IMM8 :
 	    return ref_i386_gpr_extended(REG_EAX, for_reading, for_writing, zexed, 8);
 
+	case MODE_AX :
 	case MODE_AX_IMM16 :
 	case MODE_AX_MOFFS32 :
 	    return ref_i386_gpr_extended(REG_EAX, for_reading, for_writing, zexed, 16);
-
+ 
+	case MODE_EAX :
 	case MODE_EAX_IMM32 :
 	case MODE_EAX_MOFFS32 :
 	    return ref_i386_gpr(REG_EAX, for_reading, for_writing);
@@ -1179,6 +1202,13 @@ clear_of_cf (void)
 }
 
 static void
+gen_pf_if_needed (reg_t reg)
+{
+    if (KILL_PF)
+	emit(COMPOSE_MR(PARITY_REG, reg));
+}
+
+static void
 gen_bit_insn (void (*igen) (reg_t, reg_t, word_16), void (*dgen) (reg_t, reg_t, reg_t), void (*idgen) (reg_t, reg_t, word_16), void (*gen) (reg_t, reg_t, reg_t))
 {
     word_32 imm;
@@ -1205,6 +1235,7 @@ gen_bit_insn (void (*igen) (reg_t, reg_t, word_16), void (*dgen) (reg_t, reg_t, 
 	dispose_integer_reg(src);
     }
 
+    gen_pf_if_needed(dst);
     commit_and_dispose_dst_op(dst, 1, 0, 0);
 
     clear_of_cf();
@@ -1274,13 +1305,14 @@ handle_add_insn (void)
 	    emit(COMPOSE_SRWI(dst, dst, 32 - op_width));
     }
 
+    gen_pf_if_needed(dst);
     commit_and_dispose_dst_op(dst, 1, 0, 0);
 }
 
 static void
 handle_adc_insn (void)
 {
-    assert(0);
+    gen_interpreter_handle();
 }
 
 static void
@@ -1335,6 +1367,12 @@ handle_bt_insn (void)
 }
 
 static void
+handle_bts_insn (void)
+{
+    gen_interpreter_handle();
+}
+
+static void
 handle_call_insn (void)
 {
     reg_t sp = ref_i386_gpr_rw(REG_ESP);
@@ -1371,6 +1409,32 @@ handle_call_insn (void)
 }
 
 static void
+handle_cbw_cwde_insn (void)
+{
+    reg_t eax = ref_i386_gpr_rw(REG_EAX);
+
+    if (mode == MODE_AX_AL)
+    {
+	reg_t tmp = alloc_tmp_integer_reg();
+
+	emit(COMPOSE_SLWI(tmp, eax, 24));
+	emit(COMPOSE_SRAWI(tmp, tmp, 24));
+	emit(COMPOSE_INSRWI(eax, tmp, 8, 24));
+
+	free_tmp_integer_reg(tmp);
+    }
+    else if (mode == MODE_EAX_AX)
+    {
+	emit(COMPOSE_SLWI(eax, eax, 16));
+	emit(COMPOSE_SRAWI(eax, eax, 16));
+    }
+    else
+	assert(0);
+
+    unref_integer_reg(eax);
+}
+
+static void
 handle_cdq_insn (void)
 {
     reg_t eax = ref_i386_gpr_r(REG_EAX);
@@ -1395,7 +1459,7 @@ handle_cld_insn (void)
 static void
 handle_cmp_insn (void)
 {
-    if (KILL_SZF || KILL_OF || KILL_CF)
+    if (KILL_SZF || KILL_OF || KILL_CF || KILL_PF)
     {
 	reg_t src = ref_src_op(0, 0, 0, 0);
 	reg_t dst = ref_dst_op_to_reg(1, 0, 0);
@@ -1431,6 +1495,10 @@ handle_cmp_insn (void)
 	else
 	    emit(COMPOSE_SUBF(tmp, src, dst));
 
+	if (op_width != 32 && KILL_PF)
+	    emit(COMPOSE_SRWI(PARITY_REG, tmp, 32 - op_width));
+	else if (op_width == 32)
+	    gen_pf_if_needed(tmp);
 	free_tmp_integer_reg(tmp);
 
 	dispose_integer_reg(dst);
@@ -1444,12 +1512,16 @@ handle_dec_insn (void)
     reg_t dst = ref_dst_op_to_reg(1, 1, 0);
     reg_t tmp;
 
-    assert(op_width == 32);
+    if (op_width != 32 && (KILL_OF || KILL_SZF))
+	emit(COMPOSE_SLWI(dst, dst, 32 - op_width));
 
     if (KILL_OF)
     {
 	tmp = alloc_tmp_integer_reg();
-	emit(COMPOSE_LI(tmp, (word_16)-1));
+	if (op_width == 32)
+	    emit(COMPOSE_LI(tmp, (word_16)-1));
+	else
+	    emit(COMPOSE_LIS(tmp, (op_width == 16) ? 0xffff : 0xff00));
     }
 
     if (KILL_OF && KILL_SZF)
@@ -1466,6 +1538,10 @@ handle_dec_insn (void)
     if (KILL_OF)
 	free_tmp_integer_reg(tmp);
 
+    if (op_width != 32 && (KILL_OF || KILL_SZF))
+	emit(COMPOSE_SRWI(dst, dst, 32 - op_width));
+
+    gen_pf_if_needed(dst);
     commit_and_dispose_dst_op(dst, 1, 0, 0);
 }
 
@@ -1498,7 +1574,14 @@ gen_div_insn (int is_signed)
 static void
 handle_div_insn (void)
 {
-    gen_div_insn(0);
+    /* gen_div_insn(0); */
+    gen_interpreter_handle();
+}
+
+static void
+handle_f2xm1_insn (void)
+{
+    gen_interpreter_handle();
 }
 
 static void
@@ -1509,6 +1592,12 @@ handle_fadd_insn (void)
 
 static void
 handle_faddp_insn (void)
+{
+    gen_interpreter_handle();
+}
+
+static void
+handle_fchs_insn (void)
 {
     gen_interpreter_handle();
 }
@@ -1544,7 +1633,19 @@ handle_fdivp_insn (void)
 }
 
 static void
+handle_fdivr_insn (void)
+{
+    gen_interpreter_handle();
+}
+
+static void
 handle_fdivrp_insn (void)
+{
+    gen_interpreter_handle();
+}
+
+static void
+handle_fidiv_insn (void)
 {
     gen_interpreter_handle();
 }
@@ -1571,7 +1672,25 @@ handle_fild_insn (void)
 }
 
 static void
+handle_fimul_insn (void)
+{
+    gen_interpreter_handle();
+}
+
+static void
+handle_fist_insn (void)
+{
+    gen_interpreter_handle();
+}
+
+static void
 handle_fistp_insn (void)
+{
+    gen_interpreter_handle();
+}
+
+static void
+handle_fisubr_insn (void)
 {
     gen_interpreter_handle();
 }
@@ -1583,14 +1702,20 @@ handle_fld_insn (void)
 }
 
 static void
+handle_fld1_insn (void)
+{
+    gen_interpreter_handle();
+}
+
+static void
 handle_fldcw_insn (void)
 {
     reg_t dst = ref_dst_op_to_reg(1, 0, 1);
-    reg_t fpsw = ref_i386_fpsw_w();
+    reg_t fpcw = ref_i386_fpcw_w();
 
-    emit(COMPOSE_MR(fpsw, dst));
+    emit(COMPOSE_MR(fpcw, dst));
 
-    unref_integer_reg(fpsw);
+    unref_integer_reg(fpcw);
     dispose_integer_reg(dst);
 }
 
@@ -1619,11 +1744,29 @@ handle_fnstsw_insn (void)
 }
 
 static void
+handle_frndint_insn (void)
+{
+    gen_interpreter_handle();
+}
+
+static void
+handle_fscale_insn (void)
+{
+    gen_interpreter_handle();
+}
+
+static void
+handle_fst_insn (void)
+{
+    gen_interpreter_handle();
+}
+
+static void
 handle_fstcw_insn (void)
 {
-    reg_t fpsw = ref_i386_fpsw_r();
+    reg_t fpcw = ref_i386_fpcw_r();
 
-    commit_and_dispose_dst_op(fpsw, 0, 1, 1);
+    commit_and_dispose_dst_op(fpcw, 0, 1, 1);
 }
 
 static void
@@ -1639,6 +1782,24 @@ handle_fsub_insn (void)
 }
 
 static void
+handle_fsubrp_insn (void)
+{
+    gen_interpreter_handle();
+}
+
+static void
+handle_fucom_insn (void)
+{
+    gen_interpreter_handle();
+}
+
+static void
+handle_fucomp_insn (void)
+{
+    gen_interpreter_handle();
+}
+
+static void
 handle_fucompp_insn (void)
 {
     gen_interpreter_handle();
@@ -1646,6 +1807,12 @@ handle_fucompp_insn (void)
 
 static void
 handle_fxch_insn (void)
+{
+    gen_interpreter_handle();
+}
+
+static void
+handle_fyl2x_insn (void)
 {
     gen_interpreter_handle();
 }
@@ -1722,12 +1889,15 @@ gen_mulhw (reg_t d, reg_t a, reg_t b)
 static void
 handle_imul_insn (void)
 {
-    assert(op_width == 32);
-
-    if (mode == MODE_RM32)
-	gen_mul64(&gen_mulhw, 1);
+    if (op_width != 32)
+	gen_interpreter_handle();
     else
-	gen_mul64(&gen_mulhw, 0);
+    {
+	if (mode == MODE_RM32)
+	    gen_mul64(&gen_mulhw, 1);
+	else
+	    gen_mul64(&gen_mulhw, 0);
+    }
 }
 
 static void
@@ -1764,6 +1934,7 @@ handle_inc_insn (void)
     if (shift != 0)
 	emit(COMPOSE_SRWI(dst, dst, shift));
 
+    gen_pf_if_needed(dst);
     commit_and_dispose_dst_op(dst, 1, 0, 0);
 }
 
@@ -1810,7 +1981,7 @@ handle_ja_insn (void)
 }
 
 static void
-gen_bca (label_t label)
+gen_bnca (label_t label)
 {
     emit(COMPOSE_MCRXR(1));
     emit_branch(COMPOSE_BEQ(6, 0), label);
@@ -1819,11 +1990,11 @@ gen_bca (label_t label)
 static void
 handle_jae_insn (void)
 {
-    gen_cr_jump(&gen_bca);
+    gen_cr_jump(&gen_bnca);
 }
 
 static void
-gen_bnca (label_t label)
+gen_bca (label_t label)
 {
     emit(COMPOSE_MCRXR(1));
     emit_branch(COMPOSE_BNE(6, 0), label);
@@ -1832,7 +2003,7 @@ gen_bnca (label_t label)
 static void
 handle_jb_insn (void)
 {
-    gen_cr_jump(&gen_bnca);
+    gen_cr_jump(&gen_bca);
 }
 
 static void
@@ -1944,6 +2115,20 @@ handle_jmp_insn (void)
 }
 
 static void
+gen_bnor_ca_eq (label_t label)
+{
+    emit(COMPOSE_MCRXR(1));
+    emit(COMPOSE_CROR(6, 2, 6));
+    emit_branch(COMPOSE_BEQ(6, 0), label);
+}
+
+static void
+handle_jnbe_insn (void)
+{
+    gen_cr_jump(&gen_bnor_ca_eq);
+}
+
+static void
 gen_beq_2 (label_t label)
 {
     emit_branch(COMPOSE_BEQ(2, 0), label);
@@ -1956,6 +2141,36 @@ handle_jne_insn (void)
 }
 
 static void
+copy_parity_into_crf1 (void)
+{
+    reg_t tmp = alloc_tmp_integer_reg();
+
+    emit(COMPOSE_SRWI(tmp, PARITY_REG, 4));
+    emit(COMPOSE_XOR(PARITY_REG, PARITY_REG, tmp));
+    emit(COMPOSE_SRWI(tmp, PARITY_REG, 2));
+    emit(COMPOSE_XOR(PARITY_REG, PARITY_REG, tmp));
+    emit(COMPOSE_SRWI(tmp, PARITY_REG, 1));
+    emit(COMPOSE_XOR(PARITY_REG, PARITY_REG, tmp));
+    free_tmp_integer_reg(tmp);
+
+    emit(COMPOSE_CLRLWI(PARITY_REG, PARITY_REG, 31));
+    emit(COMPOSE_CMPWI(1, PARITY_REG, 0));
+}
+
+static void
+gen_bnp (label_t label)
+{
+    copy_parity_into_crf1();
+    emit_branch(COMPOSE_BEQ(6, 0), label);
+}
+
+static void
+handle_jnp_insn (void)
+{
+    gen_cr_jump(&gen_bnp);
+}
+
+static void
 gen_bns (label_t label)
 {
     emit_branch(COMPOSE_BEQ(0, 0), label);
@@ -1965,6 +2180,31 @@ static void
 handle_jns_insn (void)
 {
     gen_cr_jump(&gen_bns);
+}
+
+static void
+gen_bp (label_t label)
+{
+    copy_parity_into_crf1();
+    emit_branch(COMPOSE_BNE(6, 0), label);
+}
+
+static void
+handle_jp_insn (void)
+{
+    gen_cr_jump(&gen_bp);
+}
+
+static void
+gen_bs (label_t label)
+{
+    emit_branch(COMPOSE_BNE(0, 0), label);
+}
+
+static void
+handle_js_insn (void)
+{
+    gen_cr_jump(&gen_bs);
 }
 
 static void
@@ -1991,10 +2231,10 @@ handle_lea_insn (void)
 }
 
 static void
-handle_mov_insn (void)
+gen_mov_insn (int zexed)
 {
     word_32 imm;
-    reg_t src = ref_src_op(0, &imm, 16, 0);
+    reg_t src = ref_src_op(zexed, &imm, 16, 1);
 
     if (src == NO_REG)
     {
@@ -2006,6 +2246,12 @@ handle_mov_insn (void)
     }
     else
 	commit_and_dispose_dst_op(src, 0, 0, 1);
+}
+
+static void
+handle_mov_insn (void)
+{
+    gen_mov_insn(0);
 }
 
 static void
@@ -2032,7 +2278,7 @@ handle_movsx_insn (void)
 static void
 handle_movzx_insn (void)
 {
-    handle_mov_insn();
+    gen_mov_insn(1);
 }
 
 static void
@@ -2071,6 +2317,7 @@ handle_neg_insn (void)
     else
 	emit(COMPOSE_NEG(dst, dst));
 
+    gen_pf_if_needed(dst);
     commit_and_dispose_dst_op(dst, 1, 0, 0);
 }
 
@@ -2240,6 +2487,18 @@ handle_ret_insn (void)
 }
 
 static void
+handle_rol_insn (void)
+{
+    gen_interpreter_handle();
+}
+
+static void
+handle_ror_insn (void)
+{
+    gen_interpreter_handle();
+}
+
+static void
 gen_shift_insn (void (*gen_id) (reg_t, reg_t, word_32),
 		void (*gen_i) (reg_t, reg_t, word_32),
 		void (*gen_d) (reg_t, reg_t, reg_t),
@@ -2281,6 +2540,7 @@ gen_shift_insn (void (*gen_id) (reg_t, reg_t, word_32),
 	free_tmp_integer_reg(tmp);
     }
 
+    gen_pf_if_needed(dst);
     commit_and_dispose_dst_op(dst, 1, 1, 0);
 }
 
@@ -2315,6 +2575,12 @@ handle_sar_insn (void)
 }
 
 static void
+handle_sbb_insn (void)
+{
+    gen_interpreter_handle();
+}
+
+static void
 gen_set_insn (void (*gen) (label_t))
 {
     reg_t tmp = alloc_tmp_integer_reg();
@@ -2327,6 +2593,12 @@ gen_set_insn (void (*gen) (label_t))
     free_label(label);
 
     commit_and_dispose_dst_op(tmp, 0, 0, 1);
+}
+
+static void
+handle_setbe_insn (void)
+{
+    gen_set_insn(&gen_bor_ca_eq);
 }
 
 static void
@@ -2351,6 +2623,18 @@ static void
 handle_setle_insn (void)
 {
     gen_set_insn(&gen_bor_zf_ne_sf_of);
+}
+
+static void
+handle_setnae_insn (void)
+{
+    gen_set_insn(&gen_bca);
+}
+
+static void
+handle_setnbe_insn (void)
+{
+    gen_set_insn(&gen_bnor_ca_eq);
 }
 
 static void
@@ -2432,13 +2716,69 @@ handle_shrd_insn (void)
 }
 
 static void
+handle_stosb_insn (void)
+{
+    reg_t dst = ref_dst_op_to_reg(1, 0, 0);
+    reg_t edi = ref_i386_gpr_rw(REG_EDI);
+
+    emit(COMPOSE_STB(dst, 0, edi));
+    emit(COMPOSE_ADDI(edi, edi, 1));
+
+    unref_integer_reg(edi);
+    dispose_integer_reg(dst);
+}
+
+static void
+handle_stosd_insn (void)
+{
+    reg_t dst = ref_dst_op_to_reg(1, 0, 0);
+    reg_t edi = ref_i386_gpr_rw(REG_EDI);
+
+    emit(COMPOSE_STW(dst, 0, edi));
+    emit(COMPOSE_ADDI(edi, edi, 4));
+
+    unref_integer_reg(edi);
+    dispose_integer_reg(dst);
+}
+
+static void
+handle_stosw_insn (void)
+{
+    reg_t dst = ref_dst_op_to_reg(1, 0, 0);
+    reg_t edi = ref_i386_gpr_rw(REG_EDI);
+
+    emit(COMPOSE_STH(dst, 0, edi));
+    emit(COMPOSE_ADDI(edi, edi, 2));
+
+    unref_integer_reg(edi);
+    dispose_integer_reg(dst);
+}
+
+static void
 handle_sub_insn (void)
 {
     word_32 imm;
-    reg_t src = ref_src_op(0, KILL_OF && KILL_SZF ? 0 : &imm, 15, 1); /* we could actually do more than 15 bits */
-    reg_t dst = ref_dst_op_to_reg(1, 1, 0);
+    reg_t src = ref_src_op(0, (KILL_OF || KILL_SZF || op_width != 32) ? 0 : &imm, 15, 1); /* we could actually do more than 15 bits */
+    reg_t real_dst = ref_dst_op_to_reg(1, 1, 0);
+    reg_t dst;
 
-    assert(op_width == 32);
+    if (op_width != 32)
+    {
+	reg_t tmp;
+
+	assert(src != NO_REG);
+
+	tmp = alloc_tmp_integer_reg();
+	emit(COMPOSE_SLWI(tmp, src, 32 - op_width));
+	dispose_integer_reg(src);
+	src = tmp;
+
+	tmp = alloc_tmp_integer_reg();
+	emit(COMPOSE_SLWI(tmp, real_dst, 32 - op_width));
+	dst = tmp;
+    }
+    else
+	dst = real_dst;
 
     if (src == NO_REG)
 	imm = SEX16(imm, 15);
@@ -2461,7 +2801,7 @@ handle_sub_insn (void)
 
     if (src == NO_REG)
     {
-	assert(!KILL_SZF && !KILL_OF);
+	assert(!KILL_SZF && !KILL_OF && op_width == 32);
 
 	emit(COMPOSE_ADDI(dst, dst, imm));
     }
@@ -2479,7 +2819,16 @@ handle_sub_insn (void)
 	dispose_integer_reg(src);
     }
 
-    commit_and_dispose_dst_op(dst, 1, 0, 0);
+    if (real_dst != dst)
+    {
+	assert(op_width != 32);
+
+	emit(COMPOSE_SRWI(real_dst, dst, 32 - op_width));
+	dispose_integer_reg(dst);
+    }
+
+    gen_pf_if_needed(real_dst);
+    commit_and_dispose_dst_op(real_dst, 1, 0, 0);
 }
 
 static void
@@ -2487,7 +2836,7 @@ handle_test_insn (void)
 {
     /* we only load the operands if we have to set the flags.  this is
        not correct if loading the operands would cause a trap.  */
-    if (KILL_SZF)
+    if (KILL_SZF || KILL_PF)
     {
 	word_32 imm;
 	reg_t src = ref_src_op(1, &imm, 16, 0);
@@ -2509,6 +2858,8 @@ handle_test_insn (void)
 	}
 
 	dispose_integer_reg(dst);
+
+	gen_pf_if_needed(tmp);
 	free_tmp_integer_reg(tmp);
     }
     if (KILL_CF || KILL_OF)

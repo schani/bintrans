@@ -28,6 +28,7 @@
 #define ebp 19
 #define esi 20
 #define edi 21
+#define parity 25
 
 #define LOAD_NATIVE_HOST_REGISTERS	\
 	lwz	14,0(31)	;\
@@ -40,24 +41,28 @@
 	lwz	21,28(31)	;\
 	lwz	22,32(31)	;\
 	lhz	23,36(31)	;\
+	lhz	24,40(31)	;\
 				\
 	mfcr	9		;\
 	lis	8,0xf000	;\
 	andc	9,9,8		;\
-	lwz	8,44(31) /*zf*/	;\
+	lwz	8,48(31) /*zf*/	;\
 	insrwi	9,8,1,2		;\
-	lwz	8,48(31) /*sf*/	;\
+	lwz	8,52(31) /*sf*/	;\
 	insrwi	9,8,1,0		;\
 	mtcr	9		;\
 				\
 	mfxer	9		;\
 	lis	8,0x6000	;\
 	andc	9,9,8		;\
-	lwz	8,40(31) /*cf*/	;\
+	lwz	8,44(31) /*cf*/	;\
 	insrwi	9,8,1,2		;\
-	lwz	8,52(31) /*of*/;\
+	lwz	8,56(31) /*of*/;\
 	insrwi	9,8,1,1		;\
-	mtxer	9
+	mtxer	9		;\
+				\
+	extrwi	parity,22,1,29 /*pf*/ ;\
+	xori	parity,parity,1
 
 #define STORE_NATIVE_HOST_REGISTERS	\
 	stw	14,0(31)	;\
@@ -68,20 +73,31 @@
 	stw	19,20(31)	;\
 	stw	20,24(31)	;\
 	stw	21,28(31)	;\
+				\
+	srwi	9,parity,4	;\
+	xor	parity,parity,9	;\
+	srwi	9,parity,2	;\
+	xor	parity,parity,9	;\
+	srwi	9,parity,1	;\
+	xor	parity,parity,9	;\
+	xori	parity,parity,1	;\
+	insrwi	22,parity,1,29 /*pf*/ ;\
+				\
 	stw	22,32(31)	;\
 	sth	23,36(31)	;\
+	sth	24,40(31)	;\
 				\
 	mfcr	9		;\
 	extrwi	8,9,1,2		;\
-	stw	8,44(31)	;\
-	extrwi	8,9,1,0		;\
 	stw	8,48(31)	;\
+	extrwi	8,9,1,0		;\
+	stw	8,52(31)	;\
 				\
 	mfxer	9		;\
 	extrwi	8,9,1,2		;\
-	stw	8,40(31)	;\
+	stw	8,44(31)	;\
 	extrwi	8,9,1,1		;\
-	stw	8,52(31)
+	stw	8,56(31)
 
 	.section	".text"
 

@@ -28,6 +28,9 @@
 #include "emu_arch.h"
 
 word_32 leading_zeros (word_32);
+word_1 parity_even (word_32 op);
+word_32 rotl_32 (word_32 x, word_32 i);
+word_16 rotl_16 (word_16 x, word_32 i);
 word_32 mask_32 (word_32 begin, word_32 end);
 word_64 mask_64 (word_32 begin, word_32 end);
 word_32 maskmask (word_32 width, word_32 num, word_32 mask);
@@ -147,7 +150,7 @@ typedef struct
 typedef unsigned long trace_count_t;
 
 #ifdef CROSSDEBUGGER
-#define MAX_MEM_TRACES         128
+#define MAX_MEM_TRACES         65536
 
 typedef struct
 {
@@ -258,6 +261,57 @@ word_32 copy_strings (interpreter_t *intp, int num, char **strs, word_32 p);
 word_32 strlen_user (interpreter_t *intp, word_32 p);
 char* strdup_from_user (interpreter_t *intp, word_32 p);
 void strcpy_to_user (interpreter_t *intp, word_32 p, char *s);
+
+#ifdef CROSSDEBUGGER
+#define sc_open_fd(i,f) \
+  ({ int __fd1 = open_fd(debugger_intp, (f)), __fd2 = open_fd(compiler_intp, (f)); \
+     assert(__fd1 == __fd2); \
+     __fd1; })
+#define sc_close_fd(i,f) \
+  (close_fd(debugger_intp, (f)), close_fd(compiler_intp, (f)))
+#define sc_mem_set_8(i,a,v) \
+  (mem_set_8(debugger_intp, (a), (v)), mem_set_8(compiler_intp, (a), (v)))
+#define sc_mem_set_16(i,a,v) \
+  (mem_set_16(debugger_intp, (a), (v)), mem_set_16(compiler_intp, (a), (v)))
+#define sc_mem_set_32(i,a,v) \
+  (mem_set_32(debugger_intp, (a), (v)), mem_set_32(compiler_intp, (a), (v)))
+#define sc_mem_set_64(i,a,v) \
+  (mem_set_64(debugger_intp, (a), (v)), mem_set_64(compiler_intp, (a), (v)))
+#define sc_mem_copy_to_user_8(i,a,n,l) \
+  (mem_copy_to_user_8(debugger_intp, (a), (n), (l)), mem_copy_to_user_8(compiler_intp, (a), (n), (l)))
+#define sc_strcpy_to_user(i,a,v) \
+  (strcpy_to_user(debugger_intp, (a), (v)), strcpy_to_user(compiler_intp, (a), (v)))
+#define sc_mmap_anonymous(i,l,fl,fi,a) \
+  ({ word_32 __a1 = mmap_anonymous(debugger_intp, (l), (fl), (fi), (a)); \
+     word_32 __a2 = mmap_anonymous(compiler_intp, (l), (fl), (fi), (a)); \
+     assert(__a1 == __a2); \
+     __a1; })
+#define sc_mmap_file(i,l,fl,fi,a,fd,o) \
+  ({ word_32 __a1 = mmap_file(debugger_intp, (l), (fl), (fi), (a), (fd), (o)); \
+     word_32 __a2 = mmap_file(compiler_intp, (l), (fl), (fi), (a), (fd), (o)); \
+     assert(__a1 == __a2); \
+     __a1; })
+#define sc_mprotect_pages(i,a,l,fl,ad,z) \
+  (mprotect_pages(debugger_intp, (a), (l), (fl), (ad), (z)), mprotect_pages(compiler_intp, (a), (l), (fl), (ad), (z)))
+#define sc_natively_mprotect_pages(i,a,l) \
+  (natively_mprotect_pages(debugger_intp, (a), (l)), natively_mprotect_pages(compiler_intp, (a), (l)))
+#define sc_set_data_segment_top(i,t) \
+  ((debugger_intp->data_segment_top = (t)), (compiler_intp->data_segment_top = (t)))
+#else
+#define sc_open_fd(i,f)                   (open_fd((i),(f)))
+#define sc_close_fd(i,f)                  (close_fd((i),(f)))
+#define sc_mem_set_8(i,a,v)               (mem_set_8((i),(a),(v)))
+#define sc_mem_set_16(i,a,v)              (mem_set_16((i),(a),(v)))
+#define sc_mem_set_32(i,a,v)              (mem_set_32((i),(a),(v)))
+#define sc_mem_set_64(i,a,v)              (mem_set_64((i),(a),(v)))
+#define sc_mem_copy_to_user_8(i,a,n,l)    (mem_copy_to_user_8((i),(a),(n),(l)))
+#define sc_strcpy_to_user(i,a,v)          (strcpy_to_user((i),(a),(v)))
+#define sc_mmap_anonymous(i,l,fl,fi,a)    (mmap_anonymous((i),(l),(fl),(fi),(a)))
+#define sc_mmap_file(i,l,fl,fi,a,fd,o)    (mmap_file((i),(l),(fl),(fi),(a),(fd),(o)))
+#define sc_mprotect_pages(i,a,l,fl,ad,z)  (mprotect_pages((i),(a),(l),(fl),(ad),(z)))
+#define sc_natively_mprotect_pages(i,a,l) (natively_mprotect_pages((i),(a),(l)))
+#define sc_set_data_segment_top(i,t)      ((i)->data_segment_top = (t))
+#endif
 
 void handle_system_call (interpreter_t *intp);
 

@@ -83,13 +83,15 @@
   '(eflags))
 
 (define-register-class 'fspr 'integer 16
-  '(fpsw))
+  '(fpsw fpcw))
 
 (define-subregisters '((al eax 0 7)
 		       (ah eax 8 15)
 		       (ax eax 0 15)
+		       (dx edx 0 15)
 		       (cl ecx 0 7)
 		       (cf eflags 0 0)
+		       (pf eflags 2 2)
 		       (zf eflags 6 6)
 		       (sf eflags 7 7)
 		       (df eflags 10 10)
@@ -177,6 +179,9 @@
 (define-insn-macro set-zf (val w)
   (set zf (if (= (width w val) (width w 0)) 1 0)))
 
+(define-insn-macro set-pf (val)
+  (set pf (parity-even (logand (zex val) #xff))))
+
 #|
 (defmacro define-std-unary-insn (name modes effect)
   (prin1
@@ -201,7 +206,10 @@
   `(define-intel-insn ,name no-args ,opcode nil ,effect))
 
 (defun insn-mode-params (mode)
-  (let ((params (cdr (assoc mode '((m16-noprefix (rm16) nil 16 nil t)
+  (let ((params (cdr (assoc mode '((al al nil 8 nil nil)
+				   (ax ax nil 16 t nil)
+				   (eax (reg eax) nil 32 nil nil)
+				   (m16-noprefix (rm16) nil 16 nil t)
 				   (m32 (rm32) nil 32 nil t)
 				   (m64 (m64) nil 64 nil t)
 				   (rm8 (rm8) nil 8 nil nil)
@@ -216,6 +224,8 @@
 				   (al-imm8 al imm8 8 nil nil)
 				   (ax-imm16 ax imm16 16 t nil)
 				   (eax-imm32 (reg eax) imm32 32 nil nil)
+				   (ax-al ax al 16 t nil)
+				   (eax-ax (reg eax) ax 32 nil nil)
 				   (rm8-1 (rm8) 1 8 nil nil)
 				   (rm16-1 (rm16) 1 16 t nil)
 				   (rm32-1 (rm32) 1 32 nil nil)
@@ -232,6 +242,7 @@
 				   (rm8-r8 (rm8) (r8) 8 nil nil)
 				   (rm16-r16 (rm16) (r16) 16 t nil)
 				   (rm32-r32 (rm32) (r32) 32 nil nil)
+				   (rm32-r32-imm8 (rm32) (r32) 32 nil nil)
 				   (r8-rm8 (r8) (rm8) 8 nil nil)
 				   (r16-rm16 (r16) (rm16) 16 t nil)
 				   (r32-rm32 (r32) (rm32) 32 nil nil)
@@ -288,7 +299,7 @@
 (defun generate-intel-insn-recognizer (machine action)
   (labels ((decode-immediate-if-necessary (insn)
 	     (case (intel-insn-mode insn)
-	       ((al-imm8 rm8-imm8 rm16-imm8 rm32-imm8 rm16-simm8 rm32-simm8 +r8-imm8 imm8 simm8)
+	       ((al-imm8 rm8-imm8 rm16-imm8 rm32-imm8 rm16-simm8 rm32-simm8 +r8-imm8 rm32-r32-imm8 imm8 simm8)
 		(format t "imm8 = i386_decode_imm8(intp);~%"))
 	       ((imm16 ax-imm16 rm16-imm16 +r16-imm16)
 		(format t "imm16 = i386_decode_imm16(intp);~%"))
@@ -304,7 +315,7 @@
 	       (when (member (intel-insn-mode insn32) '(m16-noprefix m32 m64 rm8 rm16 rm32
 							rm8-1 rm16-1 rm32-1 rm8-cl rm16-cl rm32-cl
 							rm8-imm8 rm16-imm8 rm16-imm16 rm32-imm8 rm32-imm32
-							rm16-simm8 rm32-simm8 rm8-r8 rm16-r16 rm32-r32
+							rm16-simm8 rm32-simm8 rm8-r8 rm16-r16 rm32-r32 rm32-r32-imm8
 							r16-rm8 r32-rm8 r32-rm16
 							r8-rm8 r16-rm16 r32-rm32))
 		 (unless modrm-decoded-p
@@ -332,13 +343,16 @@
 		     (format t "opcode_reg = opcode~:[2~;~] - ~A;~%" (null (second (intel-insn-opcode (first insns)))) opcode))
 		   (format t "case ~A :~%" opcode))
 	       (generate-16-32-pair (first insns) (second insns) modrm-decoded-p)))
-	   (generate-switch-for-opcode2 (insns)
+	   (generate-switch-for-opcode2 (insns opcode)
 	     (format t "i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);~%")
 	     (format t "switch (opcode2) {~%")
 	     (dolist (opcode2 (remove-duplicates (mapcar* #'(lambda (x) (second (intel-insn-opcode x))) insns)))
 	       (let ((insns2 (remove-if-not #'(lambda (x) (eql opcode2 (second (intel-insn-opcode x)))) insns)))
 		 (generate-case insns2 nil)))
-	     (format t "default :~%switch (reg) {~%")
+	     (format t "default :~%~Aswitch (reg) {~%"
+		     (if (and (>= opcode #xd8) (<= opcode #xdf))
+			 (format nil "assert(opcode2 <= 0xbf);~%")
+			 ""))
 	     (dolist (extended-opcode (remove-duplicates (mapcar* #'intel-insn-extended-opcode insns)))
 	       (let ((insnsx (remove-if-not #'(lambda (x) (eql extended-opcode (intel-insn-extended-opcode x))) insns)))
 		 (format t "case ~A :~%" extended-opcode)
@@ -357,7 +371,7 @@
 	      (assert (notany #'(lambda (x) (and (= (length (intel-insn-opcode x)) 1)
 						 (null (intel-insn-extended-opcode x)))) insns))
 	      (format t "case ~A :~%" opcode)
-	      (generate-switch-for-opcode2 insns)))))
+	      (generate-switch-for-opcode2 insns opcode)))))
     (format t "default:~%assert(0);~%}~%")))
 
 (defun generate-intel-interpreter ()
@@ -616,27 +630,6 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
 	insn-matcher
       (generate-intel-insn-compiler-file insn-name mode))))
 
-(define-std-binary-insn add
-    ((al-imm8 (#x04))
-     (ax-imm16 (#x05))
-     (eax-imm32 (#x05))
-     (rm8-imm8 (#x80) 0)
-     (rm16-imm16 (#x81) 0)
-     (rm32-imm32 (#x81) 0)
-     (rm16-simm8 (#x83) 0)
-     (rm32-simm8 (#x83) 0)
-     (rm8-r8 (#x00))
-     (rm16-r16 (#x01))
-     (rm32-r32 (#x01))
-     (r8-rm8 (#x02))
-     (r16-rm16 (#x03))
-     (r32-rm32 (#x03)))
-  ((set of (+overflow dst src))
-   (set cf (+carry dst src))
-   (set dst (+ dst src))
-   (set-sf dst op-width)
-   (set-zf dst op-width)))
-
 (define-std-binary-insn adc
     ((al-imm8 (#x14))
      (ax-imm16 (#x15))
@@ -656,7 +649,30 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
    (set cf (logor (+carry dst src) (+carry (+ dst src) (width op-width (zex cf)))))
    (set dst (+ (+ dst src) (width op-width (zex cf))))
    (set-sf dst op-width)
-   (set-zf dst op-width)))
+   (set-zf dst op-width)
+   (set-pf dst)))
+
+(define-std-binary-insn add
+    ((al-imm8 (#x04))
+     (ax-imm16 (#x05))
+     (eax-imm32 (#x05))
+     (rm8-imm8 (#x80) 0)
+     (rm16-imm16 (#x81) 0)
+     (rm32-imm32 (#x81) 0)
+     (rm16-simm8 (#x83) 0)
+     (rm32-simm8 (#x83) 0)
+     (rm8-r8 (#x00))
+     (rm16-r16 (#x01))
+     (rm32-r32 (#x01))
+     (r8-rm8 (#x02))
+     (r16-rm16 (#x03))
+     (r32-rm32 (#x03)))
+  ((set of (+overflow dst src))
+   (set cf (+carry dst src))
+   (set dst (+ dst src))
+   (set-sf dst op-width)
+   (set-zf dst op-width)
+   (set-pf dst)))
 
 (define-std-binary-insn and
     ((al-imm8 (#x24))
@@ -677,7 +693,8 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
    (set of 0)
    (set cf 0)
    (set-sf dst op-width)
-   (set-zf dst op-width)))
+   (set-zf dst op-width)
+   (set-pf dst)))
 
 (define-std-binary-insn bsr
     ((r16-rm16 (#x0f #xbd))
@@ -685,13 +702,22 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
   ((set zf (if (= src (width op-width 0)) 1 0))
    (set dst (- 31 (leading-zeros (zex src))))))
 
+(define-insn-macro bit-test-src (pos)
+  (if (= mod (width 2 3))
+      (reg rm gpr)
+      (mem (+ (ea) (shiftl (ashiftr pos 5) 2)))))
+
 (define-std-binary-insn bt
     ((rm32-r32 (#x0f #xa3)))
-  ((set cf (if (bit-set-p (if (= mod (width 2 3))
-			      (reg rm gpr)
-			      (mem (+ (ea) (shiftl (ashiftr src 5) 2))))
+  ((set cf (if (bit-set-p (bit-test-src src)
 			  (logand src #x1f))
 	       1 0))))
+
+(define-std-binary-insn bts
+    ((rm32-r32 (#x0f #xab)))
+  ((let ((bit-num (logand src #x1f)))
+     (set cf (if (bit-set-p (bit-test-src src) bit-num) 1 0))
+     (set (bit-test-src src) (logor (bit-test-src src) (shiftl 1 bit-num))))))
 
 (define-std-unary-insn call
     ((imm32 (#xe8)))
@@ -704,6 +730,11 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
   ((set (reg esp) (- (reg esp) 4))
    (set (mem (reg esp)) pc)
    (jump-absolute dst)))
+
+(define-std-binary-insn cbw-cwde
+    ((ax-al (#x98))
+     (eax-ax (#x98)))
+  ((set dst (sex src))))
 
 (define-std-simple-insn cdq (#x99)
   ((if (bit-set-p (reg eax) 31)
@@ -732,7 +763,8 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
      (set cf (-carry dst (width op-width src)))
      (set zf (if (= temp (width op-width 0)) 1 0))
      (set sf (if (bit-set-p temp (- op-width 1)) 1 0))
-     (set of (+overflow (width op-width dst) (width op-width (+ (bitneg src) 1)))))))
+     (set of (+overflow (width op-width dst) (width op-width (+ (bitneg src) 1))))
+     (set-pf temp))))
 
 (define-std-unary-insn dec
     ((rm8 (#xfe) 1)
@@ -743,7 +775,8 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
   ((set of (+overflow dst (width op-width (bitneg 0))))
    (set dst (- dst 1))
    (set-sf dst op-width)
-   (set-zf dst op-width)))
+   (set-zf dst op-width)
+   (set-pf dst)))
 
 (define-std-unary-insn div
     ((rm8 (#xf6) 6))
@@ -759,6 +792,13 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
      (set (reg eax) (promote 32 (logand (/ dividend divisor) (width 64 (mask 0 31)))))
      (set (reg edx) (promote 32 (% dividend divisor))))))
 
+(define-std-simple-insn f2xm1 (#xd9 #xf0)
+  ((not-implemented)))
+
+(define-std-unary-insn fadd
+    ((m32 (#xd8) 0))
+  ((set (array-reg fpst top) (+f (array-reg fpst top) (single-to-double (bits-to-single dst))))))
+
 (define-std-unary-insn fadd
     ((m64 (#xdc) 0))
   ((set (array-reg fpst top) (+f (array-reg fpst top) (bits-to-double dst)))))
@@ -768,6 +808,9 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
   ((set (array-reg fpst (+ top dst)) (+f (array-reg fpst top)
 					 (array-reg fpst (+ top dst))))
    (set top (+ top 1))))
+
+(define-std-simple-insn fchs (#xd9 #xe0)
+  ((set (array-reg fpst top) (fneg (array-reg fpst top)))))
 
 (define-std-unary-insn fcom
     ((m64 (#xdc) 2))
@@ -781,10 +824,18 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
    (set fc2 0)
    (set fc3 (if (=f (array-reg fpst top) (array-reg fpst (+ top dst))) 1 0))))
 
-(define-std-simple-insn fcomp (#xd8 #xd9)
-  ((set fc0 (if (<f (array-reg fpst top) (array-reg fpst (+ top (width 3 1)))) 1 0))
+(define-std-unary-insn fcomp
+    ((m64 (#xdc) 3))
+  ((set fc0 (if (<f (array-reg fpst top) (bits-to-double dst)) 1 0))
    (set fc2 0)
-   (set fc3 (if (=f (array-reg fpst top) (array-reg fpst (+ top (width 3 1)))) 1 0))
+   (set fc3 (if (=f (array-reg fpst top) (bits-to-double dst)) 1 0))
+   (set top (+ top 1))))
+
+(define-std-unary-insn fcomp
+    ((+st (#xd8 #xd8)))
+  ((set fc0 (if (<f (array-reg fpst top) (array-reg fpst (+ top dst))) 1 0))
+   (set fc2 0)
+   (set fc3 (if (=f (array-reg fpst top) (array-reg fpst (+ top dst))) 1 0))
    (set top (+ top 1))))
 
 (define-std-simple-insn fcompp (#xde #xd9)
@@ -797,11 +848,24 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
     ((m64 (#xdc) 6))
   ((set (array-reg fpst top) (/f (array-reg fpst top) (bits-to-double dst)))))
 
+(define-std-unary-insn fdiv
+    ((m32 (#xd8) 6))
+  ((set (array-reg fpst top) (/f (array-reg fpst top) (single-to-double (bits-to-single dst))))))
+
+(define-std-unary-insn fdiv
+    ((+st (#xd8 #xf0)))
+  ((set (array-reg fpst top) (/f (array-reg fpst top)
+				 (array-reg fpst (+ top dst))))))
+
 (define-std-unary-insn fdivp
     ((+st (#xde #xf8)))
   ((set (array-reg fpst (+ top dst)) (/f (array-reg fpst (+ top dst))
 					 (array-reg fpst top)))
    (set top (+ top 1))))
+
+(define-std-unary-insn fdivr
+    ((m64 (#xdc) 7))
+  ((set (array-reg fpst top) (/f (bits-to-double dst) (array-reg fpst top)))))
 
 (define-std-unary-insn fdivrp
     ((+st (#xde #xf0)))
@@ -809,20 +873,38 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
 					 (array-reg fpst (+ top dst))))
    (set top (+ top 1))))
 
+(define-std-unary-insn fidiv
+    ((m32 (#xda) 6))
+  ((set (array-reg fpst top) (/f (array-reg fpst top) (integer-to-double dst)))))
+
 (define-std-unary-insn fidivr
     ((m32 (#xda) 7))
   ((set (array-reg fpst top) (/f (integer-to-double dst) (array-reg fpst top)))))
 
 (define-std-unary-insn fild
     ((m16-noprefix (#xdf) 0)
-     (m32 (#xdb) 0))			;FIXME: m64
+     (m32 (#xdb) 0)
+     (m64 (#xdf) 5))
   ((set top (- top 1))
    (set (array-reg fpst top) (integer-to-double dst))))
 
+(define-std-unary-insn fimul
+    ((m32 (#xda) 1))
+  ((set (array-reg fpst top) (*f (array-reg fpst top) (integer-to-double dst)))))
+
+(define-std-unary-insn fist
+    ((m32 (#xdb) 2))
+  ((set dst (double-to-integer (array-reg fpst top)))))
+
 (define-std-unary-insn fistp
-    ((m32 (#xdb) 3))
+    ((m32 (#xdb) 3)
+     (m64 (#xdf) 7))
   ((set dst (double-to-integer (array-reg fpst top)))
    (set top (+ top 1))))
+
+(define-std-unary-insn fisubr
+    ((m32 (#xda) 5))
+  ((set (array-reg fpst top) (-f (integer-to-double dst) (array-reg fpst top)))))
 
 (define-std-unary-insn fld
     ((m32 (#xd9) 0))
@@ -834,14 +916,23 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
   ((set top (- top 1))
    (set (array-reg fpst top) (bits-to-double dst))))
 
+(define-std-unary-insn fld		;FIXME: 80, not 64 bits!
+    ((m64 (#xdb) 5))
+  ((set top (- top 1))
+   (set (array-reg fpst top) (bits-to-double dst))))
+
 (define-std-unary-insn fld
     ((+st (#xd9 #xc0)))
   ((set (array-reg fpst (- top (width 3 1))) (array-reg fpst (+ top dst)))
    (set top (- top 1))))
 
+(define-std-simple-insn fld1 (#xd9 #xe8)
+  ((set top (- top 1))
+   (set (array-reg fpst top) 1.0)))
+
 (define-std-unary-insn fldcw
     ((m16-noprefix (#xd9) 5))
-  ((set (reg fpsw) dst)))
+  ((set (reg fpcw) dst)))
 
 (define-std-simple-insn fldz (#xd9 #xee)
   ((set top (- top 1))
@@ -850,6 +941,16 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
 (define-std-unary-insn fmul
     ((m64 (#xdc) 1))
   ((set (array-reg fpst top) (*f (array-reg fpst top) (bits-to-double dst)))))
+
+(define-std-unary-insn fmul
+    ((+st (#xd8 #xc8)))
+  ((set (array-reg fpst top) (*f (array-reg fpst top)
+				 (array-reg fpst (+ top dst))))))
+
+(define-std-unary-insn fmul
+    ((+st (#xdc #xc8)))
+  ((set (array-reg fpst (+ top dst)) (*f (array-reg fpst top)
+					 (array-reg fpst (+ top dst))))))
 
 (define-std-unary-insn fmulp
     ((+st (#xde #xc8)))
@@ -866,9 +967,27 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
 ;;	       (array-reg fpst top)))
 ;;   (set top (+ top 1))))
 
+(define-std-simple-insn frndint (#xd9 #xfc)
+  ((not-implemented)))
+
+(define-std-simple-insn fscale (#xd9 #xfd)
+  ((not-implemented)))
+
 (define-std-unary-insn fstcw
     ((m16-noprefix (#xd9) 7))
-  ((set dst (reg fpsw))))
+  ((set dst (reg fpcw))))
+
+(define-std-unary-insn fst
+    ((m32 (#xd9) 2))
+  ((set dst (single-to-bits (double-to-single (array-reg fpst top))))))
+
+(define-std-unary-insn fst
+    ((m64 (#xdd) 2))
+  ((set dst (double-to-bits (array-reg fpst top)))))
+
+(define-std-unary-insn fst
+    ((+st (#xdd #xd0)))
+  ((set (array-reg fpst (+ top dst)) (array-reg fpst top))))
 
 (define-std-unary-insn fstp
     ((m32 (#xd9) 3))
@@ -877,6 +996,11 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
 
 (define-std-unary-insn fstp
     ((m64 (#xdd) 3))
+  ((set dst (double-to-bits (array-reg fpst top)))
+   (set top (+ top 1))))
+
+(define-std-unary-insn fstp		;FIXME: 80, not 64 bits!
+    ((m64 (#xdb) 7))
   ((set dst (double-to-bits (array-reg fpst top)))
    (set top (+ top 1))))
 
@@ -889,6 +1013,32 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
     ((m64 (#xdc) 4))
   ((set (array-reg fpst top) (-f (array-reg fpst top) (bits-to-double dst)))))
 
+(define-std-unary-insn fsub
+    ((m32 (#xd8) 4))
+  ((set (array-reg fpst top) (-f (array-reg fpst top) (single-to-double (bits-to-single dst))))))
+
+(define-std-unary-insn fsub
+    ((+st (#xd8 #xe0)))
+  ((set (array-reg fpst top) (-f (array-reg fpst top) (array-reg fpst (+ top dst))))))
+
+(define-std-unary-insn fsubrp
+    ((+st (#xde #xe0)))
+  ((set (array-reg fpst (+ top dst)) (-f (array-reg fpst (+ top dst)) (array-reg fpst top)))
+   (set top (+ top 1))))
+
+(define-std-unary-insn fucom
+    ((+st (#xdd #xe0)))
+  ((set fc0 (if (<f (array-reg fpst top) (array-reg fpst (+ top dst))) 1 0))
+   (set fc2 0)
+   (set fc3 (if (=f (array-reg fpst top) (array-reg fpst (+ top dst))) 1 0))))
+
+(define-std-unary-insn fucomp
+    ((+st (#xdd #xe8)))
+  ((set fc0 (if (<f (array-reg fpst top) (array-reg fpst (+ top dst))) 1 0))
+   (set fc2 0)
+   (set fc3 (if (=f (array-reg fpst top) (array-reg fpst (+ top dst))) 1 0))
+   (set top (+ top 1))))
+
 (define-std-simple-insn fucompp (#xda #xe9)
   ((set fc0 (if (<f (array-reg fpst top) (array-reg fpst (+ top (width 3 1)))) 1 0))
    (set fc2 0)
@@ -900,6 +1050,9 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
   ((let ((temp (array-reg fpst (+ top dst))))
      (set (array-reg fpst (+ top dst)) (array-reg fpst top))
      (set (array-reg fpst top) temp))))
+
+(define-std-simple-insn fyl2x (#xd9 #xf1)
+  ((not-implemented)))
 
 (define-std-unary-insn idiv
     ((rm8 (#xf6) 7))
@@ -922,19 +1075,32 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
    (set of cf)))
 
 (define-std-unary-insn imul
-    ((rm32 (#xf7) 5))
-  ((let ((op1 (reg eax))
-	 (op2 dst))
-     (set (reg eax) (* op1 op2))
-     (set (reg edx) (promote 32 (width 64 (shiftr (* (sex op1) (sex op2)) 32))))
-     (set cf (if (or (= (reg edx) 0) (= (reg edx) (bitneg 0))) 0 1))
-     (set of cf))))
+    ((rm32 (#xf7) 5)
+     (rm16 (#xf7) 5))
+  ((if (= op-width 32)
+       (let ((op1 (reg eax))
+	     (op2 (promote 32 dst)))
+	 (set (reg eax) (* op1 op2))
+	 (set (reg edx) (promote 32 (width 64 (shiftr (* (sex op1) (sex op2)) 32))))
+	 (set cf (if (or (= (reg edx) 0) (= (reg edx) (bitneg 0))) 0 1))
+	 (set of cf))
+       (let ((op1 ax)
+	     (op2 (promote 16 dst)))
+	 (set ax (* op1 op2))
+	 (set dx (promote 16 (width 32 (shiftr (* (sex op1) (sex op2)) 16))))
+	 (set cf (if (or (= dx (width 16 0)) (= dx (width 16 (bitneg 0)))) 0 1))
+	 (set of cf)))))
 
 (define-std-binary-insn imul
     ((r32-rm32 (#x0f #xaf))
-     (rm32-imm32 (#x69)))
-  ((let ((temp (promote 32 (width 64 (shiftr (* (sex src) (sex dst)) 32)))))
-     (set cf (if (or (= temp 0) (= temp (bitneg 0))) 0 1))
+     (r16-rm16 (#x0f #xaf))
+     (rm32-imm32 (#x69))
+     (rm16-imm16 (#x69)))
+  ((let ((temp (promote op-width (width (* op-width 2)
+					(shiftr (* (sex src) (sex dst)) op-width)))))
+     (set cf (if (or (= temp (width op-width 0))
+		     (= temp (width op-width (bitneg 0))))
+		 0 1))
      (set of cf))
    (set dst (* src dst))))
 
@@ -947,7 +1113,8 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
   ((set of (+overflow dst (width op-width 1)))
    (set dst (+ dst 1))
    (set-sf dst op-width)
-   (set-zf dst op-width)))
+   (set-zf dst op-width)
+   (set-pf dst)))
 
 (define-std-unary-insn int
     ((imm8 (#xcd)))
@@ -1032,10 +1199,31 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
        (jump-relative dst)
        (nop))))
 
+(define-std-unary-insn jnp
+    ((simm8 (#x7b))
+     (imm32 (#x0f #x8b)))
+  ((if (= pf (width 1 0))
+       (jump-relative dst)
+       (nop))))
+
 (define-std-unary-insn jns
     ((simm8 (#x79))
      (imm32 (#x0f #x89)))
   ((if (= sf (width 1 0))
+       (jump-relative dst)
+       (nop))))
+
+(define-std-unary-insn jp
+    ((simm8 (#x7a))
+     (imm32 (#x0f #x8a)))
+  ((if (= pf (width 1 1))
+       (jump-relative dst)
+       (nop))))
+
+(define-std-unary-insn js
+    ((simm8 (#x78))
+     (imm32 (#x0f #x88)))
+  ((if (= sf (width 1 1))
        (jump-relative dst)
        (nop))))
 
@@ -1070,7 +1258,8 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
 
 (define-std-binary-insn movzx
     ((r16-rm8 (#x0f #xb6))
-     (r32-rm8 (#x0f #xb6)))
+     (r32-rm8 (#x0f #xb6))
+     (r32-rm16 (#x0f #xb7)))
   ((set dst (zex src))))
 
 (define-std-unary-insn mul
@@ -1096,7 +1285,8 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
    (set of (+overflow (width op-width (bitneg dst)) (width op-width 1)))	;of is set iff dst==0x80000000
    (set dst (neg dst))
    (set-sf dst op-width)
-   (set-zf dst op-width)))
+   (set-zf dst op-width)
+   (set-pf dst)))
 
 ;; nop is really "xchg eax,eax"
 
@@ -1125,7 +1315,8 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
    (set cf 0)
    (set of 0)
    (set-sf dst op-width)
-   (set-zf dst op-width)))
+   (set-zf dst op-width)
+   (set-pf dst)))
 
 (define-std-unary-insn pop
     ((m32 (#x8f) 0)
@@ -1210,6 +1401,27 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
   ((set (reg esp) (+ (+ (reg esp) (zex dst)) 4))
    (jump-absolute (mem (- (- (reg esp) (zex dst)) 4)))))
 
+(define-std-binary-insn rol
+    ((rm32-cl (#xd3) 0)
+     (rm16-cl (#xd3) 0))
+  ((let ((amount (width 32 (logand (zex src) (- op-width 1)))))
+     (set dst (rotl dst amount))
+     (set cf (if (bit-set-p dst 0) 1 0))
+     (if (= amount 1)
+	 (set of (logxor (if (bit-set-p dst (- op-width 1)) 1 0) cf))
+	 (nop)))))
+
+(define-std-binary-insn ror
+    ((rm32-imm8 (#xc1) 1)
+     (rm16-imm8 (#xc1) 1))
+  ((let ((amount (width 32 (logand (zex src) (- op-width 1)))))
+     (set dst (rotl dst (- op-width amount)))
+     (set cf (if (bit-set-p dst (- op-width 1)) 1 0))
+     (if (= amount 1)
+	 (set of (logxor (if (bit-set-p dst (- op-width 1)) 1 0)
+			 (if (bit-set-p dst (- op-width 2)) 1 0)))
+	 (nop)))))
+
 (define-std-binary-insn sar		;FIXME: cf, of
     ((rm8-1 (#xd0) 7)
      (rm8-cl (#xd2) 7)
@@ -1222,7 +1434,36 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
      (rm32-imm8 (#xc1) 7))
   ((set dst (ashiftr dst (zex (width 8 (logand src #x1f)))))
    (set-sf dst op-width)
-   (set-zf dst op-width)))
+   (set-zf dst op-width)
+   (set-pf dst)))
+
+(define-std-binary-insn sbb
+    ((al-imm8 (#x1c))
+     (ax-imm16 (#x1d))
+     (eax-imm32 (#x1d))
+     (rm8-imm8 (#x80) 3)
+     (rm16-imm16 (#x81) 3)
+     (rm32-imm32 (#x81) 3)
+     (rm16-simm8 (#x83) 3)
+     (rm32-simm8 (#x83) 3)
+     (rm8-r8 (#x18))
+     (rm16-r16 (#x19))
+     (rm32-r32 (#x19))
+     (r8-rm8 (#x1a))
+     (r16-rm16 (#x1b))
+     (r32-rm32 (#x1b)))
+  ((let ((real-src (width op-width (+ src (zex cf)))))
+     (set cf (-carry dst real-src))
+     (set of (+overflow (width op-width dst)
+			(width op-width (+ (bitneg real-src) 1))))
+     (set dst (- dst real-src))
+     (set-sf dst op-width)
+     (set-zf dst op-width)
+     (set-pf dst))))
+
+(define-std-unary-insn setbe
+    ((rm8 (#x0f #x96)))
+  ((set dst (if (or (= cf (width 1 1)) (= zf (width 1 1))) 1 0))))
 
 (define-std-unary-insn sete
     ((rm8 (#x0f #x94)))
@@ -1240,11 +1481,19 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
     ((rm8 (#x0f #x9e)))
   ((set dst (if (or (= zf (width 1 1)) (not (= sf of))) 1 0))))
 
+(define-std-unary-insn setnae
+    ((rm8 (#x0f #x92)))
+  ((set dst (zex cf))))
+
+(define-std-unary-insn setnbe
+    ((rm8 (#x0f #x97)))
+  ((set dst (if (and (= cf (width 1 0)) (= zf (width 1 0))) 1 0))))
+
 (define-std-unary-insn setne
     ((rm8 (#x0f #x95)))
   ((set dst (logxor (zex zf) 1))))
 
-(define-std-binary-insn shl		;FIXME: cf, of
+(define-std-binary-insn shl		;FIXME: what if count is greater than width?
     ((rm8-1 (#xd0) 4)
      (rm8-cl (#xd2) 4)
      (rm8-imm8 (#xc0) 4)
@@ -1254,9 +1503,13 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
      (rm32-1 (#xd1) 4)
      (rm32-cl (#xd3) 4)
      (rm32-imm8 (#xc1) 4))
-  ((set dst (shiftl dst (zex (width 8 (logand src #x1f)))))
-   (set-sf dst op-width)
-   (set-zf dst op-width)))
+  ((let ((count (width 32 (logand (zex src) #x1f))))
+     (set cf (if (bit-set-p dst (- op-width count)) 1 0))
+     (set dst (shiftl dst count))
+     (set of (logand cf (width 1 (if (bit-set-p dst (- op-width 1)) 1 0))))
+     (set-sf dst op-width)
+     (set-zf dst op-width)
+     (set-pf dst))))
 
 (define-std-binary-insn shld		;FIXME: of
     ((rm32-r32 (#x0f #xa5)))
@@ -1266,9 +1519,21 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
 	 (set cf (if (bit-set-p dst (- 32 count)) 1 0))
 	 (set dst (logor (shiftl dst count) (shiftr src (- 32 count))))
 	 (set-sf dst op-width)
-	 (set-zf dst op-width)))))
+	 (set-zf dst op-width)
+	 (set-pf dst)))))
 
-(define-std-binary-insn shr		;FIXME: cf, of
+(define-std-binary-insn shld		;FIXME: of
+    ((rm32-r32-imm8 (#x0f #xa4)))
+  ((if (= (logand (width 32 (zex imm8)) #x1f) 0)
+       (nop)
+       (let ((count (width 32 (logand (zex imm8) #x1f))))
+	 (set cf (if (bit-set-p dst (- 32 count)) 1 0))
+	 (set dst (logor (shiftl dst count) (shiftr src (- 32 count))))
+	 (set-sf dst op-width)
+	 (set-zf dst op-width)
+	 (set-pf dst)))))
+
+(define-std-binary-insn shr		;FIXME: what if count is greater than width?
     ((rm8-1 (#xd0) 5)
      (rm8-cl (#xd2) 5)
      (rm8-imm8 (#xc0) 5)
@@ -1278,9 +1543,13 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
      (rm32-1 (#xd1) 5)
      (rm32-cl (#xd3) 5)
      (rm32-imm8 (#xc1) 5))
-  ((set dst (shiftr dst (zex (width 8 (logand src #x1f)))))
-   (set-sf dst op-width)
-   (set-zf dst op-width)))
+  ((let ((count (width 32 (logand (zex src) #x1f))))
+     (set cf (if (bit-set-p dst count) 1 0))
+     (set dst (shiftr dst count))
+     (set of (logand cf (width 1 (if (bit-set-p dst 0) 1 0))))
+     (set-sf dst op-width)
+     (set-zf dst op-width)
+     (set-pf dst))))
 
 (define-std-binary-insn shrd		;FIXME: of
     ((rm32-r32 (#x0f #xad)))
@@ -1290,7 +1559,34 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
 	 (set cf (if (bit-set-p dst (- count 1)) 1 0))
 	 (set dst (logor (shiftr dst count) (shiftl src (- 32 count))))
 	 (set-sf dst op-width)
-	 (set-zf dst op-width)))))
+	 (set-zf dst op-width)
+	 (set-pf dst)))))
+
+(define-std-binary-insn shrd		;FIXME: of
+    ((rm32-r32-imm8 (#x0f #xac)))
+  ((if (= (logand (width 32 (zex imm8)) #x1f) 0)
+       (nop)
+       (let ((count (width 32 (logand (zex imm8) #x1f))))
+	 (set cf (if (bit-set-p dst (- count 1)) 1 0))
+	 (set dst (logor (shiftr dst count) (shiftl src (- 32 count))))
+	 (set-sf dst op-width)
+	 (set-zf dst op-width)
+	 (set-pf dst)))))
+
+(define-std-unary-insn stosb		;FIXME: df
+    ((al (#xaa)))
+  ((set (width 8 (mem (reg edi))) dst)
+   (set (reg edi) (+ (reg edi) 1))))
+
+(define-std-unary-insn stosw		;FIXME: df
+    ((ax (#xab)))
+  ((set (width 16 (mem (reg edi))) dst)
+   (set (reg edi) (+ (reg edi) 2))))
+
+(define-std-unary-insn stosd		;FIXME: df
+    ((eax (#xab)))
+  ((set (mem (reg edi)) dst)
+   (set (reg edi) (+ (reg edi) 4))))
 
 (define-std-binary-insn sub
     ((al-imm8 (#x2c))
@@ -1311,7 +1607,8 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
    (set of (+overflow (width op-width dst) (width op-width (+ (bitneg src) 1))))
    (set dst (- dst src))
    (set-sf dst op-width)
-   (set-zf dst op-width)))
+   (set-zf dst op-width)
+   (set-pf dst)))
 
 (define-std-binary-insn test
     ((al-imm8 (#xa8))
@@ -1327,7 +1624,8 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
      (set cf 0)
      (set of 0)
      (set-sf temp op-width)
-     (set-zf temp op-width))))
+     (set-zf temp op-width)
+     (set-pf temp))))
 
 (define-std-binary-insn xchg
     ((+r16-ax (#x90))
@@ -1358,7 +1656,8 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
    (set cf 0)
    (set of 0)
    (set-sf dst op-width)
-   (set-zf dst op-width)))
+   (set-zf dst op-width)
+   (set-pf dst)))
 
 (defparameter *i386* *this-machine*)
 

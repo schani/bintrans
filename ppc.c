@@ -45,6 +45,7 @@
 #include <sys/utsname.h>
 #include <sys/resource.h>
 #include <sys/times.h>
+#include <sys/poll.h>
 
 #include "bintrans.h"
 #include "fragment_hash.h"
@@ -101,8 +102,8 @@
 #define EMU_FIONREAD 0x4004667f
 #define EMU_TCGETS   0x402c7413
 #elif defined(EMU_I386)
-#define EMU_FIONREAD     0x5401
-#define EMU_TCGETS       0x541b
+#define EMU_FIONREAD     0x541b
+#define EMU_TCGETS       0x5401
 #endif
 
 #define PPC_SOCK_STREAM		1
@@ -115,6 +116,18 @@
 #define EMU_RLIMIT_STACK        3
 
 #define EMU_RUSAGE_SELF         0
+
+#define EMU_POLLIN		0x0001
+#define EMU_POLLPRI		0x0002
+#define EMU_POLLOUT		0x0004
+#define EMU_POLLERR		0x0008
+#define EMU_POLLHUP		0x0010
+#define EMU_POLLNVAL		0x0020
+#define EMU_POLLRDNORM		0x0040
+#define EMU_POLLRDBAND		0x0080
+#define EMU_POLLWRNORM		0x0100
+#define EMU_POLLWRBAND		0x0200
+#define EMU_POLLMSG		0x0400
 
 #if defined(EMU_PPC)
 #define EMU_O_ACCMODE	  0003
@@ -204,9 +217,11 @@ int emu_errnos[] = { 0,
 #define SYSCALL_CLOSE              6
 #define SYSCALL_UNLINK            10
 #define SYSCALL_TIME              13
+#define SYSCALL_LSEEK             19
 #define SYSCALL_GETPID            20
 #define SYSCALL_GETUID            24
 #define SYSCALL_ACCESS            33
+#define SYSCALL_MKDIR             39
 #define SYSCALL_TIMES             43
 #define SYSCALL_BRK               45
 #define SYSCALL_GETGID            47
@@ -218,10 +233,12 @@ int emu_errnos[] = { 0,
 #define SYSCALL_GETRLIMIT         76
 #define SYSCALL_GETRUSAGE         77
 #define SYSCALL_GETTIMEOFDAY      78
+#define SYSCALL_READLINK          85
 #define SYSCALL_MMAP              90
 #define SYSCALL_MUNMAP            91
 #define SYSCALL_SOCKETCALL       102
 #define SYSCALL_STAT             106
+#define SYSCALL_LSTAT            107
 #define SYSCALL_FSTAT            108
 #define SYSCALL_UNAME            122
 #define SYSCALL_MPROTECT         125
@@ -232,6 +249,7 @@ int emu_errnos[] = { 0,
 #define SYSCALL_WRITEV           146
 #define SYSCALL_MREMAP           163
 #define SYSCALL_RT_SIGACTION     173
+#define SYSCALL_GETCWD           182
 #define SYSCALL_FSTAT64          197
 #elif defined(EMU_I386)
 int emu_errnos[] = { 0,
@@ -263,9 +281,11 @@ int emu_errnos[] = { 0,
 #define SYSCALL_CLOSE              6
 #define SYSCALL_UNLINK            10
 #define SYSCALL_TIME              13
+#define SYSCALL_LSEEK             19
 #define SYSCALL_GETPID            20
 #define SYSCALL_GETUID            24
 #define SYSCALL_ACCESS            33
+#define SYSCALL_MKDIR             39
 #define SYSCALL_TIMES             43
 #define SYSCALL_BRK               45
 #define SYSCALL_GETGID            47
@@ -277,10 +297,12 @@ int emu_errnos[] = { 0,
 #define SYSCALL_GETRLIMIT         76
 #define SYSCALL_GETRUSAGE         77
 #define SYSCALL_GETTIMEOFDAY      78
+#define SYSCALL_READLINK          85
 #define SYSCALL_MMAP              90
 #define SYSCALL_MUNMAP            91
 #define SYSCALL_SOCKETCALL       102
 #define SYSCALL_STAT             106
+#define SYSCALL_LSTAT            107
 #define SYSCALL_FSTAT            108
 #define SYSCALL_UNAME            122
 #define SYSCALL_MPROTECT         125
@@ -290,11 +312,13 @@ int emu_errnos[] = { 0,
 #define SYSCALL_READV            145
 #define SYSCALL_WRITEV           146
 #define SYSCALL_MREMAP           163
-#define SYSCALL_RT_SIGACTION     173
+#define SYSCALL_POLL             168
+#define SYSCALL_RT_SIGACTION     174
+#define SYSCALL_GETCWD           183
 #define SYSCALL_FSTAT64          197
 #endif
 
-/* #define SYSCALL_OUTPUT */
+#define SYSCALL_OUTPUT
 #ifdef SYSCALL_OUTPUT
 #define ANNOUNCE_SYSCALL(n)         printf("%s\n", (n))
 #else
@@ -306,9 +330,7 @@ int emu_errnos[] = { 0,
 #define FAKE_FSTAT_DEV      2
 #define FAKE_FSTAT_INO      2
 #define FAKE_FSTAT_NLINK    1
-*/
 #define FAKE_FSTAT_MODE     020620
-/*
 #define FAKE_FSTAT_RDEV     0x3db
 #define FAKE_FSTAT_SIZE     0
 #define FAKE_FSTAT_BLOCKS   4
@@ -325,14 +347,20 @@ int debug = 0;
 char *emu_root = 0;
 
 word_32
-rotl (word_32 x, word_32 i)
+rotl_32 (word_32 x, word_32 i)
 {
     assert(i <= 32);
 
     return (x << i) | (x >> (32 - i));
 }
 
-#define rotl_32       rotl
+word_16
+rotl_16 (word_16 x, word_32 i)
+{
+    assert(i <= 16);
+
+    return (x << i) | (x >> (16 - i));
+}
 
 word_32
 mask_32 (word_32 begin, word_32 end)
@@ -475,6 +503,20 @@ leading_zeros (word_32 w)
     }
 
     return i;
+}
+
+word_1
+parity_even (word_32 op)
+{
+    word_1 val = 0;
+
+    while (op != 0)
+    {
+	val ^= op & 1;
+	op >>= 1;
+    }
+
+    return val ^ 1;
 }
 
 word_32
@@ -665,10 +707,15 @@ convert_native_sockaddr_to_ppc (interpreter_t *intp, struct sockaddr *sa, word_3
 
 		*used_len = 16;
 
-		mem_set_16(intp, ppc_addr + 0, AF_INET);
-		mem_set_16(intp, ppc_addr + 2, ntohs(si->sin_port));
-		mem_set_32(intp, ppc_addr + 4, ntohl(si->sin_addr.s_addr));
-		mem_set_64(intp, ppc_addr + 8, 0);
+		sc_mem_set_16(intp, ppc_addr + 0, AF_INET);
+#ifdef DIFFERENT_BYTEORDER
+		sc_mem_set_16(intp, ppc_addr + 2, swap_16(si->sin_port));
+		sc_mem_set_32(intp, ppc_addr + 4, swap_32(si->sin_addr.s_addr));
+#else
+		sc_mem_set_16(intp, ppc_addr + 2, si->sin_port);
+		sc_mem_set_32(intp, ppc_addr + 4, si->sin_addr.s_addr);
+#endif
+		sc_mem_set_64(intp, ppc_addr + 8, 0);
 	    }
 	    break;
 
@@ -678,7 +725,7 @@ convert_native_sockaddr_to_ppc (interpreter_t *intp, struct sockaddr *sa, word_3
 }
 
 static int
-convert_ppc_fdset_to_native (interpreter_t *intp, int maxfd, fd_set *fds, word_32 addr)
+convert_ppc_fdset_to_native (interpreter_t *intp, int maxfd, int *native_maxfd, fd_set *fds, word_32 addr)
 {
     word_32 bits = 0;
     int i;
@@ -697,8 +744,11 @@ convert_ppc_fdset_to_native (interpreter_t *intp, int maxfd, fd_set *fds, word_3
 		return -1;
 
 	    FD_SET(fd, fds);
-	    bits >>= 1;
+
+	    if (fd + 1 > *native_maxfd)
+		*native_maxfd = fd + 1;
 	}
+	bits >>= 1;
     }
 
     return 0;
@@ -717,12 +767,12 @@ convert_native_fdset_to_ppc (interpreter_t *intp, int maxfd, word_32 addr, fd_se
 	if ((i & 31) == 0)
 	    bits = 0;
 
-	fd = reverse_lookup_fd(intp, i);
+	fd = lookup_fd(intp, i);
 	if (fd != -1 && FD_ISSET(fd, fds))
 	    bits |= 1 << (i & 31);
 
 	if ((i & 31) == 31 || i == maxfd - 1)
-	    mem_set_32(intp, addr + ((i & ~31) >> 3), bits);
+	    sc_mem_set_32(intp, addr + ((i & ~31) >> 3), bits);
     }
 }
 
@@ -737,14 +787,14 @@ static void
 convert_native_timeval_to_ppc (interpreter_t *intp, word_32 addr, struct timeval *tv)
 {
 #ifdef FAKE_TV_SEC
-    mem_set_32(intp, addr + 0, FAKE_TV_SEC);
+    sc_mem_set_32(intp, addr + 0, FAKE_TV_SEC);
 #else
-    mem_set_32(intp, addr + 0, tv->tv_sec);
+    sc_mem_set_32(intp, addr + 0, tv->tv_sec);
 #endif
 #ifdef FAKE_TV_USEC
-    mem_set_32(intp, addr + 4, FAKE_TV_USEC);
+    sc_mem_set_32(intp, addr + 4, FAKE_TV_USEC);
 #else
-    mem_set_32(intp, addr + 4, tv->tv_usec);
+    sc_mem_set_32(intp, addr + 4, tv->tv_usec);
 #endif
 }
 
@@ -752,27 +802,27 @@ convert_native_timeval_to_ppc (interpreter_t *intp, word_32 addr, struct timeval
 static void
 convert_native_termios_to_emu (interpreter_t *intp, word_32 addr, struct termios *tio)
 {
-    mem_set_32(intp, addr + 0, tio->c_iflag);
-    mem_set_32(intp, addr + 4, tio->c_oflag);
-    mem_set_32(intp, addr + 8, tio->c_cflag);
-    mem_set_32(intp, addr + 12, tio->c_lflag);
-    mem_copy_to_user_8(intp, addr + 16, tio->c_cc, 19);
+    sc_mem_set_32(intp, addr + 0, tio->c_iflag);
+    sc_mem_set_32(intp, addr + 4, tio->c_oflag);
+    sc_mem_set_32(intp, addr + 8, tio->c_cflag);
+    sc_mem_set_32(intp, addr + 12, tio->c_lflag);
+    sc_mem_copy_to_user_8(intp, addr + 16, tio->c_cc, 19);
     /*
-    mem_set_8(intp, addr + 35, tio->c_line);
-    mem_set_32(intp, addr + 36, tio->c_ispeed);
-    mem_set_32(intp, addr + 40, tio->c_ospeed);
+    sc_mem_set_8(intp, addr + 35, tio->c_line);
+    sc_mem_set_32(intp, addr + 36, tio->c_ispeed);
+    sc_mem_set_32(intp, addr + 40, tio->c_ospeed);
     */
 }
 #elif defined(EMU_I386)
 static void
 convert_native_termios_to_emu (interpreter_t *intp, word_32 addr, struct termios *tio)
 {
-    mem_set_32(intp, addr + 0, tio->c_iflag);
-    mem_set_32(intp, addr + 4, tio->c_oflag);
-    mem_set_32(intp, addr + 8, tio->c_cflag);
-    mem_set_32(intp, addr + 12, tio->c_lflag);
-    /* mem_set_8(intp, addr + 16, tio->c_line); */
-    mem_copy_to_user_8(intp, addr + 17, tio->c_cc, 19);
+    sc_mem_set_32(intp, addr + 0, tio->c_iflag);
+    sc_mem_set_32(intp, addr + 4, tio->c_oflag);
+    sc_mem_set_32(intp, addr + 8, tio->c_cflag);
+    sc_mem_set_32(intp, addr + 12, tio->c_lflag);
+    /* sc_mem_set_8(intp, addr + 16, tio->c_line); */
+    sc_mem_copy_to_user_8(intp, addr + 17, tio->c_cc, 19);
 }
 #endif
 
@@ -780,76 +830,76 @@ static void
 convert_native_stat_to_emu (interpreter_t *intp, word_32 addr, struct stat *buf)
 {
 #if defined(EMU_PPC)
-    mem_set_32(intp, addr + 0, buf->st_dev);
-    mem_set_32(intp, addr + 4, buf->st_ino);
-    mem_set_32(intp, addr + 8, buf->st_mode);
-    mem_set_16(intp, addr + 12, buf->st_nlink);
-    mem_set_32(intp, addr + 16, buf->st_uid);
-    mem_set_32(intp, addr + 20, buf->st_gid);
-    mem_set_32(intp, addr + 24, buf->st_rdev);
-    mem_set_32(intp, addr + 28, buf->st_size);
-    mem_set_32(intp, addr + 32, buf->st_blksize);
-    mem_set_32(intp, addr + 36, buf->st_blocks);
-    mem_set_32(intp, addr + 40, buf->st_atime);
-    mem_set_32(intp, addr + 48, buf->st_mtime);
-    mem_set_32(intp, addr + 56, buf->st_ctime);
+    sc_mem_set_32(intp, addr + 0, buf->st_dev);
+    sc_mem_set_32(intp, addr + 4, buf->st_ino);
+    sc_mem_set_32(intp, addr + 8, buf->st_mode);
+    sc_mem_set_16(intp, addr + 12, buf->st_nlink);
+    sc_mem_set_32(intp, addr + 16, buf->st_uid);
+    sc_mem_set_32(intp, addr + 20, buf->st_gid);
+    sc_mem_set_32(intp, addr + 24, buf->st_rdev);
+    sc_mem_set_32(intp, addr + 28, buf->st_size);
+    sc_mem_set_32(intp, addr + 32, buf->st_blksize);
+    sc_mem_set_32(intp, addr + 36, buf->st_blocks);
+    sc_mem_set_32(intp, addr + 40, buf->st_atime);
+    sc_mem_set_32(intp, addr + 48, buf->st_mtime);
+    sc_mem_set_32(intp, addr + 56, buf->st_ctime);
 #elif defined(EMU_I386)
 #ifdef FAKE_FSTAT_DEV
-    mem_set_16(intp, addr + 0, FAKE_FSTAT_DEV);
+    sc_mem_set_16(intp, addr + 0, FAKE_FSTAT_DEV);
 #else
-    mem_set_16(intp, addr + 0, buf->st_dev);
+    sc_mem_set_16(intp, addr + 0, buf->st_dev);
 #endif
 #ifdef FAKE_FSTAT_INO
-    mem_set_32(intp, addr + 4, FAKE_FSTAT_INO);
+    sc_mem_set_32(intp, addr + 4, FAKE_FSTAT_INO);
 #else
-    mem_set_32(intp, addr + 4, buf->st_ino);
+    sc_mem_set_32(intp, addr + 4, buf->st_ino);
 #endif
 #ifdef FAKE_FSTAT_MODE
-    mem_set_16(intp, addr + 8, FAKE_FSTAT_MODE);
+    sc_mem_set_16(intp, addr + 8, FAKE_FSTAT_MODE);
 #else
-    mem_set_16(intp, addr + 8, buf->st_mode);
+    sc_mem_set_16(intp, addr + 8, buf->st_mode);
 #endif
 #ifdef FAKE_FSTAT_NLINK
-    mem_set_16(intp, addr + 10, FAKE_FSTAT_NLINK);
+    sc_mem_set_16(intp, addr + 10, FAKE_FSTAT_NLINK);
 #else
-    mem_set_16(intp, addr + 10, buf->st_nlink);
+    sc_mem_set_16(intp, addr + 10, buf->st_nlink);
 #endif
-    mem_set_16(intp, addr + 12, buf->st_uid);
-    mem_set_16(intp, addr + 14, buf->st_gid);
+    sc_mem_set_16(intp, addr + 12, buf->st_uid);
+    sc_mem_set_16(intp, addr + 14, buf->st_gid);
 #ifdef FAKE_FSTAT_RDEV
-    mem_set_16(intp, addr + 16, FAKE_FSTAT_RDEV);
+    sc_mem_set_16(intp, addr + 16, FAKE_FSTAT_RDEV);
 #else
-    mem_set_16(intp, addr + 16, buf->st_rdev);
+    sc_mem_set_16(intp, addr + 16, buf->st_rdev);
 #endif
 #ifdef FAKE_FSTAT_SIZE
-    mem_set_32(intp, addr + 20, FAKE_FSTAT_SIZE);
+    sc_mem_set_32(intp, addr + 20, FAKE_FSTAT_SIZE);
 #else
-    mem_set_32(intp, addr + 20, buf->st_size);
+    sc_mem_set_32(intp, addr + 20, buf->st_size);
 #endif
 #ifdef FAKE_FSTAT_BLKSIZE
-    mem_set_32(intp, addr + 24, FAKE_FSTAT_BLKSIZE);
+    sc_mem_set_32(intp, addr + 24, FAKE_FSTAT_BLKSIZE);
 #else
-    mem_set_32(intp, addr + 24, buf->st_blksize);
+    sc_mem_set_32(intp, addr + 24, buf->st_blksize);
 #endif
 #ifdef FAKE_FSTAT_BLOCKS
-    mem_set_32(intp, addr + 28, FAKE_FSTAT_BLOCKS);
+    sc_mem_set_32(intp, addr + 28, FAKE_FSTAT_BLOCKS);
 #else
-    mem_set_32(intp, addr + 28, buf->st_blocks);
+    sc_mem_set_32(intp, addr + 28, buf->st_blocks);
 #endif
 #ifdef FAKE_FSTAT_ATIME
-    mem_set_32(intp, addr + 32, FAKE_FSTAT_ATIME);
+    sc_mem_set_32(intp, addr + 32, FAKE_FSTAT_ATIME);
 #else
-    mem_set_32(intp, addr + 32, buf->st_atime);
+    sc_mem_set_32(intp, addr + 32, buf->st_atime);
 #endif
 #ifdef FAKE_FSTAT_MTIME
-    mem_set_32(intp, addr + 40, FAKE_FSTAT_MTIME);
+    sc_mem_set_32(intp, addr + 40, FAKE_FSTAT_MTIME);
 #else
-    mem_set_32(intp, addr + 40, buf->st_mtime);
+    sc_mem_set_32(intp, addr + 40, buf->st_mtime);
 #endif
 #ifdef FAKE_FSTAT_CTIME
-    mem_set_32(intp, addr + 48, FAKE_FSTAT_CTIME);
+    sc_mem_set_32(intp, addr + 48, FAKE_FSTAT_CTIME);
 #else
-    mem_set_32(intp, addr + 48, buf->st_ctime);
+    sc_mem_set_32(intp, addr + 48, buf->st_ctime);
 #endif
 #endif
 }
@@ -858,19 +908,19 @@ static void
 convert_native_stat_to_emu_stat64 (interpreter_t *intp, word_32 addr, struct stat *buf)
 {
 #if defined(EMU_PPC)
-    mem_set_64(intp, addr + 0, buf->st_dev);
-    mem_set_64(intp, addr + 8, buf->st_ino);
-    mem_set_32(intp, addr + 16, buf->st_mode);
-    mem_set_32(intp, addr + 20, buf->st_nlink);
-    mem_set_32(intp, addr + 24, buf->st_uid);
-    mem_set_32(intp, addr + 28, buf->st_gid);
-    mem_set_64(intp, addr + 32, buf->st_rdev);
-    mem_set_64(intp, addr + 48, buf->st_size);
-    mem_set_32(intp, addr + 56, buf->st_blksize);
-    mem_set_64(intp, addr + 64, buf->st_blocks);
-    mem_set_32(intp, addr + 72, buf->st_atime);
-    mem_set_32(intp, addr + 80, buf->st_mtime);
-    mem_set_32(intp, addr + 88, buf->st_ctime);
+    sc_mem_set_64(intp, addr + 0, buf->st_dev);
+    sc_mem_set_64(intp, addr + 8, buf->st_ino);
+    sc_mem_set_32(intp, addr + 16, buf->st_mode);
+    sc_mem_set_32(intp, addr + 20, buf->st_nlink);
+    sc_mem_set_32(intp, addr + 24, buf->st_uid);
+    sc_mem_set_32(intp, addr + 28, buf->st_gid);
+    sc_mem_set_64(intp, addr + 32, buf->st_rdev);
+    sc_mem_set_64(intp, addr + 48, buf->st_size);
+    sc_mem_set_32(intp, addr + 56, buf->st_blksize);
+    sc_mem_set_64(intp, addr + 64, buf->st_blocks);
+    sc_mem_set_32(intp, addr + 72, buf->st_atime);
+    sc_mem_set_32(intp, addr + 80, buf->st_mtime);
+    sc_mem_set_32(intp, addr + 88, buf->st_ctime);
 #elif defined(EMU_I386)
     assert(0);
 #endif
@@ -881,29 +931,96 @@ convert_native_rusage_to_ppc (interpreter_t *intp, word_32 addr, struct rusage *
 {
     convert_native_timeval_to_ppc(intp, addr + 0, &ru->ru_utime);
     convert_native_timeval_to_ppc(intp, addr + 8, &ru->ru_stime);
-    mem_set_32(intp, addr + 16, ru->ru_maxrss);
-    mem_set_32(intp, addr + 20, ru->ru_ixrss);
-    mem_set_32(intp, addr + 24, ru->ru_idrss);
-    mem_set_32(intp, addr + 28, ru->ru_isrss);
-    mem_set_32(intp, addr + 32, ru->ru_minflt);
-    mem_set_32(intp, addr + 36, ru->ru_majflt);
-    mem_set_32(intp, addr + 40, ru->ru_nswap);
-    mem_set_32(intp, addr + 44, ru->ru_inblock);
-    mem_set_32(intp, addr + 48, ru->ru_oublock);
-    mem_set_32(intp, addr + 52, ru->ru_msgsnd);
-    mem_set_32(intp, addr + 56, ru->ru_msgrcv);
-    mem_set_32(intp, addr + 60, ru->ru_nsignals);
-    mem_set_32(intp, addr + 64, ru->ru_nvcsw);
-    mem_set_32(intp, addr + 68, ru->ru_nivcsw);
+    sc_mem_set_32(intp, addr + 16, ru->ru_maxrss);
+    sc_mem_set_32(intp, addr + 20, ru->ru_ixrss);
+    sc_mem_set_32(intp, addr + 24, ru->ru_idrss);
+    sc_mem_set_32(intp, addr + 28, ru->ru_isrss);
+    sc_mem_set_32(intp, addr + 32, ru->ru_minflt);
+    sc_mem_set_32(intp, addr + 36, ru->ru_majflt);
+    sc_mem_set_32(intp, addr + 40, ru->ru_nswap);
+    sc_mem_set_32(intp, addr + 44, ru->ru_inblock);
+    sc_mem_set_32(intp, addr + 48, ru->ru_oublock);
+    sc_mem_set_32(intp, addr + 52, ru->ru_msgsnd);
+    sc_mem_set_32(intp, addr + 56, ru->ru_msgrcv);
+    sc_mem_set_32(intp, addr + 60, ru->ru_nsignals);
+    sc_mem_set_32(intp, addr + 64, ru->ru_nvcsw);
+    sc_mem_set_32(intp, addr + 68, ru->ru_nivcsw);
 }
 
 static void
 convert_native_tms_to_ppc (interpreter_t *intp, word_32 addr, struct tms *buf)
 {
-    mem_set_32(intp, addr + 0, buf->tms_utime);
-    mem_set_32(intp, addr + 4, buf->tms_stime);
-    mem_set_32(intp, addr + 8, buf->tms_cutime);
-    mem_set_32(intp, addr + 12, buf->tms_cstime);
+    sc_mem_set_32(intp, addr + 0, buf->tms_utime);
+    sc_mem_set_32(intp, addr + 4, buf->tms_stime);
+    sc_mem_set_32(intp, addr + 8, buf->tms_cutime);
+    sc_mem_set_32(intp, addr + 12, buf->tms_cstime);
+}
+
+static short
+convert_emu_pollevents_to_native (word_16 p)
+{
+    short r = 0;
+
+    if (p & EMU_POLLIN) r |= POLLIN;
+    if (p & EMU_POLLPRI) r |= POLLPRI;
+    if (p & EMU_POLLOUT) r |= POLLOUT;
+    if (p & EMU_POLLERR) r |= POLLERR;
+    if (p & EMU_POLLHUP) r |= POLLHUP;
+    if (p & EMU_POLLNVAL) r |= POLLNVAL;
+    /*
+    if (p & EMU_POLLRDNORM) r |= POLLRDNORM;
+    if (p & EMU_POLLRDBAND) r |= POLLRDBAND;
+    if (p & EMU_POLLWRNORM) r |= POLLWRNORM;
+    if (p & EMU_POLLWRBAND) r |= POLLWRBAND;
+    if (p & EMU_POLLMSG) r |= POLLMSG;
+    */
+
+    return r;
+}
+
+static void
+convert_emu_pollfds_to_native (interpreter_t *intp, word_32 addr, struct pollfd *pollfds, int n)
+{
+    int i;
+
+    for (i = 0; i < n; ++i)
+    {
+	pollfds[i].fd = lookup_fd(intp, mem_get_32(intp, addr + 8 * i + 0));
+	assert(pollfds[i].fd != -1);
+	pollfds[i].events = convert_emu_pollevents_to_native(mem_get_16(intp, addr + 8 * i + 4));
+	pollfds[i].revents = 0;
+    }
+}
+
+static word_16
+convert_native_pollevents_to_emu (short p)
+{
+    word_16 r;
+
+    if (p & POLLIN) r |= EMU_POLLIN;
+    if (p & POLLPRI) r |= EMU_POLLPRI;
+    if (p & POLLOUT) r |= EMU_POLLOUT;
+    if (p & POLLERR) r |= EMU_POLLERR;
+    if (p & POLLHUP) r |= EMU_POLLHUP;
+    if (p & POLLNVAL) r |= EMU_POLLNVAL;
+    /*
+    if (p & POLLRDNORM) r |= EMU_POLLRDNORM;
+    if (p & POLLRDBAND) r |= EMU_POLLRDBAND;
+    if (p & POLLWRNORM) r |= EMU_POLLWRNORM;
+    if (p & POLLWRBAND) r |= EMU_POLLWRBAND;
+    if (p & POLLMSG) r |= EMU_POLLMSG;
+    */
+
+    return r;
+}
+
+static void
+convert_native_pollfds_to_emu (interpreter_t *intp, struct pollfd *pollfds, word_32 addr, int n)
+{
+    int i;
+
+    for (i = 0; i < n; ++i)
+	sc_mem_set_16(intp, addr + 8 * i + 6, convert_native_pollevents_to_emu(pollfds[i].revents));
 }
 
 int
@@ -956,7 +1073,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 		    word_32 i;
 
 		    for (i = 0; i < result; ++i)
-			mem_set_8(intp, arg2 + i, mem[i]);
+			sc_mem_set_8(intp, arg2 + i, mem[i]);
 		}
 
 		free(mem);
@@ -1031,7 +1148,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 		result = open(name, flags, arg3);
 		if (result != -1)
-		    result = open_fd(intp, result);
+		    result = sc_open_fd(intp, result);
 
 		free(real_name);
 	    }
@@ -1048,7 +1165,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 	    else
 	    {
 		result = close(fd);
-		close_fd(intp, arg1);
+		sc_close_fd(intp, arg1);
 	    }
 	    break;
 
@@ -1071,7 +1188,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 		result = (int)tm;
 		if (arg1 != 0)
-		    mem_set_32(intp, arg1, (word_32)tm);
+		    sc_mem_set_32(intp, arg1, (word_32)tm);
 	    }
 	    break;
 
@@ -1095,7 +1212,27 @@ process_system_call (interpreter_t *intp, word_32 number,
 		char *real_name = strdup_from_user(intp, arg1);
 		char *name = translate_filename(real_name);
 
+#ifdef SYSCALL_OUTPUT
+		printf("name: %s\n", name);
+#endif
+
 		result = access(name, arg2);
+
+		free(real_name);
+	    }
+	    break;
+
+	case SYSCALL_MKDIR :
+	    ANNOUNCE_SYSCALL("mkdir");
+	    {
+		char *real_name = strdup_from_user(intp, arg1);
+		char *name = translate_filename(real_name);
+
+#ifdef SYSCALL_OUTPUT
+		printf("name: %s\n", name);
+#endif
+
+		result = mkdir(name, arg2);
 
 		free(real_name);
 	    }
@@ -1110,6 +1247,17 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 		if (result != -1)
 		    convert_native_tms_to_ppc(intp, arg1, &buf);
+	    }
+	    break;
+
+	case SYSCALL_LSEEK :
+	    ANNOUNCE_SYSCALL("lseek");
+	    {
+		off_t offset = (off_t)arg2;
+
+		fd = lookup_fd(intp, arg1);
+
+		result = lseek(fd, offset, arg3);
 	    }
 	    break;
 
@@ -1129,12 +1277,12 @@ process_system_call (interpreter_t *intp, word_32 number,
 		    {
 			word_32 addr;
 
-			addr = mmap_anonymous(intp, new_top_aligned - old_top_aligned, PAGE_READABLE | PAGE_WRITEABLE, 1, old_top_aligned);
+			addr = sc_mmap_anonymous(intp, new_top_aligned - old_top_aligned, PAGE_READABLE | PAGE_WRITEABLE, 1, old_top_aligned);
 
 			assert(addr != (word_32)-1);
 		    }
 
-		    intp->data_segment_top = new_top;
+		    sc_set_data_segment_top(intp, new_top);
 		}
 		else
 		    ;		/* FIXME: unmap freed area */
@@ -1177,8 +1325,6 @@ process_system_call (interpreter_t *intp, word_32 number,
 			    result = ioctl(fd, TCGETS, &arg);
 			    if (result == 0)
 				convert_native_termios_to_emu(intp, arg3, &arg);
-			    else
-				assert(0);
 			}
 			break;
 
@@ -1188,7 +1334,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 			    result = ioctl(fd, FIONREAD, &arg);
 			    if (result == 0)
-				mem_set_32(intp, arg3, (word_32)arg);
+				sc_mem_set_32(intp, arg3, (word_32)arg);
 			}
 			break;
 
@@ -1268,8 +1414,8 @@ process_system_call (interpreter_t *intp, word_32 number,
 	case SYSCALL_GETRLIMIT :
 	    ANNOUNCE_SYSCALL("getrlimit");
 	    assert(arg1 == EMU_RLIMIT_STACK);
-	    mem_set_32(intp, arg2 + 0, STACK_SIZE * 1024);
-	    mem_set_32(intp, arg2 + 4, STACK_SIZE * 1024);
+	    sc_mem_set_32(intp, arg2 + 0, STACK_SIZE * 1024);
+	    sc_mem_set_32(intp, arg2 + 4, STACK_SIZE * 1024);
 	    result = 0;
 	    break;
 
@@ -1306,15 +1452,50 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 		    if (tzp != 0)
 		    {
-			mem_set_32(intp, arg2 + 0, tz.tz_minuteswest);
-			mem_set_32(intp, arg2 + 4, tz.tz_dsttime);
+			sc_mem_set_32(intp, arg2 + 0, tz.tz_minuteswest);
+			sc_mem_set_32(intp, arg2 + 4, tz.tz_dsttime);
 		    }
 		}
 	    }
 	    break;
 
+	case SYSCALL_READLINK :
+	    ANNOUNCE_SYSCALL("readlink");
+	    {
+		char *real_name = strdup_from_user(intp, arg1);
+		char *name = translate_filename(real_name);
+		char *buf = (char*)malloc(arg3);
+
+#ifdef SYSCALL_OUTPUT
+		printf("name: %s\n", name);
+#endif
+
+		assert(buf != 0);
+
+		result = readlink(name, buf, arg3);
+
+		if (result != -1)
+		    sc_mem_copy_to_user_8(intp, arg2, buf, arg3);
+
+		free(buf);
+		free(real_name);
+	    }
+	    break;
+
 	case SYSCALL_MMAP :
 	    ANNOUNCE_SYSCALL("mmap");
+#ifdef EMU_I386
+	    {
+		word_32 args = arg1;
+
+		arg1 = mem_get_32(intp, args + 0);
+		arg2 = mem_get_32(intp, args + 4);
+		arg3 = mem_get_32(intp, args + 8);
+		arg4 = mem_get_32(intp, args + 12);
+		arg5 = mem_get_32(intp, args + 16);
+		arg6 = mem_get_32(intp, args + 20);
+	    }
+#endif
 #ifdef SYSCALL_OUTPUT
 	    printf("start: 0x%08x  length: 0x%x\n", arg1, arg2);
 #endif
@@ -1330,7 +1511,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 		    assert(arg5 == -1);
 		    assert(arg6 == 0);
 
-		    addr = mmap_anonymous(intp, len, prot_to_flags(arg3), arg4 & PPC_MAP_FIXED, arg1);
+		    addr = sc_mmap_anonymous(intp, len, prot_to_flags(arg3), arg4 & PPC_MAP_FIXED, arg1);
 
 		    result = (int)addr;
 		}
@@ -1344,7 +1525,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 		    }
 		    else
 		    {
-			addr = mmap_file(intp, len, prot_to_flags(arg3), arg4 & PPC_MAP_FIXED, arg1, fd, arg6);
+			addr = sc_mmap_file(intp, len, prot_to_flags(arg3), arg4 & PPC_MAP_FIXED, arg1, fd, arg6);
 
 			result = (int)addr;
 		    }
@@ -1364,8 +1545,8 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 		mem_len = PPC_PAGE_ALIGN(arg2);
 
-		mprotect_pages(intp, arg1, mem_len, 0, 0, 0);
-		natively_mprotect_pages(intp, arg1, mem_len);
+		sc_mprotect_pages(intp, arg1, mem_len, 0, 0, 0);
+		sc_natively_mprotect_pages(intp, arg1, mem_len);
 
 		result = 0;
 	    }
@@ -1409,7 +1590,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 			result = socket(ARG(0), type, 0);
 			if (result != -1)
-			    result = open_fd(intp, result);
+			    result = sc_open_fd(intp, result);
 		    }
 		    break;
 
@@ -1457,9 +1638,14 @@ process_system_call (interpreter_t *intp, word_32 number,
 					assert(ARG(2) == 16);
 
 					si.sin_family = AF_INET;
-					si.sin_port = htons(mem_get_16(intp, ARG(1) + 2));
-					si.sin_addr.s_addr = htonl(mem_get_32(intp, ARG(1) + 4));
+					si.sin_port = mem_get_16(intp, ARG(1) + 2);
+					si.sin_addr.s_addr = mem_get_32(intp, ARG(1) + 4);
 					memset(si.sin_zero, 0, sizeof(si.sin_zero));
+
+#ifdef DIFFERENT_BYTEORDER
+					si.sin_port = swap_16(si.sin_port);
+					si.sin_addr.s_addr = swap_32(si.sin_addr.s_addr);
+#endif
 
 					result = connect(fd, &si, sizeof(si));
 				    }
@@ -1494,7 +1680,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 				convert_native_sockaddr_to_ppc(intp, (struct sockaddr*)buffer, ARG(1), mem_get_32(intp, ARG(2)), &used_len);
 
-				mem_set_32(intp, ARG(2), used_len);
+				sc_mem_set_32(intp, ARG(2), used_len);
 			    }
 			}
 		    }
@@ -1523,7 +1709,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 				convert_native_sockaddr_to_ppc(intp, (struct sockaddr*)buffer, ARG(1), mem_get_32(intp, ARG(2)), &used_len);
 
-				mem_set_32(intp, ARG(2), used_len);
+				sc_mem_set_32(intp, ARG(2), used_len);
 			    }
 			}
 		    }
@@ -1574,13 +1760,22 @@ process_system_call (interpreter_t *intp, word_32 number,
 	    break;
 
 	case SYSCALL_STAT :
+	case SYSCALL_LSTAT :	/* FIXME: lstat handles symlinks differently! */
 	    ANNOUNCE_SYSCALL("stat");
 	    {
 		char *real_name = strdup_from_user(intp, arg1);
 		char *name = translate_filename(real_name);
 		struct stat buf;
 
-		result = stat(name, &buf);
+#ifdef SYSCALL_OUTPUT
+		printf("name: %s\n", name);
+#endif
+
+		if (number == SYSCALL_STAT)
+		    result = stat(name, &buf);
+		else
+		    result = lstat(name, &buf);
+
 		if (result == 0)
 		    convert_native_stat_to_emu(intp, arg2, &buf);
 
@@ -1616,12 +1811,12 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 		if (result == 0)
 		{
-		    strcpy_to_user(intp, arg1 + 0 * 65, "Linux");
-		    strcpy_to_user(intp, arg1 + 1 * 65, un.nodename);
-		    strcpy_to_user(intp, arg1 + 2 * 65, "2.4.18");
-		    strcpy_to_user(intp, arg1 + 3 * 65, "#1 Sun Apr 7 14:10:26 EDT 2002");
-		    strcpy_to_user(intp, arg1 + 4 * 65, "ppc");
-		    /* strcpy_to_user(intp, arg1 + 5 * 65, ""); */
+		    sc_strcpy_to_user(intp, arg1 + 0 * 65, "Linux");
+		    sc_strcpy_to_user(intp, arg1 + 1 * 65, un.nodename);
+		    sc_strcpy_to_user(intp, arg1 + 2 * 65, "2.4.18");
+		    sc_strcpy_to_user(intp, arg1 + 3 * 65, "#1 Sun Apr 7 14:10:26 EDT 2002");
+		    sc_strcpy_to_user(intp, arg1 + 4 * 65, "ppc");
+		    /* sc_strcpy_to_user(intp, arg1 + 5 * 65, ""); */
 		}
 	    }
 	    break;
@@ -1638,8 +1833,8 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 		assert(is_mapped(intp, arg1, mem_len, 0));
 
-		mprotect_pages(intp, arg1, mem_len, flags | PAGE_MMAPPED, 0, 0);
-		natively_mprotect_pages(intp, arg1, mem_len);
+		sc_mprotect_pages(intp, arg1, mem_len, flags | PAGE_MMAPPED, 0, 0);
+		sc_natively_mprotect_pages(intp, arg1, mem_len);
 
 		result = 0;
 	    }
@@ -1652,8 +1847,9 @@ process_system_call (interpreter_t *intp, word_32 number,
 	    break;
 
 	case SYSCALL_LLSEEK :
+	    ANNOUNCE_SYSCALL("llseek");
 	    {
-		off_t offset = ((off_t)arg2 << 32) | (off_t)arg3;
+		off_t offset = (off_t)(sword_32)arg3; /* FIXME: arg2 contains hi part */
 		off_t pos;
 
 		fd = lookup_fd(intp, arg1);
@@ -1664,8 +1860,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 		    result = -1;
 		else
 		{
-		    mem_set_32(intp, arg4 + 0, pos >> 32);
-		    mem_set_32(intp, arg4 + 4, pos & 0xffffffff);
+		    sc_mem_set_64(intp, arg4, pos);
 
 		    result = 0;
 		}
@@ -1679,7 +1874,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 		struct timeval *tvp;
 		fd_set read_set, write_set, exc_set;
 		fd_set *rsp, *wsp, *esp;
-		int maxfd;
+		int maxfd, native_maxfd = 0;
 
 		assert(arg1 < 4096);
 
@@ -1687,7 +1882,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 		if (arg2 != 0)
 		{
-		    convert_ppc_fdset_to_native(intp, maxfd, &read_set, arg2);
+		    convert_ppc_fdset_to_native(intp, maxfd, &native_maxfd, &read_set, arg2);
 		    rsp = &read_set;
 		}
 		else
@@ -1695,7 +1890,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 		if (arg3 != 0)
 		{
-		    convert_ppc_fdset_to_native(intp, maxfd, &write_set, arg3);
+		    convert_ppc_fdset_to_native(intp, maxfd, &native_maxfd, &write_set, arg3);
 		    wsp = &write_set;
 		}
 		else
@@ -1704,7 +1899,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 		if (arg4 != 0)
 		{
-		    convert_ppc_fdset_to_native(intp, maxfd, &exc_set, arg4);
+		    convert_ppc_fdset_to_native(intp, maxfd, &native_maxfd, &exc_set, arg4);
 		    esp = &exc_set;
 		}
 		else
@@ -1718,7 +1913,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 		else
 		    tvp = 0;
 
-		result = select(maxfd, rsp, wsp, esp, tvp);
+		result = select(native_maxfd, rsp, wsp, esp, tvp);
 
 		if (result >= 0)
 		{
@@ -1764,7 +1959,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 			word_32 addr = mem_get_32(intp, arg2 + i * 8 + 0);
 			word_32 len = mem_get_32(intp, arg2 + i * 8 + 4);
 
-			mem_copy_to_user_8(intp, addr, buf + num_copied, len);
+			sc_mem_copy_to_user_8(intp, addr, buf + num_copied, len);
 			num_copied += len;
 		    }
 
@@ -1835,7 +2030,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 			{
 			    word_32 addr;
 
-			    addr = mmap_anonymous(intp, new_len - old_len, flags, 1, arg1 + old_len);
+			    addr = sc_mmap_anonymous(intp, new_len - old_len, flags, 1, arg1 + old_len);
 
 			    assert(addr != (word_32)-1);
 
@@ -1849,8 +2044,8 @@ process_system_call (interpreter_t *intp, word_32 number,
 		    }
 		    else if (old_len > new_len)
 		    {
-			mprotect_pages(intp, arg1 + new_len, old_len - new_len, 0, 0, 0);
-			natively_mprotect_pages(intp, arg1 + new_len, old_len - new_len);
+			sc_mprotect_pages(intp, arg1 + new_len, old_len - new_len, 0, 0, 0);
+			sc_natively_mprotect_pages(intp, arg1 + new_len, old_len - new_len);
 
 			result = arg1;
 		    }
@@ -1865,9 +2060,34 @@ process_system_call (interpreter_t *intp, word_32 number,
 	    }
 	    break;
 
+	case SYSCALL_POLL :
+	    ANNOUNCE_SYSCALL("poll");
+	    {
+		struct pollfd *pollfds = (struct pollfd*)malloc(sizeof(struct pollfd) * arg2);
+
+		assert(pollfds != 0);
+
+		convert_emu_pollfds_to_native(intp, arg1, pollfds, arg2);
+
+		result = poll(pollfds, arg2, arg3);
+
+		if (result != -1)
+		    convert_native_pollfds_to_emu(intp, pollfds, arg1, arg2);
+
+		free(pollfds);
+	    }
+	    break;
+
 	case SYSCALL_RT_SIGACTION :
 	    ANNOUNCE_SYSCALL("rt_sigaction");
 	    result = 0;		/* FIXME: this is certainly a bit naive. */
+	    break;
+
+	case SYSCALL_GETCWD :
+	    ANNOUNCE_SYSCALL("getcwd");
+	    assert(arg2 >= 2);
+	    sc_strcpy_to_user(intp, arg1, "/");	/* FIXME: do the real thing */
+	    result = 2;
 	    break;
 
 	case SYSCALL_FSTAT64 :
@@ -1894,7 +2114,13 @@ process_system_call (interpreter_t *intp, word_32 number,
     }
 
 #ifdef SYSCALL_OUTPUT
-    printf("  %08x\n", (word_32)result);
+    {
+	int old_errno = errno;
+
+	printf("  %08x\n", (word_32)result);
+
+	errno = old_errno;
+    }
 #endif
 
 #ifdef CROSSDEBUGGER
@@ -1931,9 +2157,11 @@ handle_system_call (interpreter_t *intp)
 	{ SYSCALL_CLOSE, 1 },
 	{ SYSCALL_UNLINK, 1 },
 	{ SYSCALL_TIME, 1 },
+	{ SYSCALL_LSEEK, 3 },
 	{ SYSCALL_GETPID, 0 },
 	{ SYSCALL_GETUID, 0 },
 	{ SYSCALL_ACCESS, 2 },
+	{ SYSCALL_MKDIR, 2 },
 	{ SYSCALL_TIMES, 1 },
 	{ SYSCALL_BRK, 1 },
 	{ SYSCALL_GETGID, 0 },
@@ -1945,10 +2173,12 @@ handle_system_call (interpreter_t *intp)
 	{ SYSCALL_GETRLIMIT, 2 },
 	{ SYSCALL_GETRUSAGE, 2 },
 	{ SYSCALL_GETTIMEOFDAY, 2 },
+	{ SYSCALL_READLINK, 3 },
 	{ SYSCALL_MMAP, 6 },
 	{ SYSCALL_MUNMAP, 2 },
 	{ SYSCALL_SOCKETCALL, 2 },
 	{ SYSCALL_STAT, 2 },
+	{ SYSCALL_LSTAT, 2 },
 	{ SYSCALL_FSTAT, 2 },
 	{ SYSCALL_UNAME, 1 },
 	{ SYSCALL_MPROTECT, 3 },
@@ -1958,7 +2188,9 @@ handle_system_call (interpreter_t *intp)
 	{ SYSCALL_READV, 3 },
 	{ SYSCALL_WRITEV, 3 },
 	{ SYSCALL_MREMAP, 4 },
+	{ SYSCALL_POLL, 3 },
 	{ SYSCALL_RT_SIGACTION, 3 },
+	{ SYSCALL_GETCWD, 2 },
 	{ SYSCALL_FSTAT64, 3 },
 	{ (word_32)-1, 0 }
     };
@@ -2003,33 +2235,25 @@ handle_system_call (interpreter_t *intp)
 	intp->regs_GPR[3] = (word_32)result;
 	intp->regs_SPR[1] &= ~0x10000000;
     }
+
+#ifdef CROSSDEBUGGER
+    compiler_intp->regs_GPR[3] = intp->regs_GPR[3];
+    compiler_intp->regs_SPR[1] = intp->regs_SPR[1];
+#endif
 #elif defined(EMU_I386)
-    if (num_args <= 3)
-	result = process_system_call(intp, num,
-				     intp->regs_GPR[3], intp->regs_GPR[1], intp->regs_GPR[2],
-				     0, 0, 0);
-    else
-    {
-	word_32 arg1, arg2, arg3, arg4, arg5 = 0, arg6 = 0;
+    assert(num == SYSCALL_MMAP || num_args <= 5);
 
-	arg1 = mem_get_32(intp, intp->regs_GPR[3] + 0);
-	arg2 = mem_get_32(intp, intp->regs_GPR[3] + 4);
-	arg3 = mem_get_32(intp, intp->regs_GPR[3] + 8);
-	arg4 = mem_get_32(intp, intp->regs_GPR[3] + 12);
-	if (num_args >= 5)
-	{
-	    arg5 = mem_get_32(intp, intp->regs_GPR[3] + 16);
-	    if (num_args >= 6)
-		arg6 = mem_get_32(intp, intp->regs_GPR[3] + 20);
-	}
-
-	result = process_system_call(intp, num, arg1, arg2, arg3, arg4, arg5, arg6);
-    }
+    result = process_system_call(intp, num,
+				 intp->regs_GPR[3], intp->regs_GPR[1], intp->regs_GPR[2],
+				 intp->regs_GPR[6], intp->regs_GPR[7], 0);
 
     if (result == -1)
 	intp->regs_GPR[0] = (word_32)-lookup_errno(errno);
     else
 	intp->regs_GPR[0] = (word_32)result;
+#ifdef CROSSDEBUGGER
+    compiler_intp->regs_GPR[0] = intp->regs_GPR[0];
+#endif
 #endif
 
     intp->have_syscalled = 1;
@@ -2136,6 +2360,8 @@ setup_stack (interpreter_t *intp, word_32 p, char *argv[], Elf32_Ehdr *ehdr, wor
 			   "OSTYPE=linux-gnu",
 			   "TERM=dumb",
 			   "PATH=/usr/local/bin:/bin:/usr/bin:/usr/X11R6/bin:.",
+			   "DISPLAY=127.0.0.1:0.0",
+			   "HOME=/home/schani",
 			   0 };
 #endif
 
@@ -2935,7 +3161,8 @@ main (int argc, char *argv[])
 #if defined(EMU_PPC)
     ppc_argv[0] = "/bigben/home/schani/a.out";
 #elif defined(EMU_I386)
-    ppc_argv[0] = "/mnt/homes/nethome/hansolo/schani/Work/unix/bintrans/i386-root/bin/hello.dyn";
+    /* ppc_argv[0] = "/mnt/homes/nethome/hansolo/schani/Work/unix/bintrans/i386-root/bin/hello.dyn"; */
+    ppc_argv[0] = argv[1];
 #endif
     for (i = 2; i < argc; ++i)
 	ppc_argv[i - 1] = argv[i];
@@ -3032,7 +3259,6 @@ main (int argc, char *argv[])
     assert((stack_bottom & 15) == 0);
 
     setup_registers(&compiler, stack_bottom);
-    compiler.regs_GPR[1] = stack_bottom;
     compiler.pc = entry;
 #endif
 

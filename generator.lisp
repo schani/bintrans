@@ -1067,7 +1067,7 @@
 			       (make-expr :kind 'set :operands (list lvalue
 								     (generate-expr (third expr) bindings (expr-width lvalue) (expr-type lvalue))))))
 			    (width
-			     (let ((width (second expr)))
+			     (let ((width (eval (second expr))))
 			       (generate-expr (third expr) bindings width (or required-type 'integer))))
 			    (promote
 			     (let ((width (second expr))
@@ -1230,6 +1230,10 @@
 			    ((leading-zeros trailing-zeros population)
 			     (let ((op (generate-expr (second expr) bindings (machine-word-bits *this-machine*))))
 			       (make-expr :kind (first expr) :type 'integer :width (or required-width (machine-word-bits *this-machine*))
+					  :operands (list op))))
+			    (parity-even
+			     (let ((op (generate-expr (second expr) bindings (machine-word-bits *this-machine*))))
+			       (make-expr :kind 'parity-even :type 'integer :width 1
 					  :operands (list op))))
 			    ((single-to-double double-to-single)
 			     (multiple-value-bind (old-width new-width)
@@ -1429,6 +1433,7 @@
 	  (maskmask (bit-width mask)
 		    (format nil "maskmask(~A, ~A, ~A)" bit-width (expr-width mask) (generate-interpreter mask bindings)))
 	  (leading-zeros (value) (format nil "leading_zeros(~A)" (generate-interpreter value bindings)))
+	  (parity-even (value) (format nil "parity_even(~A)" (generate-interpreter value bindings)))
 	  (convert-float (value)
 			 (format nil "((~A)~A)" (c-type (expr-width expr) 'float) (generate-interpreter value bindings)))
 	  (bits-to-float (value)
@@ -4507,7 +4512,7 @@ save_live = live_~A;~%"
 	       (nop ()
 		    (format t "/* nop */~%"))
 	       (not-implemented ()
-				(format t "assert(0); /* not implemented */~%"))
+				(format t "/* not implemented */~%"))
 	       (ignore (value)
 		       (format t "/* ignore */~%"))
 	       (system-call ()

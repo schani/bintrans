@@ -157,7 +157,7 @@ reg_range_t integer_reg_range[] = { { 4, 16 }, { 18, 26 }, { 0, 0 } };
 #elif defined(ARCH_PPC)
 #if defined(EMU_I386)
 #define FIRST_NATIVE_INTEGER_HOST_REG          14
-#define NUM_NATIVE_INTEGER_HOST_REGS           10
+#define NUM_NATIVE_INTEGER_HOST_REGS           11
 #else
 #error unsupported foreign architecture
 #endif
@@ -2245,6 +2245,8 @@ init_compiler (interpreter_t *intp, interpreter_t *dbg_intp)
     compiler_intp = intp;
 #ifdef CROSSDEBUGGER
     debugger_intp = dbg_intp;
+
+    compare_register_sets(compiler_intp->pc);
 #endif
 
 #ifdef NEED_REGISTER_ALLOCATOR
@@ -2902,22 +2904,27 @@ compile_fragment_if_needed (word_32 addr, unsigned char *preferred_alloced_integ
 #endif
 
 #if defined(CROSSDEBUGGER) && !defined(DYNAMO_TRACES)
-    printf("*** jumping to %08x\n", addr);
-    reset_mem_trace();
-    trace_mem = 1;
-    debugger_intp->have_jumped = 0;
-    while (!debugger_intp->have_jumped)
-	interpret_insn(debugger_intp);
-    trace_mem = 0;
-    move_regs_compiler_to_interpreter(compiler_intp);
-    compare_register_sets(addr);
-    compare_mem_writes(debugger_intp, compiler_intp);
-    if (debugger_intp->pc != addr)
+    if (!debugger_intp->have_syscalled)
     {
-	printf("different target: should be %08x, is %08x\n",
-	       debugger_intp->pc, addr);
-	assert(0);
+	printf("*** jumping to %08x\n", addr);
+	reset_mem_trace();
+	trace_mem = 1;
+	debugger_intp->have_jumped = 0;
+	while (!debugger_intp->have_jumped)
+	    interpret_insn(debugger_intp);
+	trace_mem = 0;
+	move_regs_compiler_to_interpreter(compiler_intp);
+	compare_register_sets(addr);
+	compare_mem_writes(debugger_intp, compiler_intp);
+	if (debugger_intp->pc != addr)
+	{
+	    printf("different target: should be %08x, is %08x\n",
+		   debugger_intp->pc, addr);
+	    assert(0);
+	}
     }
+    else
+	debugger_intp->have_syscalled = 0;
 #endif
 
 #ifdef DYNAMO_TRACES
@@ -3561,12 +3568,23 @@ void
 handle_compiler_system_call (void)
 {
     move_regs_compiler_to_interpreter(compiler_intp);
-    /*
-    printf("*** system call\n");
-    dump_ppc_registers(compiler_intp);
-    */
 
+#ifdef CROSSDEBUGGER
+    assert(debugger_intp->have_syscalled == 0);
+
+    printf("*** performing system call\n");
+    reset_mem_trace();
+    trace_mem = 1;
+    debugger_intp->have_jumped = debugger_intp->have_syscalled = 0;
+    while (!debugger_intp->have_jumped && !debugger_intp->have_syscalled)
+	interpret_insn(debugger_intp);
+    assert(debugger_intp->have_syscalled);
+    trace_mem = 0;
+    compare_register_sets(debugger_intp->pc);
+    compare_mem_writes(debugger_intp, compiler_intp);
+#else
     handle_system_call(compiler_intp);
+#endif
 
     move_regs_interpreter_to_compiler(compiler_intp);
 }
