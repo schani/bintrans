@@ -8,6 +8,7 @@ mapping.ml
 matcher.ml
 memoize.ml
 monad.ml
+normal_form.ml
 pruner.ml
 simplify.ml
 switcher.ml

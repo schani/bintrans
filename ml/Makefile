@@ -1,17 +1,17 @@
 WARN_OPTS = -w A -w e
 
-OC = ocamlc -g $(WARN_OPTS)
-OEXT = cmo
-ENGINE = engine
-#OC = ocamlopt $(WARN_OPTS)
-#OEXT = cmx
+#OC = ocamlc -g $(WARN_OPTS)
+#OEXT = cmo
+#ENGINE = engine
+OC = ocamlopt $(WARN_OPTS)
+OEXT = cmx
 AEXT = cma
 
 ENGINE_OBJS = monad.$(OEXT) memoize.$(OEXT) bitmath.$(OEXT) utils.$(OEXT) \
 	      expr.$(OEXT) cond_monad.$(OEXT) uncertainty.$(OEXT) \
 	      machine.$(OEXT) mapping.$(OEXT) \
 	      matcher.$(OEXT) \
-	      simplifiers.$(OEXT) simplify.$(OEXT) \
+	      normal_form.$(OEXT) simplifiers.$(OEXT) simplify.$(OEXT) \
 	      irmacros.$(OEXT) \
 	      pruner.$(OEXT) \
 	      explorer.$(OEXT) \

@@ -199,13 +199,13 @@
   (set ?rs (sex 1 (register ?rb)))
   1
   ("~A = sex_8(~A);" rs rb)
-  ("emit(COMPOSE_SEXTB(31, ~A, ~A));" rb rs))
+  ("emit(COMPOSE_SEXTB(~A, ~A));" rb rs))
 
 (defmatcher sextw
   (set ?rs (sex 2 (register ?rb)))
   1
   ("~A = sex_16(~A);" rs rb)
-  ("emit(COMPOSE_SEXTW(31, ~A, ~A));" rb rs))
+  ("emit(COMPOSE_SEXTW(~A, ~A));" rb rs))
 
 (defopmatcher subq (-i a b) "~A - ~A")
 

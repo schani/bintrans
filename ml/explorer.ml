@@ -30,6 +30,7 @@ open Expr
 open Matcher
 open Pruner
 open Simplify
+open Normal_form
 open Mapping
 open Machine
 
@@ -152,7 +153,7 @@ let explore_all_fields stmt mapping fields target_insns =
 	    cm_yield
 	      (cm_bind (simplify_and_prune_stmt_until_fixpoint mapping fields stmt)
 		 (fun sstmt -> sex_simplify_stmt mapping fields sstmt))
-	  in print_stmt (cfold_stmt fields new_stmt) ;
+	  in print_string "/* " ; print_stmt (cfold_stmt [] new_stmt) ; print_string " */\n" ;
 	    [{ stmt = new_stmt ;
 	       form_conditions = conds_so_far @ (simplify_conditions new_conds) ;
 	       matches = add_stmt_form_match fields new_stmt [] }] ;

@@ -1,0 +1,19 @@
+#!/bin/bash
+
+./test add >mlgen_ppc_to_alpha_add.h
+./test addi >mlgen_ppc_to_alpha_addi.h
+./test addis >mlgen_ppc_to_alpha_addis.h
+./test and >mlgen_ppc_to_alpha_and.h
+./test andc >mlgen_ppc_to_alpha_andc.h
+#./test divw >mlgen_ppc_to_alpha_divw.h
+#./test divwu >mlgen_ppc_to_alpha_divwu.h
+./test eqv >mlgen_ppc_to_alpha_eqv.h
+./test extsb >mlgen_ppc_to_alpha_extsb.h
+./test extsh >mlgen_ppc_to_alpha_extsh.h
+./test lbz >mlgen_ppc_to_alpha_lbz.h
+#./test lbzu >mlgen_ppc_to_alpha_lbzu.h
+#./test lbzux >mlgen_ppc_to_alpha_lbzux.h
+./test lbzx >mlgen_ppc_to_alpha_lbzx.h
+#./test rlwimi >mlgen_ppc_to_alpha_rlwimi.h
+#./test rlwinm >mlgen_ppc_to_alpha_rlwinm.h
+#./test rlwnm >mlgen_ppc_to_alpha_rlwnm.h

@@ -22,6 +22,7 @@
 
 open List
 open Int64
+open Sys
 
 open Utils
 open Expr
@@ -280,6 +281,8 @@ let test_sex insn =
 
 (* test_sex (find_insn ppc_insns "andc") ;; *)
 
-print_gen (find_insn ppc_insns "lbz") ;;
+iter
+  (fun insn_name -> print_gen (find_insn ppc_insns insn_name))
+  (tl (Array.to_list argv)) ;;
 
 exit 0 ;;

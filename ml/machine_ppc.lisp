@@ -28,7 +28,7 @@
 ;;;; machine macros
 
 (defmachinemacro ppc-mask (begin-bit end-bit)
-  (mask (-i 31 begin-bit) (-i 31 end-bit)))
+  (mask (-i 31 end-bit) (-i 31 begin-bit)))
 
 ;;;; insns
 
@@ -122,12 +122,22 @@
 (definsn lbz ((ra 0 32) (d (0)))
   (set rd (zex 1 (load-byte (if (int-zero-p 8 ra)
 				(sex 2 d)
-				(+i (register ra) (sex 2 d)))))))
+				(sex 4 (+i (register ra) (sex 2 d))))))))
 
 (definsn lbzu ((d (0)))
   (seq
    (set ra (+i (register ra) (sex 2 d)))
    (set rd (zex 1 (load-byte (register ra))))))
+
+(definsn lbzux ()
+  (seq
+   (set ra (+i (register ra) (register rb)))
+   (set rd (zex 1 (load-byte (register ra))))))
+
+(definsn lbzx ((ra 0 32))
+  (set rd (zex 1 (load-byte (if (int-zero-p 8 ra)
+				(register rb)
+			      (sex 4 (+i (register ra) (register rb))))))))
 
 (definsn rlwimi ((sh 0 32) (mb 0 32) (me 0 32))
   (set ra (bit-or (bit-and (rotl 4 (register rs) sh) (ppc-mask mb me))
