@@ -211,4 +211,11 @@ init_unaligned (void)
     assert(error == 0);
 }
 
+#else
+
+void
+init_unaligned (void)
+{
+}
+
 #endif
