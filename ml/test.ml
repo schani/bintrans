@@ -36,11 +36,22 @@ let rec repeat_until_fixpoint fn data =
   else
     repeat_until_fixpoint fn ndata
 
+let rec repeat_prune_until_fixpoint fields stmt =
+  let (pstmt, conds) = prune_stmt fields stmt
+  in if stmt = pstmt then
+      (stmt, [])
+    else
+      let (nstmt, nconds) = repeat_prune_until_fixpoint fields pstmt
+      in (nstmt, nconds @ conds)
+
 let explore_all_fields stmt fields =
   let rec explore fields_so_far rest_fields stmts_so_far =
     match rest_fields with
       [] ->
-	let new_stmt = repeat_until_fixpoint (fun stmt -> prune_stmt fields_so_far (simplify_stmt fields_so_far stmt)) stmt
+	let new_stmt = repeat_until_fixpoint
+	    (fun stmt ->
+	      fst (prune_stmt fields_so_far (simplify_stmt fields_so_far stmt)))
+	    stmt
 	in if mem new_stmt stmts_so_far then
 	  stmts_so_far
 	else
@@ -52,8 +63,7 @@ let explore_all_fields stmt fields =
   in
     explore [] fields []
       
-
-let main () =
+let test_expore () =
   let r1 = (1, Int)
   and r2 = (2, Int)
   and r3 = (3, Int)
@@ -64,12 +74,22 @@ let main () =
   and stmt5 = Assign (r1, make_mask (IntConst (IntLiteral 8L)) (IntConst (IntLiteral 15L)))
   and stmt6 = make_ppc_rlwinm r1 (Register r2) (IntConst (IntField "sh")) (IntConst (IntField "mb")) (IntConst (IntField "me"))
   and fields = [("sh", 16L); ("mb", 16L); ("me", 31L)]
-  in let stmt = repeat_until_fixpoint (fun stmt -> prune_stmt fields (simplify_stmt fields stmt)) stmt6
+  in let stmt = repeat_until_fixpoint (fun stmt -> fst (prune_stmt fields (simplify_stmt fields stmt))) stmt6
   in print_stmt stmt ;
   let (best_stmt_match, best_sub_matches_alist) = recursively_match_stmt fields stmt alpha_insns
   in print_whole_match best_stmt_match best_sub_matches_alist ;
   let stmts = explore_all_fields stmt6 [("sh", 0L, 32L); ("mb", 0L, 32L); ("me", 0L, 32L)]
-  in print_newline () ;;
+  in print_newline ()
+
+let main () =
+  let r1 = (1, Int)
+  and r2 = (2, Int)
+  and r3 = (3, Int)
+  in let stmt1 = Assign (r1, Binary (BitAnd, Binary (ShiftL, Register r2, IntConst (IntField "sh")), int_literal_expr 0xffffL))
+  in let (stmt, conds) = repeat_prune_until_fixpoint [("sh", 17L)] stmt1
+  in print_stmt stmt1 ; print_string "->\n" ;
+  print_stmt stmt ; print_string "when\n" ;
+  iter (fun x -> print_expr (cfold_expr [] x) ; print_newline ()) conds;;
 
 main ();;
 exit 0;;

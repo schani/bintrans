@@ -41,6 +41,27 @@ let bitmask s l =
   else
     shiftl (lshiftr minus_one (sub 64L l)) s
 
+let rec low_one_bits int =
+  if is_bit_set int 0 then
+    logor (shift_left (low_one_bits (shift_right_logical int 1)) 1) one
+  else
+    zero
+
+let both_low_one_bits arg1 arg2 =
+  logand (low_one_bits arg1) (low_one_bits arg2)
+
+let rec low_mask int =
+  if int = zero then
+    zero
+  else
+    logor (shift_left (low_mask (shift_right_logical int 1)) 1) one
+
+let rec high_mask int =
+  if int = zero then
+    zero
+  else
+    logor (shift_right_logical (high_mask (shift_left int 1)) 1) (shift_left one 63)
+
 (*** extracting/inserting ***)
 
 let extract_bits x s l =

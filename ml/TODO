@@ -1,0 +1,2 @@
+sometimes we use width ops in bits and known.  the upper parts of the results
+of these are undefined, but known and bits need them defined!  apply a mask.

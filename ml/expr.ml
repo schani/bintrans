@@ -51,6 +51,7 @@ type unary_op =
   | IntEven
   | IntNeg | BitNeg | ConditionNeg
   | FloatSqrt | FloatNeg | FloatAbs
+  | LowOneBits | LowMask | HighMask	(* must only be used in constants! *)
 
 let unary_op_value_type op =
   match op with
@@ -59,6 +60,7 @@ let unary_op_value_type op =
   | IntEven -> Condition
   | IntNeg -> Int | BitNeg -> Int | ConditionNeg -> Condition
   | FloatSqrt -> Float | FloatNeg -> Float | FloatAbs -> Float
+  | HighMask -> Int | LowMask -> Int | LowOneBits -> Int
 
 let unary_op_name unary_op =
   match unary_op with
@@ -67,6 +69,7 @@ let unary_op_name unary_op =
   | IntEven -> "IntEven"
   | IntNeg -> "IntNeg" | BitNeg -> "BitNeg" | ConditionNeg -> "ConditionNeg"
   | FloatSqrt -> "FloatSqrt" | FloatNeg -> "FloatNeg" | FloatAbs -> "FloatAbs"
+  | HighMask -> "HighMask" | LowMask -> "LowMask" | LowOneBits -> "LowOneBits"
 
 type unary_width_op =
     IntZero | IntParityEven | IntSign
@@ -88,6 +91,7 @@ type binary_op =
   | ShiftL
   | ConditionAnd | ConditionOr | ConditionXor
   | FloatAdd | FloatSub | FloatMul | FloatDiv
+  | BothLowOneBits | BitMask		(* must only be used in constants! *)
 
 let binary_op_value_type op =
   match op with
@@ -97,6 +101,7 @@ let binary_op_value_type op =
   | ShiftL -> Int
   | ConditionAnd -> Condition | ConditionOr -> Condition | ConditionXor -> Condition
   | FloatAdd -> Float | FloatSub -> Float | FloatMul -> Float | FloatDiv -> Float
+  | BitMask -> Int | BothLowOneBits -> Int
 
 let binary_op_name binary_op =
   match binary_op with
@@ -106,6 +111,7 @@ let binary_op_name binary_op =
   | ShiftL -> "ShiftL"
   | ConditionAnd -> "ConditionAnd" | ConditionOr -> "ConditionOr" | ConditionXor -> "ConditionXor"
   | FloatAdd -> "FloatAdd" | FloatSub -> "FloatSub" | FloatMul -> "FloatMul" | FloatDiv -> "FloatDiv"
+  | BitMask -> "BitMask" | BothLowOneBits -> "BothLowOneBits"
 
 type binary_width_op =
     IntEqual | LessU | LessS
@@ -165,6 +171,59 @@ type stmt =
     Store of byte_order * width * expr * expr
   | Assign of register * expr
 
+(* constructing *)
+
+let int_literal_expr int =
+  IntConst (IntLiteral int)
+
+let bool_to_int_expr expr =
+  If (expr, int_literal_expr one, int_literal_expr zero)
+
+let extract_bit_expr value bit =
+  Binary (BitAnd, BinaryWidth(LShiftR, 8, value, bit), int_literal_expr one)
+
+let is_bit_set_expr value bit =
+  Unary (ConditionNeg, Unary (IntEven, extract_bit_expr value bit))
+
+let both_low_one_bits_expr a b =
+  Binary (BothLowOneBits, a, b)
+
+let low_mask_expr x =
+  Unary (LowMask, x)
+
+let high_mask_expr x =
+  Unary (HighMask, x)
+
+let bitand_expr a b =
+  Binary (BitAnd, a, b)
+
+let bitor_expr a b =
+  Binary (BitOr, a, b)
+
+let bitxor_expr a b =
+  Binary (BitXor, a, b)
+
+let bitneg_expr x =
+  Unary (BitNeg, x)
+
+let shiftl_expr a b =
+  Binary (ShiftL, a, b)
+
+let bitmask_expr a b =
+  Binary (BitMask, a, b)
+
+let bitsubset_expr sub super =
+  BinaryWidth (IntEqual, 8, bitand_expr sub super, sub)
+
+let add_expr a b =
+  Binary (IntAdd, a, b)
+
+let sub_expr a b =
+  Binary (IntSub, a, b)
+
+let mul_expr a b =
+  Binary (IntMul, a, b)
+
 (* inspecting *)
 
 let rec expr_value_type expr =
@@ -207,7 +266,7 @@ let stmt_sub_exprs stmt =
 
 let is_const expr =
   match expr with
-      IntConst _ | FloatConst _ | ConditionConst _ -> true
+      IntConst (IntLiteral _) | FloatConst _ | ConditionConst _ -> true
     | _ -> false
 
 (* instantiation *)
@@ -278,6 +337,9 @@ let cfold_expr fields expr =
       | IntEven -> ConditionConst ((rem arg 2L) = 0L)
       | IntNeg -> IntConst (IntLiteral (neg arg))
       | BitNeg -> IntConst (IntLiteral (lognot arg))
+      | LowOneBits -> int_literal_expr (low_one_bits arg)
+      | LowMask -> int_literal_expr (low_mask arg)
+      | HighMask -> int_literal_expr (high_mask arg)
       | _ -> raise Wrong_type
   and apply_float_unary op arg =
     match op with
@@ -310,6 +372,8 @@ let cfold_expr fields expr =
       | BitOr -> IntConst (IntLiteral (logor arg1 arg2))
       | BitXor -> IntConst (IntLiteral (logxor arg1 arg2))
       | ShiftL -> IntConst (IntLiteral (shiftl arg1 arg2))
+      | BothLowOneBits -> int_literal_expr (both_low_one_bits arg1 arg2)
+      | BitMask -> int_literal_expr (bitmask arg1 arg2)
       | _ -> raise Wrong_type
   and apply_float_binary op arg1 arg2 =
     match op with
