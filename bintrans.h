@@ -1,6 +1,6 @@
 #include <unistd.h>
 
-#include "alpha_types.h"
+#include "target_arch.h"
 #include "ppc_defines.h"
 
 #if defined(INTERPRETER) || defined(DEBUGGER) || defined(CROSSDEBUGGER)

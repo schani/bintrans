@@ -767,11 +767,13 @@
 	   (gt integer (= 4) const)
 	   (eq integer (= 4) const))
   :result (res integer 4)
-  :expr (if (<s x 0)
-	    lt
-	    (if (>s x 0)
-		gt
-		eq))
+  :pattern (if (<s x 0)
+	       lt
+	       (if (>s x 0)
+		   gt
+		   eq))
   :code ((cmovlt_imm x lt res)
 	 (cmoveq_imm x eq res)
 	 (cmovgt_imm x gt res)))
+
+(defparameter *alpha-generators* *generators*)

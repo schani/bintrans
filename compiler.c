@@ -729,8 +729,10 @@ enter_fragment (word_32 foreign_addr, word_64 native_addr)
 #ifdef COLLECT_STATS
     ++num_translated_fragments;
 
+#ifdef PERIODIC_STAT_DUMP
     if (num_translated_fragments % 100 == 0)
 	print_compiler_stats();
+#endif
 #endif
 
     if (fragment_hash_table[index].native_addr == 0)

@@ -1,11 +1,18 @@
+ARCH = -DARCH_ALPHA
+ASM_OBJS = alpha_asm.o
+COMPILER_OBJS = compiler.o
+#ARCH = -DARCH_I386
 #DEFINES = -DCROSSDEBUGGER -DCOLLECT_STATS -DDUMP_CODE
 #DEFINES = -DCOMPILER -DCOLLECT_STATS -DDUMP_CODE
-DEFINES = -DCOMPILER -DCOLLECT_STATS -DPERIODIC_STAT_DUMP
-#DEFINES = -DDEBUGGER
-CFLAGS = $(DEFINES)
+#DEFINES = -DCOMPILER -DCOLLECT_STATS -DPERIODIC_STAT_DUMP
+#DEFINES = -DDEBUGGER -DEMULATED_MEM
+#DEFINES = -DCOMPILER -DDUMP_CODE
+DEFINES = -DCOMPILER -DCOLLECT_STATS
+#DEFINES = -DCOMPILER
+CFLAGS = $(DEFINES) $(ARCH)
 
-bintrans : ppc.o compiler.o alpha_asm.o mm.o
-	gcc -o bintrans ppc.o compiler.o mm.o alpha_asm.o
+bintrans : ppc.o mm.o $(COMPILER_OBJS) $(ASM_OBJS) 
+	gcc -o bintrans ppc.o mm.o $(COMPILER_OBJS) $(ASM_OBJS)
 
 ppc.o : ppc.c ppc_interpreter.c ppc_disassembler.c alpha_types.h bintrans.h
 	gcc $(CFLAGS) -Wall -g -c ppc.c
@@ -23,4 +30,4 @@ elfer : elfer.c
 	gcc -o elfer elfer.c
 
 clean :
-	rm -f *~ core ppc.o compiler.o alpha_asm.o
+	rm -f *~ core ppc.o compiler.o alpha_asm.o mm.o bintrans

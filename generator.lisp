@@ -29,6 +29,12 @@
 (defun sort-by-fixed-order (lst order)
   (sort lst #'(lambda (a b) (< (position a order) (position b order)))))
 
+(defun mappend (func lst)
+  (apply #'append (mapcar func lst)))
+
+(defun mapcar* (func &rest lists)
+  (remove nil (apply #'mapcar func lists)))
+
 (defun dcs (x)
   (string-downcase (symbol-name x)))
 
@@ -89,6 +95,14 @@
 
 (defparameter *mnemonics* nil)
 
+(defstruct generator
+  inputs
+  result
+  pattern
+  code)
+
+(defparameter *generators* nil)
+
 (defvar *tmp-num* 0)
 
 (defun new-machine (name)
@@ -101,6 +115,7 @@
   (setf *insn-macros* nil)
   (setf *insns* nil)
   (setf *mnemonics* nil)
+  (setf *generators* nil)
   (setf *tmp-num* 0))
 
 (defun define-register-class (name type width registers)
@@ -267,6 +282,9 @@
 	                :args ',args
 	                :substitution ',substitution)
          *mnemonics*))
+
+(defmacro define-generator (&key inputs result pattern code)
+  `(push (make-generator :inputs ',inputs :result ',result :pattern ',pattern :code ',code) *generators*))
 
 (defun one-sequences (bits &optional (start 0))
   (let ((begin (position 1 bits :start start)))
@@ -807,6 +825,75 @@
 		  (apply (cdr m-generator) (car m-generator) (expr-operands expr))))
 	    (apply s-generator (expr-operands expr)))))))
 
+(defun expr-equal-p (e1 e2)
+  (and (eq (expr-kind e1) (expr-kind e2))
+       (eq (expr-type e1) (expr-type e2))
+       (eq (expr-width e1) (expr-width e2))
+       (reduce #'(lambda (a b) (and a b)) (mapcar #'(lambda (a b)
+						      (if (and (expr-p a) (expr-p b))
+							  (expr-equal-p a b)
+							  (eq a b)))
+						  (expr-operands e1) (expr-operands e2)) :initial-value t)))
+
+(defun match-generator (expr generator)
+  (labels ((matches-constraints-p (expr constraints)
+	     (destructuring-bind (type (rel width) source)
+		 constraints
+	       (and (eq type (expr-type expr))
+		    (or (and (eq rel '=) (= (expr-width expr) width))
+			(and (eq rel '<=) (<= (expr-width expr) width)))
+		    (or (eq source 'reg)
+			(and (eq source 'const) (expr-constp expr))))))
+	   (bind (name expr bindings)
+	     (let ((binding (cdr (assoc name bindings))))
+	       (if binding
+		   (if (expr-equal-p expr binding)
+		       (values t bindings)
+		       (values nil (list 'inconsistent-values name)))
+		   (let ((constraints (cdr (assoc name (generator-inputs generator)))))
+		     (if (matches-constraints-p expr constraints)
+			 (values t (acons name expr bindings))
+			 (values nil (list 'does-not-match-constraints expr constraints)))))))
+	   (match-multiple (exprs patterns bindings)
+;	     (format t "matching multiple ~A with ~A bindings ~A~%" exprs patterns bindings)
+	     (if (null exprs)
+		 (values t bindings)
+		 (multiple-value-bind (success new-bindings)
+		     (match (car exprs) (car patterns) bindings)
+		   (if success
+		       (match-multiple (cdr exprs) (cdr patterns) new-bindings)
+		       (values nil new-bindings)))))
+	   (match (expr pattern bindings)
+	     (cond ((symbolp pattern)
+		    (bind pattern expr bindings))
+		   ((integerp pattern)
+		    (if (and (expr-constp expr) (eq (expr-type expr) 'integer))
+			(values t (acons pattern expr bindings))
+			(values nil (list 'invalid-integer pattern expr))))
+		   ((consp pattern)
+		    (case (first pattern)
+		      ((if <s >s)
+		       (if (eq (expr-kind expr) (first pattern))
+			   (match-multiple (expr-operands expr) (rest pattern) bindings)
+			   (values nil (list 'wrong-expr-type (first pattern) expr))))
+		      (t
+		       (error "unknown pattern ~A~%" (first pattern)))))
+		   (t
+		    (error "illegal pattern ~A~%" pattern)))))
+    (if (and (eq (second (generator-result generator)) (expr-type expr))
+	     (eq (third (generator-result generator)) (expr-width expr)))
+	(match expr (generator-pattern generator) nil)
+	nil)))
+
+(defun find-generator (expr generators)
+  (if (null generators)
+      nil
+      (multiple-value-bind (success bindings)
+	  (match-generator expr (car generators))
+	(if success
+	    (values (car generators) bindings)
+	    (find-generator expr (cdr generators))))))
+
 (defun register-index (reg class number)
   (if reg
       (+ (register-number reg) (register-class-start-index class))
@@ -963,7 +1050,7 @@ unref_integer_reg(~A);
 					      (rhs-reg (make-tmp-name)))
 					  (format nil "{
 reg_t ~A, ~A;
-~Aemit(COMPOSE_ZAPNOT_IMM(~A, 15, ~A));
+~A/* emit(COMPOSE_ZAPNOT_IMM(~A, 15, ~A)); */
 ~Aemit_store_mem_~A(~A, ~A);
 unref_integer_reg(~A);
 unref_integer_reg(~A);
@@ -1128,7 +1215,7 @@ emit(COMPOSE_SRL_IMM(~A, ~A, ~A));
 				    (let ((addr-reg (make-tmp-name)))
 				      (format nil "{
 reg_t ~A;
-~Aemit(COMPOSE_ZAPNOT_IMM(~A, 15, ~A));
+~A/* emit(COMPOSE_ZAPNOT_IMM(~A, 15, ~A)); */
 ~A = ref_~A_reg_for_writing(~A);
 emit_load_mem_~A(~A, ~A);
 unref_integer_reg(~A);
@@ -1471,26 +1558,101 @@ emit(COMPOSE_MOV(0, ~A));
 					  const
 					  target foreign-target
 					  target)))))))
-      (if (expr-constp expr)
-	  (progn
-	    (unless (eq (expr-type expr) 'integer)
-	      (error "can only load integers~%"))
-	    (let* ((width (expr-width expr))
-		   (load-width (if (<= width 32) 32 width)))
-	      (format nil "~A = ref_integer_reg_for_writing(~A);
+      (cond ((expr-constp expr)
+	     (unless (eq (expr-type expr) 'integer)
+	       (error "can only load integers~%"))
+	     (let* ((width (expr-width expr))
+		    (load-width (if (<= width 32) 32 width)))
+	       (format nil "~A = ref_integer_reg_for_writing(~A);
 emit_load_integer_~A(~A, ~A);~%"
-		      target foreign-target
-		      load-width target (generate-interpreter expr nil))))
-	  (let ((s-generator (cadr (assoc (expr-kind expr) s-generators))))
-	    (if (null s-generator)
-		(let ((m-generator (dolist (p m-generators)
-				     (let ((op (cadr (assoc (expr-kind expr) (car p)))))
-				       (unless (null op)
-					 (return (cons op (cadr p))))))))
-		  (if (null m-generator)
-		      (error "no generator for ~A~%" (expr-kind expr))
-		      (apply (cdr m-generator) (car m-generator) (expr-operands expr))))
-		(apply s-generator (expr-operands expr))))))))
+		       target foreign-target
+		       load-width target (generate-interpreter expr nil))))
+	    (t
+	     (let ((default-generator (let ((s-generator (cadr (assoc (expr-kind expr) s-generators))))
+					(if (null s-generator)
+					    (let ((m-generator (dolist (p m-generators)
+								 (let ((op (cadr (assoc (expr-kind expr) (car p)))))
+								   (unless (null op)
+								     (return (cons op (cadr p))))))))
+					      (if (null m-generator)
+						  (error "no generator for ~A~%" (expr-kind expr))
+						  (apply (cdr m-generator) (car m-generator) (expr-operands expr))))
+					    (apply s-generator (expr-operands expr))))))
+	       (multiple-value-bind (generator gen-bindings)
+		   (find-generator expr *alpha-generators*)
+		 (if generator
+		     (format nil "if (~A)
+{
+~A}
+else
+{
+~A}~%"
+			     (reduce #'(lambda (a b)
+					 (format nil "~A && ~A" a b)) 
+				     (mapcar #'(lambda (gen-binding)
+						 (destructuring-bind (name . bound-expr)
+						     gen-binding
+						   (if (integerp name)
+						       (format nil "~A == ~A"
+							       (generate-interpreter bound-expr nil) name)
+						       "1")))
+					     gen-bindings)
+				     :initial-value "1")
+			     (let ((c-bindings (mapcar* #'(lambda (gen-binding)
+							    (destructuring-bind (name . bound-expr)
+								gen-binding
+							      (if (symbolp name)
+								  (destructuring-bind (type (rel width) source)
+								      (cdr (assoc name (generator-inputs generator)))
+								    (let ((c-name (make-tmp-name)))
+								      (list name
+									    (if (eq source 'const)
+										(c-type width type)
+										"reg_t")
+									    c-name source bound-expr
+									    (if (eq source 'const)
+										(generate-interpreter bound-expr nil)
+										"0")
+									    (if (eq source 'const)
+										nil
+										(format nil "unref_~A_reg(~A)" (dcs type) c-name)))))
+								  nil)))
+							gen-bindings)))
+			       (format nil "~{~A ~A = ~A;~^
+~}
+~{~A~}
+~A = ref_~A_reg_for_writing(~A);
+~{~A;~^
+~}
+~{~A;~^
+~}~%"
+				       (mappend #'(lambda (b) (list (second b) (third b) (sixth b))) c-bindings)
+				       (mapcar* #'(lambda (b)
+						    (if (eq (fourth b) 'reg)
+							(generate-compiler (third b) (fifth b) bindings)
+							nil))
+						c-bindings)
+				       target (dcs (expr-type expr)) foreign-target
+				       (mapcar #'(lambda (i)
+						   (format nil "emit(COMPOSE_~A(~{~A~^, ~}))"
+							   (first i)
+							   (mapcar #'(lambda (n)
+								       (if (eq n (first (generator-result generator)))
+									   target
+									   (third (assoc n c-bindings))))
+								   (rest i))))
+					       (generator-code generator))
+				       (mapcar* #'(lambda (b) (seventh b)) c-bindings)))
+			     default-generator)
+		     default-generator))))))))
+
+;		     (progn
+;		       (dolist (gen-binding gen-bindings)
+;			 (destructuring-bind (name . bound-expr)
+;			     gen-bindings
+;			   (if (symbolp name)
+;			       (destructuring-bind (type (rel width) source)
+;				   (cdr (assoc name (generator-inputs generator)))
 
 (defun generate-expr-code (expr &optional required-width (required-type 'integer))
   (generate-interpreter (generate-expr expr nil required-width required-type) nil))

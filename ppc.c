@@ -84,7 +84,7 @@
 
 #define PPC_FD_CLOEXEC          1
 
-#define PPC_ROOT                "/mnt/itch/schani/ppc-root"
+#define PPC_ROOT                "/nethome/hansolo/schani/Work/unix/bintrans/bintrans/ppc-root"
 
 int ppc_errnos[] = { 0,
 		     EPERM, ENOENT, ESRCH, EINTR, EIO, ENXIO, E2BIG, ENOEXEC, EBADF,
@@ -625,8 +625,6 @@ handle_system_call (interpreter_t *intp)
 	    ANNOUNCE_SYSCALL("munmap");
 	    {
 		word_32 mem_len;
-
-		assert(0);
 
 		assert((intp->regs_GPR[3] & PPC_PAGE_MASK) == 0);
 
@@ -1514,7 +1512,7 @@ main (int argc, char *argv[])
 #endif
 
 #ifdef NEED_INTERPRETER
-#ifdef NEED_COMPILER
+#if defined(NEED_COMPILER) || defined(EMULATED_MEM)
     init_interpreter_struct(&interpreter, 0, 0);
 #else
     init_interpreter_struct(&interpreter, 1, 0);
