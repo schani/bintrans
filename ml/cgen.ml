@@ -128,3 +128,11 @@ let stmt_to_c allocation stmt =
 	^ (expr_to_c allocation addr) ^ "," ^ (expr_to_c allocation value) ^ ");"
     | Assign (reg, src) ->
 	(register_to_c allocation reg) ^ "=" ^ (expr_to_c allocation src) ^ ";"
+
+(*** generating generators ***)
+
+let register_to_c_gen allocation reg =
+  match reg with
+      GuestRegister (num, _) -> "guest_reg_" ^ (string_of_int num)
+    | HostRegister (num, _) -> "host_reg_" ^ (string_of_int num)
+    | IntermediateRegister expr -> "interm_reg_" ^ (string_of_int (lookup_intermediate_reg allocation expr))

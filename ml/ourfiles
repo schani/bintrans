@@ -3,7 +3,6 @@ cgen.ml
 cond_monad.ml
 explorer.ml
 expr.ml
-instruction.ml
 machine.ml
 matcher.ml
 memoize.ml

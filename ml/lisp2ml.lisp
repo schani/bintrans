@@ -104,11 +104,11 @@
 (defmacro defsimplify (pattern expr)
   `(push (list ',pattern ',expr) *simplifies*))
 
-;; a matcher is a list (name pattern cost-expr format)
+;; a matcher is a list (name pattern cost-expr exec-format gen-format)
 (defvar *matchers* '())
 
-(defmacro defmatcher (name pattern cost-expr format)
-  `(push (list ',name ',pattern ',cost-expr ',format) *matchers*))
+(defmacro defmatcher (name pattern cost-expr exec-format gen-format)
+  `(push (list ',name ',pattern ',cost-expr ',exec-format ',gen-format) *matchers*))
 
 ;; returns ml-name, kind-ml-name, num-args, and need-width
 ;; kind-ml-name is nil of the operator is a macro
@@ -437,7 +437,7 @@
 			 (error "illegal cost expression ~A" expr)))))))
       (convert expr))))
 
-(defun convert-format (format args bindings)
+(defun convert-format (format args bindings for-gen-gen)
   (labels ((convert-tilde (char args rest-format)
 	     (case char
 	       (#\~ (format nil "\"~~\" ^ ~A" (convert rest-format args)))
@@ -454,7 +454,7 @@
 		      (int-const
 		       (format nil "(expr_to_c alloc ~A) ^ ~A" (dcs name) (convert rest-format (cdr args))))
 		      (reg
-		       (format nil "(register_to_c alloc ~A) ^ ~A" (dcs name) (convert rest-format (cdr args))))
+		       (format nil "(register_to_c~A alloc ~A) ^ ~A" (if for-gen-gen "_gen" "") (dcs name) (convert rest-format (cdr args))))
 		      (t
 		       (error "binding type ~A not allowed in format" type))))))
 	       (t
@@ -515,11 +515,11 @@
 			      (convert-expr expr (mapcar #'list binding-names binding-ml-names binding-types)))))))))
     (format out "  ]~%")))
 
-(defun make-matchers (filename matchers-name printers-name)
+(defun make-matchers (filename matchers-name printers-name gen-gens-name)
   (with-open-file (out filename :direction :output :if-exists :supersede)
     (format out "open Int64~%~%open Expr~%open Uncertainty~%open Matcher~%open Irmacros~%open Cgen~%~%")
     (dolist (matcher (reverse *matchers*))
-      (destructuring-bind (name pattern cost-expr format)
+      (destructuring-bind (name pattern cost-expr exec-format gen-format)
 	  matcher
 	(multiple-value-bind (pattern-string bindings)
 	    (convert-pattern pattern '())
@@ -527,7 +527,15 @@
 	      (convert-cost-expr cost-expr bindings)
 	    (let* ((binding-names (mapcar #'first bindings))
 		   (binding-ml-names (mapcar #'dcs binding-names))
-		   (binding-types (mapcar #'second bindings)))
+		   (binding-types (mapcar #'second bindings))
+		   (cgen-bindings-format-list (mappend #'(lambda (type name)
+							   (list name
+								 (case type
+								   (int (format nil "get_width_binding bindings \"~A\"" name))
+								   (int-const (format nil "get_const_binding bindings \"~A\"" name))
+								   (reg (format nil "get_register_binding bindings alloc \"~A\"" name))
+								   (t (error "binding of type ~A is not allowed in matcher pattern" type)))))
+						       binding-types binding-ml-names)))
 	      (format out (string-concat "let ~A_matcher =~%"
 					 "  { name = \"~A\" ;~%"
 					 "    pattern = ~A ;~%"
@@ -537,8 +545,12 @@
 					 "and ~A_printer =~%"
 					 "  (\"~A\", (fun alloc bindings ->~%"
 					 "              let~{ ~A = ~A~^ and~}~%"
-					 "              in \"/* ~A */ { assert(\" ^ (expr_to_c [] (~A)) ^ \"); \" ^ ~A ^ \" }\"))~%~%")
-		      (dcs name) (dcs name)
+					 "              in \"/* ~A */ { assert(\" ^ (expr_to_c [] (~A)) ^ \"); \" ^ ~A ^ \" }\"))~%"
+					 "and ~A_gen_gen =~%"
+					 "  (\"~A\", (fun alloc bindings ->~%"
+					 "              let~{ ~A = ~A~^ and~}~%"
+					 "              in \"{ bt_assert(\" ^ (expr_to_c [] (~A)) ^ \"); \" ^ ~A ^ \" }\"))~%~%")
+		      (dcs name) (dcs name) ;matcher
 		      pattern-string
 		      (mappend #'(lambda (type name)
 				   (case type
@@ -547,15 +559,14 @@
 				     (t '())))
 			       binding-types binding-ml-names)
 		      cost-string
-		      (dcs name) (dcs name)
-		      (mappend #'(lambda (type name)
-				   (list name
-					 (case type
-					   (int (format nil "get_width_binding bindings \"~A\"" name))
-					   (int-const (format nil "get_const_binding bindings \"~A\"" name))
-					   (reg (format nil "get_register_binding bindings alloc \"~A\"" name))
-					   (t (error "binding of type ~A is not allowed in matcher pattern" type)))))
-			       binding-types binding-ml-names)
-		      (dcs name) cost-cond (convert-format (car format) (cdr format) bindings)))))))
+		      
+		      (dcs name) (dcs name) ;printer
+		      cgen-bindings-format-list
+		      (dcs name) cost-cond (convert-format (car exec-format) (cdr exec-format) bindings nil)
+		      
+		      (dcs name) (dcs name) ;gen-gen
+		      cgen-bindings-format-list
+		      cost-cond (convert-format (car gen-format) (cdr gen-format) bindings t)))))))
     (format out "let ~A = [ ~{~A_matcher~^ ; ~} ]~%" matchers-name (mapcar #'dcs (mapcar #'first (reverse *matchers*))))
-    (format out "let ~A = [ ~{~A_printer~^ ; ~} ]~%" printers-name (mapcar #'dcs (mapcar #'first (reverse *matchers*))))))
+    (format out "let ~A = [ ~{~A_printer~^ ; ~} ]~%" printers-name (mapcar #'dcs (mapcar #'first (reverse *matchers*))))
+    (format out "let ~A = [ ~{~A_gen_gen~^ ; ~} ]~%" gen-gens-name (mapcar #'dcs (mapcar #'first (reverse *matchers*))))))

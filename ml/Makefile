@@ -8,7 +8,7 @@ OEXT = cmx
 AEXT = cma
 
 ENGINE_OBJS = monad.$(OEXT) memoize.$(OEXT) bitmath.$(OEXT) utils.$(OEXT) \
-	      expr.$(OEXT) cond_monad.$(OEXT) uncertainty.$(OEXT) instruction.$(OEXT) matcher.$(OEXT) \
+	      expr.$(OEXT) cond_monad.$(OEXT) uncertainty.$(OEXT) matcher.$(OEXT) \
 	      simplifiers.$(OEXT) simplify.$(OEXT) \
 	      machine.$(OEXT) pruner.$(OEXT) \
 	      irmacros.$(OEXT) \

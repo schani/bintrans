@@ -7,4 +7,4 @@
 (make-simplifies)
 
 (load "target_alpha.lisp")
-(make-matchers "target_alpha.ml" "alpha_matchers" "alpha_printers")
+(make-matchers "target_alpha.ml" "alpha_matchers" "alpha_printers" "alpha_gen_gens")

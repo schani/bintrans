@@ -1,6 +1,6 @@
 ;; let-match.lisp
 
-;; MathMap
+;; bintrans
 
 ;; Copyright (C) 1999-2002 Mark Probst
 
