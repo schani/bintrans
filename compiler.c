@@ -25,11 +25,13 @@
 #include <sys/time.h>
 #include <unistd.h>
 #include <string.h>
+#include <setjmp.h>
 
 #include "bintrans.h"
 
 /* #define NO_REGISTER_CACHING */
 /* #define NO_PATCHING */
+#define PRESERVE_CONSTANTS
 
 #ifdef NEED_COMPILER
 #include "compiler.h"
@@ -38,17 +40,17 @@
 #include "alpha_composer.h"
 #include "alpha_disassembler.c"
 
-#define MAX_LABELS              32
+#define MAX_LABELS             128
 #define MAX_BACKPATCHES          8
-#define MAX_CONSTANTS        16384
+#define MAX_CONSTANTS         8192
 
-#define MAX_UNRESOLVED_JUMPS 16384 /* should be a lot less if we actually do resolve branches */
+#define MAX_UNRESOLVED_JUMPS 65536 /* should be a lot less if we actually do resolve branches */
 
 #define MAX_FRAGMENT_EMU_INSNS          512
 #define MAX_FRAGMENT_INSNS             1024
 #define MAX_REG_FIELDS                 1024
 #define MAX_REG_LOCKS                  2048
-#define MAX_FRAGMENT_UNRESOLVED_JUMPS    16
+#define MAX_FRAGMENT_UNRESOLVED_JUMPS    64
 
 #define JUMP_TARGET_REG        16
 #define RETURN_ADDR_REG        26
@@ -153,6 +155,9 @@ typedef struct
     int live_at_start;
     int live_at_end;
     int is_saved;
+#ifdef DYNAMO_TRACES
+    int is_saved_freeze;
+#endif
     reg_t preferred_native_reg;
     reg_t native_reg;
 } emu_register_t;
@@ -183,6 +188,9 @@ typedef struct
 #define EMU_INSN_CONTINUE                 5
 #define EMU_INSN_DIRECT_JUMP              6
 #define EMU_INSN_DIRECT_JUMP_NO_SYNC      7
+#define EMU_INSN_BEGIN_ALT                8
+#define EMU_INSN_END_ALT                  9
+#define EMU_INSN_FREEZE_SAVE             10
 
 typedef struct
 {
@@ -223,6 +231,11 @@ typedef struct
 
 insn_info_t insn_infos[NUM_INSNS];
 
+#ifdef COLLECT_PPC_FPR_STATS
+unsigned int fpr_uses[32];
+#endif
+#endif
+
 word_32 fragment_insns[MAX_FRAGMENT_INSNS];
 int num_fragment_insns;
 
@@ -241,13 +254,12 @@ int num_labels;
 fragment_unresolved_jump_t fragment_unresolved_jumps[MAX_FRAGMENT_UNRESOLVED_JUMPS];
 int num_fragment_unresolved_jumps;
 
-#ifdef COLLECT_PPC_FPR_STATS
-unsigned int fpr_uses[32];
-#endif
-#endif
-
-word_32 code_area[MAX_CODE_INSNS];
+word_32 code_area[MAX_CODE_INSNS + MAX_ALT_CODE_INSNS];
 word_32 *emit_loc;
+#ifdef DYNAMO_TRACES
+int emit_alt = 0;
+word_32 *alt_emit_loc;
+#endif
 
 int num_constants = NUM_EMU_REGISTERS * 2 + 2;
 int old_num_constants;
@@ -290,11 +302,17 @@ unsigned long num_stub_calls = 0;
 unsigned long num_loop_profiler_calls = 0;
 unsigned long num_const_adds = 0;
 unsigned long num_isyncs = 0;
+unsigned long num_sync_blocks = 0;
+unsigned long num_sync_blocks_in_situ = 0;
+unsigned long num_empty_sync_blocks = 0;
 #endif
 
 fragment_hash_entry_t fragment_entry;
+fragment_hash_supplement_t fragment_entry_supplement;
 
 void (*branch_profile_func) (void) = 0;
+
+jmp_buf compiler_restart;
 
 #ifdef MEASURE_TIME
 long compiler_time = 0;
@@ -380,11 +398,13 @@ disassemble_alpha_code (word_64 start, word_64 end)
 }
 
 void
-dump_fragment_code (word_64 start, word_64 end)
+dump_fragment_code (word_64 start, word_64 end, word_64 alt_start, word_64 alt_end)
 {
 #ifdef DUMP_CODE
     int i;
     word_64 index = start;
+    word_64 alt_index = alt_start;
+    int in_alt = 0;
 
     for (i = 0; i < num_fragment_emu_insns; ++i)
     {
@@ -417,6 +437,20 @@ dump_fragment_code (word_64 start, word_64 end)
 		printf("continue");
 		break;
 
+	    case EMU_INSN_FREEZE_SAVE :
+		printf("freeze save");
+		break;
+
+	    case EMU_INSN_BEGIN_ALT :
+		printf("begin alt");
+		in_alt = 1;
+		break;
+
+	    case EMU_INSN_END_ALT :
+		printf("end alt");
+		in_alt = 0;
+		break;
+
 	    case EMU_INSN_DIRECT_JUMP :
 	    case EMU_INSN_DIRECT_JUMP_NO_SYNC :
 		printf("direct jump");
@@ -425,14 +459,44 @@ dump_fragment_code (word_64 start, word_64 end)
 
 	printf("\n- - - - - - - - \n");
 
-	if (i < num_fragment_emu_insns - 1)
-	    last = start + fragment_emu_insns[i + 1].native_index * 4;
-	else
+	if (i == num_fragment_emu_insns - 1)
+	{
+	    assert(!in_alt);
 	    last = end;
+	}
+	else
+	{
+	    if (!in_alt && fragment_emu_insns[i + 1].type != EMU_INSN_BEGIN_ALT)
+		last = start + fragment_emu_insns[i + 1].native_index * 4;
+	    else if (in_alt && fragment_emu_insns[i + 1].type != EMU_INSN_END_ALT)
+		last = alt_start + fragment_emu_insns[i + 1].native_index * 4;
+	    else
+	    {
+		int j;
 
-	disassemble_alpha_code(index, last);
+		for (j = i + 2; j < num_fragment_emu_insns; ++j)
+		    if (fragment_emu_insns[j].type == EMU_INSN_BEGIN_ALT
+			|| fragment_emu_insns[j].type == EMU_INSN_END_ALT)
+			break;
 
-	index = last;
+		if (j == num_fragment_emu_insns)
+		{
+		    if (!in_alt)
+			last = end;
+		    else
+			last = alt_end;
+		}
+		else
+		    last = (in_alt ? alt_start : start) + fragment_emu_insns[j].native_index * 4;
+	    }
+	}
+
+	disassemble_alpha_code(in_alt ? alt_index : index, last);
+
+	if (!in_alt)
+	    index = last;
+	else
+	    alt_index = last;
     }
 
     for (i = old_num_constants; i < num_constants; ++i)
@@ -441,11 +505,53 @@ dump_fragment_code (word_64 start, word_64 end)
 }
 
 void
+reinit_compiler (void)
+{
+    int i;
+
+    num_constants = num_constants_init;
+    emit_loc = code_area;
+#ifdef DYNAMO_TRACES
+    alt_emit_loc = code_area + MAX_CODE_INSNS;
+#endif
+
+    for (i = 0; i < MAX_UNRESOLVED_JUMPS; ++i)
+	unresolved_jumps[i].addr = 0;
+
+    init_fragment_hash();
+}
+
+void
 direct_emit (word_32 insn)
 {
-    assert(emit_loc < code_area + MAX_CODE_INSNS);
+#ifdef DYNAMO_TRACES
+    if (emit_alt)
+    {
+	assert(alt_emit_loc <= code_area + MAX_CODE_INSNS + MAX_ALT_CODE_INSNS);
 
-    *emit_loc++ = insn;
+	if (alt_emit_loc == code_area + MAX_CODE_INSNS + MAX_ALT_CODE_INSNS)
+	{
+	    printf("flushing cache (alt_emit_loc)\n");
+	    reinit_compiler();
+	    longjmp(compiler_restart, 1);
+	}
+
+	*alt_emit_loc++ = insn;
+    }
+    else
+#endif
+    {
+	assert(emit_loc <= code_area + MAX_CODE_INSNS);
+
+	if (emit_loc == code_area + MAX_CODE_INSNS)
+	{
+	    printf("flushing cache (emit_loc)\n");
+	    reinit_compiler();
+	    longjmp(compiler_restart, 1);
+	}
+
+	*emit_loc++ = insn;
+    }
 }
 
 void
@@ -692,12 +798,12 @@ emit_load_integer_32 (reg_t reg, word_32 val)
 	emit(COMPOSE_LDAH(reg, val >> 16, 31));
     else
     {
-#if defined(EMU_PPC)
+#if defined(EMU_I386) || defined(PRESERVE_CONSTANTS)
 	assert(num_constants < MAX_CONSTANTS);
 
 	emit(COMPOSE_LDL(reg, num_constants * 4, CONSTANT_AREA_REG));
 	constant_area[num_constants++] = val;
-#elif defined(EMU_I386)
+#else
 	emit(COMPOSE_LDA(reg, val & 0xffff, 31));
 	if (val & 0x8000)
 	    emit(COMPOSE_ZAPNOT_IMM(reg, 3, reg));
@@ -711,7 +817,7 @@ emit_load_integer_64 (reg_t reg, word_64 val)
 {
     if ((val >> 31) == 0 || (val >> 31) == 0x1ffffffff)
 	emit_load_integer_32(reg, (word_32)val);
-#ifdef EMU_I386
+#if defined(EMU_I386) || defined(PRESERVE_CONSTANTS)
     else if ((val >> 32) == 0)
     {
 	if ((val >> 15) == 0 || (val >> 15) == 0x1ffff)
@@ -831,6 +937,37 @@ emit_start_direct_jump (int sync_block)
     start_emu_insn(EMU_INSN_CONTINUE, 0);
 #endif
 }
+
+#ifdef DYNAMO_TRACES
+#ifdef SYNC_BLOCKS
+void
+emit_freeze_save (void)
+{
+    start_emu_insn(EMU_INSN_FREEZE_SAVE, 0);
+    start_emu_insn(EMU_INSN_CONTINUE, 0);
+}
+#else
+#define emit_freeze_save()
+#endif
+
+void
+emit_begin_alt (void)
+{
+    start_emu_insn(EMU_INSN_BEGIN_ALT, 0);
+    start_emu_insn(EMU_INSN_CONTINUE, 0);
+}
+
+void
+emit_end_alt (void)
+{
+    start_emu_insn(EMU_INSN_END_ALT, 0);
+    start_emu_insn(EMU_INSN_CONTINUE, 0);
+}
+#else
+#define emit_freeze_save()
+#define emit_begin_alt()
+#define emit_end_alt()
+#endif
 
 void
 emit_direct_jump (word_32 target)
@@ -1008,12 +1145,51 @@ alloc_native_reg_for_emu_reg (reg_t emu_reg, int current_insn_num)
 }
 
 void
+execute_reg_locks (int *_rl, int insn_num)
+{
+    int rl = *_rl;
+
+    while (rl < num_reg_locks && reg_locks[rl].insn_num == insn_num)
+    {
+	/* printf("  %slock %d\n", reg_locks[rl].type == REG_LOCK_UNLOCK ? "un" : "", reg_locks[rl].reg); */
+
+	if (reg_locks[rl].type == REG_LOCK_UNLOCK)
+	    emu_regs[reg_locks[rl].reg].locked = 0;
+	else
+	{
+	    assert(!emu_regs[reg_locks[rl].reg].locked);
+
+	    emu_regs[reg_locks[rl].reg].locked = 1;
+
+	    if (emu_regs[reg_locks[rl].reg].native_reg == NO_REG)
+	    {
+		alloc_native_reg_for_emu_reg(reg_locks[rl].reg, insn_num);
+
+		if (reg_locks[rl].type & REG_LOCK_READ)
+		    load_reg(emu_regs[reg_locks[rl].reg].native_reg, reg_locks[rl].reg);
+		emu_regs[reg_locks[rl].reg].dirty = (reg_locks[rl].type & REG_LOCK_WRITE) ? 1 : 0;
+	    }
+	    else
+		emu_regs[reg_locks[rl].reg].dirty |= (reg_locks[rl].type & REG_LOCK_WRITE) ? 1 : 0;
+
+	    if (emu_regs[reg_locks[rl].reg].dirty)
+		assert(emu_regs[reg_locks[rl].reg].live_at_end);
+	}
+
+	++rl;
+    }
+
+    *_rl = rl;
+}
+
+void
 finish_fragment (unsigned char *preferred_alloced_integer_regs)
 {
     int i;
     int num_integer_regs = 0, num_float_regs = 0;
 #ifdef DUMP_CODE
     word_64 start = (word_64)emit_loc;
+    word_64 alt_start = (word_64)alt_emit_loc;
 #endif
     word_64 body_start;
     int jumps_index;
@@ -1021,9 +1197,21 @@ finish_fragment (unsigned char *preferred_alloced_integer_regs)
 #ifdef SYNC_BLOCKS
     word_64 direct_jump_start;
     int no_sync;
+    int has_freezed_save = 0;
+#endif
+#ifdef DYNAMO_TRACES
+#define EMIT_LOC           (emit_alt ? alt_emit_loc : emit_loc)
+#define START              (emit_alt ? alt_start : body_start)
+#else
+#define EMIT_LOC           emit_loc
+#define START              body_start
 #endif
 
-    init_fragment_hash_entry(&fragment_entry);
+#ifdef DYNAMO_TRACES
+    emit_alt = 0;
+#endif
+
+    init_fragment_hash_entry(&fragment_entry, &fragment_entry_supplement);
 
     fragment_entry.native_addr = (word_64)emit_loc;
 
@@ -1128,19 +1316,21 @@ finish_fragment (unsigned char *preferred_alloced_integer_regs)
     rl = 0;
 
 #ifdef SYNC_BLOCKS
-    fragment_entry.synced_native_addr = body_start;
+    fragment_entry_supplement.synced_native_addr = body_start;
 
     for (i = 0; i < NUM_FREE_INTEGER_REGS; ++i)
-	if (alloced_integer_regs[native_integer_regs[i]] == NO_REG)
-	    fragment_entry.alloced_integer_regs[i] = ALLOCED_REG_NONE;
+	if (alloced_integer_regs[native_integer_regs[i]] == NO_REG
+	    || !emu_regs[alloced_integer_regs[native_integer_regs[i]]].live_at_start) /* comment out this line for fast compress */
+	    fragment_entry_supplement.alloced_integer_regs[i] = ALLOCED_REG_NONE;
 	else
-	    fragment_entry.alloced_integer_regs[i] = alloced_integer_regs[native_integer_regs[i]];
+	    fragment_entry_supplement.alloced_integer_regs[i] = alloced_integer_regs[native_integer_regs[i]];
 
     for (i = 0; i < NUM_FREE_FLOAT_REGS; ++i)
-	if (alloced_float_regs[native_float_regs[i]] == NO_REG)
-	    fragment_entry.alloced_float_regs[i] = ALLOCED_REG_NONE;
+	if (alloced_float_regs[native_float_regs[i]] == NO_REG
+	    || !emu_regs[alloced_float_regs[native_float_regs[i]]].live_at_start) /* comment out this line for fast compress */
+	    fragment_entry_supplement.alloced_float_regs[i] = ALLOCED_REG_NONE;
 	else
-	    fragment_entry.alloced_float_regs[i] = alloced_float_regs[native_float_regs[i]];
+	    fragment_entry_supplement.alloced_float_regs[i] = alloced_float_regs[native_float_regs[i]];
 #endif
 
     /* instructions are patched and emitted; register allocation happens simultaneously */
@@ -1158,73 +1348,98 @@ finish_fragment (unsigned char *preferred_alloced_integer_regs)
 
 	last = first + len;
 
-	fragment_emu_insns[i].native_index = emit_loc - (word_32*)body_start;
+#ifdef DYNAMO_TRACES
+	/* we handle this here so that the setting of native_index uses the correct emit_loc */
+	if (fragment_emu_insns[i].type == EMU_INSN_BEGIN_ALT)
+	    emit_alt = 1;
+	else if (fragment_emu_insns[i].type == EMU_INSN_END_ALT)
+	    emit_alt = 0;
+#endif
+
+#ifdef DUMP_CODE
+	fragment_emu_insns[i].native_index = EMIT_LOC - (word_32*)START;
+#endif
+
+	/* printf("insn at %08x  %d\n", fragment_emu_insns[i].addr, fragment_emu_insns[i].type); */
 
 	switch (fragment_emu_insns[i].type)
 	{
 	    case EMU_INSN_STORE_REGS :
 		assert(first + 1 == last);
 
-		fragment_insns[first] = emit_loc - code_area;
+		execute_reg_locks(&rl, first);
+
+		/* the dummy insn is replaced by its code_area index */
+		fragment_insns[first] = EMIT_LOC - code_area;
 
 		for (j = 0; j < NUM_EMU_REGISTERS; ++j)
-		    if (emu_regs[j].used && emu_regs[j].live_at_end && emu_regs[j].native_reg != NO_REG)
+		    if (emu_regs[j].used && emu_regs[j].dirty && emu_regs[j].live_at_end && emu_regs[j].native_reg != NO_REG)
 			store_reg(emu_regs[j].native_reg, j);
 		break;
 
 #ifdef SYNC_BLOCKS
 	    case EMU_INSN_DIRECT_JUMP :
-		direct_jump_start = (word_64)emit_loc;
+		direct_jump_start = (word_64)EMIT_LOC;
 		no_sync = 0;
 		break;
 
 	    case EMU_INSN_DIRECT_JUMP_NO_SYNC :
-		direct_jump_start = (word_64)emit_loc;
+		direct_jump_start = (word_64)EMIT_LOC;
 		no_sync = 1;
+		break;
+#endif
+
+#ifdef DYNAMO_TRACES
+#ifdef SYNC_BLOCKS
+	    case EMU_INSN_FREEZE_SAVE :
+		if (!has_freezed_save)
+		{
+		    for (j = 0; j < NUM_EMU_REGISTERS; ++j)
+			if (emu_regs[j].used)
+			{
+			    if (emu_regs[j].is_saved == DONT_KNOW)
+				emu_regs[j].is_saved_freeze = emu_regs[j].dirty;
+			    else
+				emu_regs[j].is_saved_freeze = emu_regs[j].is_saved;
+			}
+
+		    has_freezed_save = 1;
+		}
+		break;
+#endif
+
+	    case EMU_INSN_BEGIN_ALT :
+		assert(len == 0);
+		break;
+
+	    case EMU_INSN_END_ALT :
+		assert(len == 0);
 		break;
 #endif
 
 	    default :
 		for (j = first; j < last; ++j)
 		{
-		    word_32 *first_insn = emit_loc;
+		    word_32 *first_insn = EMIT_LOC;
 
-		    while (rl < num_reg_locks && reg_locks[rl].insn_num == j)
-		    {
-			if (reg_locks[rl].type == REG_LOCK_UNLOCK)
-			    emu_regs[reg_locks[rl].reg].locked = 0;
-			else
-			{
-			    assert(!emu_regs[reg_locks[rl].reg].locked);
-
-			    emu_regs[reg_locks[rl].reg].locked = 1;
-
-			    if (emu_regs[reg_locks[rl].reg].native_reg == NO_REG)
-			    {
-				alloc_native_reg_for_emu_reg(reg_locks[rl].reg, j);
-
-				if (reg_locks[rl].type & REG_LOCK_READ)
-				    load_reg(emu_regs[reg_locks[rl].reg].native_reg, reg_locks[rl].reg);
-				emu_regs[reg_locks[rl].reg].dirty = (reg_locks[rl].type & REG_LOCK_WRITE) ? 1 : 0;
-			    }
-			    else
-				emu_regs[reg_locks[rl].reg].dirty |= (reg_locks[rl].type & REG_LOCK_WRITE) ? 1 : 0;
-
-			    if (emu_regs[reg_locks[rl].reg].dirty)
-				assert(emu_regs[reg_locks[rl].reg].live_at_end);
-			}
-
-			++rl;
-		    }
+		    execute_reg_locks(&rl, j);
 
 		    while (rf < num_reg_fields && reg_fields[rf].insn_num == j)
 		    {
+			/* printf("  use %d\n", reg_fields[rf].reg); */
+
 			assert(emu_regs[reg_fields[rf].reg].locked);
 
 			fragment_insns[j] |= emu_regs[reg_fields[rf].reg].native_reg << reg_fields[rf].shift;
 
 			++rf;
 		    }
+
+		    /*
+		    printf("  %d: ", j);
+		    disassemble_alpha_insn(fragment_insns[j], (word_64)EMIT_LOC);
+		    printf("\n");
+		    */
 
 		    direct_emit(fragment_insns[j]);
 
@@ -1234,7 +1449,9 @@ finish_fragment (unsigned char *preferred_alloced_integer_regs)
 		    if (jumps_index < num_fragment_unresolved_jumps && j + 1 == fragment_unresolved_jumps[jumps_index].insn_num)
 		    {
 			int k;
+#ifdef SYNC_BLOCKS
 			int l;
+#endif
 
 			for (k = 0; k < MAX_UNRESOLVED_JUMPS; ++k)
 			    if (unresolved_jumps[k].addr == 0)
@@ -1242,7 +1459,7 @@ finish_fragment (unsigned char *preferred_alloced_integer_regs)
 
 			assert(k < MAX_UNRESOLVED_JUMPS);
 
-			unresolved_jumps[k].addr = (word_64)emit_loc;
+			unresolved_jumps[k].addr = (word_64)EMIT_LOC;
 			unresolved_jumps[k].target = fragment_unresolved_jumps[jumps_index].target;
 #ifdef SYNC_BLOCKS
 			unresolved_jumps[k].start = direct_jump_start;
@@ -1254,7 +1471,14 @@ finish_fragment (unsigned char *preferred_alloced_integer_regs)
 			    {
 				reg_t reg = alloced_integer_regs[native_integer_regs[l]];
 
-				unresolved_jumps[k].alloced_integer_regs[l] = reg | (emu_regs[reg].dirty ? ALLOCED_REG_DIRTY : 0);
+				if (!emu_regs[reg].live_at_start)
+				    assert(emu_regs[reg].live_at_end);
+
+				/* comment out the if (only else branch remains) for fast compress */
+				if (!emu_regs[reg].live_at_start && !emu_regs[reg].dirty)
+				    unresolved_jumps[k].alloced_integer_regs[l] = ALLOCED_REG_NONE;
+				else
+				    unresolved_jumps[k].alloced_integer_regs[l] = reg | (emu_regs[reg].dirty ? ALLOCED_REG_DIRTY : 0);
 			    }
 			}
 			for (l = 0; l < NUM_FREE_FLOAT_REGS; ++l)
@@ -1265,7 +1489,14 @@ finish_fragment (unsigned char *preferred_alloced_integer_regs)
 			    {
 				reg_t reg = alloced_float_regs[native_float_regs[l]];
 
-				unresolved_jumps[k].alloced_float_regs[l] = reg | (emu_regs[reg].dirty ? ALLOCED_REG_DIRTY : 0);
+				if (!emu_regs[reg].live_at_start)
+				    assert(emu_regs[reg].live_at_end);
+
+				/* comment out the if (only else branch remains) for fast compress */
+				if (!emu_regs[reg].live_at_start && !emu_regs[reg].dirty)
+				    unresolved_jumps[k].alloced_float_regs[l] = ALLOCED_REG_NONE;
+				else
+				    unresolved_jumps[k].alloced_float_regs[l] = reg | (emu_regs[reg].dirty ? ALLOCED_REG_DIRTY : 0);
 			    }
 			}
 #endif
@@ -1277,20 +1508,29 @@ finish_fragment (unsigned char *preferred_alloced_integer_regs)
 	}
     }
 
+#ifdef SYNC_BLOCKS
+    assert(has_freezed_save);
+#endif
+
     for (i = 0; i < NUM_EMU_REGISTERS; ++i)
 	if (emu_regs[i].used && emu_regs[i].is_saved == DONT_KNOW)
 	    emu_regs[i].is_saved = emu_regs[i].live_at_end;
 
 #ifdef SYNC_BLOCKS
+#ifdef DYNAMO_TRACES
+#define IS_SAVED       is_saved_freeze
+#else
+#define IS_SAVED       is_saved
+#endif
     for (i = 0; i < NUM_FREE_INTEGER_REGS; ++i)
-	if (fragment_entry.alloced_integer_regs[i] != ALLOCED_REG_NONE
-	    && emu_regs[fragment_entry.alloced_integer_regs[i]].is_saved)
-	    fragment_entry.alloced_integer_regs[i] |= ALLOCED_REG_SAVED;
+	if (fragment_entry_supplement.alloced_integer_regs[i] != ALLOCED_REG_NONE
+	    && emu_regs[fragment_entry_supplement.alloced_integer_regs[i]].IS_SAVED)
+	    fragment_entry_supplement.alloced_integer_regs[i] |= ALLOCED_REG_SAVED;
 
     for (i = 0; i < NUM_FREE_FLOAT_REGS; ++i)
-	if (fragment_entry.alloced_float_regs[i] != ALLOCED_REG_NONE
-	    && emu_regs[fragment_entry.alloced_float_regs[i]].is_saved)
-	    fragment_entry.alloced_float_regs[i] |= ALLOCED_REG_SAVED;
+	if (fragment_entry_supplement.alloced_float_regs[i] != ALLOCED_REG_NONE
+	    && emu_regs[fragment_entry_supplement.alloced_float_regs[i]].IS_SAVED)
+	    fragment_entry_supplement.alloced_float_regs[i] |= ALLOCED_REG_SAVED;
 #endif
 
     /* jumps are patched */
@@ -1301,13 +1541,20 @@ finish_fragment (unsigned char *preferred_alloced_integer_regs)
 
 	for (j = 0; j < l->num_backpatches; ++j)
 	{
-	    sword_64 disp = (fragment_insns[l->insn_num] - fragment_insns[l->backpatches[j]] - 1) * 4;
+	    int index = fragment_insns[l->backpatches[j]];
+	    sword_64 disp;
 	    word_32 field;
+
+	    while ((code_area[index] >> 26) == 0x28 || (code_area[index] >> 26) == 0x2c
+		   || (code_area[index] >> 26) == 0x23 || (code_area[index] >> 26) == 0x27)
+		++index;
+
+	    disp = (fragment_insns[l->insn_num] - index - 1) * 4;
 
 	    assert(disp >= -(1 << 22) && disp < (1 << 22));
 	    field = (disp >> 2) & 0x1fffff;
 
-	    code_area[fragment_insns[l->backpatches[j]]] |= field;
+	    code_area[index] |= field;
 	}
     }
 
@@ -1316,7 +1563,7 @@ finish_fragment (unsigned char *preferred_alloced_integer_regs)
 
     disassemble_alpha_code(start, body_start);
 
-    dump_fragment_code(body_start, (word_64)emit_loc);
+    dump_fragment_code(body_start, (word_64)emit_loc, alt_start, (word_64)alt_emit_loc);
 #endif
 }
 
@@ -1417,7 +1664,8 @@ get_const_64 (int index)
 word_64
 lookup_fragment (word_32 addr)
 {
-    fragment_hash_entry_t *entry = fragment_hash_get(addr);
+    fragment_hash_supplement_t *supplement;
+    fragment_hash_entry_t *entry = fragment_hash_get(addr, &supplement);
 
     if (entry == 0)
 	return 0;
@@ -1437,7 +1685,7 @@ enter_fragment (word_32 foreign_addr, word_64 native_addr)
 	print_compiler_stats();
 #endif
 
-    fragment_hash_put(foreign_addr, &fragment_entry);
+    fragment_hash_put(foreign_addr, &fragment_entry, &fragment_entry_supplement);
 }
 #endif
 
@@ -1608,7 +1856,7 @@ count_leading_zeros (word_32 w)
 void
 init_compiler (interpreter_t *intp, interpreter_t *dbg_intp)
 {
-    int i, j, k, range;
+    int i, j, range;
     int native;
 
     compiler_intp = intp;
@@ -1656,6 +1904,9 @@ init_compiler (interpreter_t *intp, interpreter_t *dbg_intp)
 	unresolved_jumps[i].addr = 0;
 
     emit_loc = code_area;
+#ifdef DYNAMO_TRACES
+    alt_emit_loc = code_area + MAX_CODE_INSNS;
+#endif
 
     add_const_64((word_64)direct_dispatcher);
     add_const_64((word_64)indirect_dispatcher);
@@ -1734,7 +1985,7 @@ compile_until_jump (word_32 *addr, int optimize_taken_jump, label_t taken_jump_l
 #ifndef USE_HAND_TRANSLATOR
 	compile_ppc_insn(mem_get_32(compiler_intp, insnp), insnp, optimize_taken_jump, taken_jump_label);
 #else
-	compile_to_alpha_ppc_insn(mem_get_32(compiler_intp, insnp), insnp, optimize_taken_jump, taken_jump_label);
+	compile_to_alpha_ppc_insn(mem_get_32(compiler_intp, insnp), insnp, optimize_taken_jump, taken_jump_label, NO_FOREIGN_ADDR);
 #endif
 #elif defined(EMU_I386)
 	word_32 insn_addr = compiler_intp->pc;
@@ -1837,6 +2088,8 @@ compile_basic_block (word_32 addr, int as_trace, unsigned char *preferred_alloce
 
     start_timer();
 
+    setjmp(compiler_restart);
+
     start_fragment();
 
     /*
@@ -1922,7 +2175,7 @@ branch_profile_end_trace (void)
 word_64
 compile_trace (word_32 addr, int length, int bits)
 {
-    word_64 start = (word_64)emit_loc;
+    word_64 start;
     int bit;
 
 #ifdef COLLECT_STATS
@@ -1930,6 +2183,10 @@ compile_trace (word_32 addr, int length, int bits)
 #endif
 
     start_timer();
+
+    setjmp(compiler_restart);
+
+    start = (word_64)emit_loc;
 
     start_fragment();
 
@@ -1984,6 +2241,68 @@ compile_trace (word_32 addr, int length, int bits)
 #endif
 
     return start;
+}
+
+word_64
+compile_dynamo_trace (word_32 *addrs, int length)
+{
+    word_64 native_addr;
+    int i;
+#ifdef COUNT_INSNS
+    word_32 *emulated_lda_insn, *native_lda_insn, *old_emit_loc;
+
+    old_num_translated_insns = num_translated_insns;
+#endif
+
+    start_timer();
+
+    setjmp(compiler_restart);
+
+    start_fragment();
+
+    /*
+    while (((emit_loc - code_area) & 3) != 0)
+	emit(0);
+    */
+
+    native_addr = (word_64)emit_loc;
+
+    for (i = 0; i < length; ++i)
+    {
+	start_emu_insn(EMU_INSN_INSN, addrs[i]);
+
+	compile_to_alpha_ppc_insn(mem_get_32(compiler_intp, addrs[i]), addrs[i], 0, 0, i + 1 < length ? addrs[i + 1] : NO_FOREIGN_ADDR);
+    }
+
+    emit_start_direct_jump(1);
+
+    emit_store_regs(EMU_INSN_EPILOGUE);
+
+    emit_direct_jump(addrs[length - 1] + 4); /* this is not necessary if the jump at the end of the basic block was unconditional */
+
+    finish_fragment(0);
+
+    flush_icache();
+
+    stop_timer();
+
+#ifdef COLLECT_STATS
+    ++num_translated_traces;
+
+    /*
+    {
+	int i, used = 0;
+
+	for (i = 0; i < NUM_EMU_REGISTERS; ++i)
+	    if (regs_used_in_fragment[i])
+		++used;
+
+	printf("regs used in block: %d\n", used);
+    }
+    */
+#endif
+
+    return native_addr;
 }
 
 #ifdef CROSSDEBUGGER
@@ -2043,15 +2362,18 @@ interpret_until_threshold (word_32 addr)
 
     for (;;)
     {
-	entry = fragment_hash_get(compiler_intp->pc);
+	fragment_hash_supplement_t *supplement;
+
+	entry = fragment_hash_get(compiler_intp->pc, &supplement);
 	if (entry == 0)
 	{
 	    fragment_hash_entry_t new;
+	    fragment_hash_supplement_t new_supplement;
 
-	    init_fragment_hash_entry(&new);
+	    init_fragment_hash_entry(&new, &new_supplement);
 	    new.native_addr = 0;
 	    new.times_executed = 1;
-	    fragment_hash_put(compiler_intp->pc, &new);
+	    fragment_hash_put(compiler_intp->pc, &new, &new_supplement);
 	}
 	else
 	{
@@ -2095,7 +2417,7 @@ compile_fragment_if_needed (word_32 addr, unsigned char *preferred_alloced_integ
     ++num_direct_and_indirect_jumps;
 #endif
 
-#ifdef CROSSDEBUGGER
+#if defined(CROSSDEBUGGER) && !defined(DYNAMO_TRACES)
     printf("*** jumping to %08x\n", addr);
     reset_mem_trace();
     trace_mem = 1;
@@ -2109,6 +2431,9 @@ compile_fragment_if_needed (word_32 addr, unsigned char *preferred_alloced_integ
     assert(debugger_intp->pc == addr);
 #endif
 
+#ifdef DYNAMO_TRACES
+    return dynamo_runner(addr);
+#else
     if (native_addr != 0)
 	return native_addr;
 
@@ -2123,6 +2448,7 @@ compile_fragment_if_needed (word_32 addr, unsigned char *preferred_alloced_integ
     enter_fragment(addr, native_addr);
 
     return native_addr;
+#endif
 #endif
 }
 
@@ -2320,11 +2646,13 @@ provide_fragment_and_patch (word_64 jump_addr)
 
     foreign_addr = unresolved_jumps[i].target;
 
-#ifdef COMPILER_THRESHOLD
+#if defined(COMPILER_THRESHOLD) || defined(DYNAMO_TRACES)
     native_addr = lookup_fragment(foreign_addr);
 
     if (native_addr == 0)
-#ifdef PROFILE_LOOPS
+#if defined(DYNAMO_TRACES)
+	return dynamo_runner(foreign_addr);
+#elif defined(PROFILE_LOOPS)
 	return loop_profiler(compiler_intp, foreign_addr);
 #else
 	return interpret_until_threshold(foreign_addr);
@@ -2336,7 +2664,9 @@ provide_fragment_and_patch (word_64 jump_addr)
 	++num_patched_direct_jumps;
 #endif
 
-#ifndef COMPILER_THRESHOLD
+#if defined(DYNAMO_TRACES) && defined(CROSSDEBUGGER)
+	native_addr = dynamo_runner(foreign_addr);
+#elif !defined(COMPILER_THRESHOLD) && !defined(DYNAMO_TRACES)
 #ifdef SYNC_BLOCKS
 	native_addr = compile_fragment_if_needed(foreign_addr, unresolved_jumps[i].alloced_integer_regs);
 #else
@@ -2346,10 +2676,17 @@ provide_fragment_and_patch (word_64 jump_addr)
 
 #ifdef SYNC_BLOCKS
 	{
-	    fragment_hash_entry_t *entry = fragment_hash_get(foreign_addr);
+	    fragment_hash_supplement_t *supplement;
+	    fragment_hash_entry_t *entry = fragment_hash_get(foreign_addr, &supplement);
 	    int j;
 	    int sync;
-	    word_64 sync_block_start = (word_64)emit_loc;
+	    word_32 *sync_block_start = emit_loc;
+	    int num_epilogue_insns = (word_32*)jump_addr - (word_32*)unresolved_jumps[i].start;
+
+	    start_timer();
+
+	    if (setjmp(compiler_restart))
+		return provide_fragment(foreign_addr);
 
 	    assert(entry != 0);
 
@@ -2359,63 +2696,111 @@ provide_fragment_and_patch (word_64 jump_addr)
 		if (unresolved_jumps[i].alloced_integer_regs[j] != ALLOCED_REG_NONE)
 		    printf("$%d -> %d%s ", native_integer_regs[j], unresolved_jumps[i].alloced_integer_regs[j] & ALLOCED_REG_REG_MASK,
 			   (unresolved_jumps[i].alloced_integer_regs[j] & ALLOCED_REG_DIRTY) ? " (d)" : "");
-	    printf("\ndst: ");
+	    printf("\ndst (%08x): ", foreign_addr);
 	    for (j = 0; j < NUM_FREE_INTEGER_REGS; ++j)
-		if (entry->alloced_integer_regs[j] != ALLOCED_REG_NONE)
-		    printf("$%d -> %d%s ", native_integer_regs[j], entry->alloced_integer_regs[j] & ALLOCED_REG_REG_MASK,
-			   (entry->alloced_integer_regs[j] & ALLOCED_REG_SAVED) ? " (s)" : "");
+		if (supplement->alloced_integer_regs[j] != ALLOCED_REG_NONE)
+		    printf("$%d -> %d%s ", native_integer_regs[j], supplement->alloced_integer_regs[j] & ALLOCED_REG_REG_MASK,
+			   (supplement->alloced_integer_regs[j] & ALLOCED_REG_SAVED) ? " (s)" : "");
 	    printf("\n\n");
 	    */
 
 	    for (j = 0; j < NUM_FREE_FLOAT_REGS; ++j)
-		if (entry->alloced_float_regs[j] != ALLOCED_REG_NONE || unresolved_jumps[i].alloced_float_regs[j] != ALLOCED_REG_NONE)
+		if (supplement->alloced_float_regs[j] != ALLOCED_REG_NONE || unresolved_jumps[i].alloced_float_regs[j] != ALLOCED_REG_NONE)
 		    break;
 
 	    if (j == NUM_FREE_FLOAT_REGS)
-		sync = generate_sync_block(unresolved_jumps[i].alloced_integer_regs, entry->alloced_integer_regs, foreign_addr, native_addr);
+		sync = generate_sync_block(unresolved_jumps[i].alloced_integer_regs, supplement->alloced_integer_regs, foreign_addr, native_addr);
 	    else
 	    {
 		/* printf("float regs involved\n"); */
 		sync = SYNC_BLOCK_STANDARD;
 	    }
 
-	    if (sync == SYNC_BLOCK_NONE)
-	    {
-#ifdef COUNT_INSNS
-		direct_emit_const_add(EMPTY_SYNC_CONST, 1, 0);
+	    /*
+	    if (sync != SYNC_BLOCK_NONE)
+		sync = SYNC_BLOCK_STANDARD;
+	    */
 
-		*(word_32*)unresolved_jumps[i].start = compose_branch(unresolved_jumps[i].start, sync_block_start);
-		direct_emit(compose_branch((word_64)emit_loc, entry->synced_native_addr));
-#else
-		*(word_32*)unresolved_jumps[i].start = compose_branch(unresolved_jumps[i].start, entry->synced_native_addr);
+#ifdef COLLECT_STATS
+	    if (sync == SYNC_BLOCK_CUSTOM)
+		++num_sync_blocks;
 #endif
-	    }
-	    else if (sync == SYNC_BLOCK_STANDARD)
+
+	    /*
+	    if (sync == SYNC_BLOCK_CUSTOM)
 	    {
-		jump_addr -= 8;
+		printf("\n\nreplacing\n");
+		disassemble_alpha_code(unresolved_jumps[i].start, jump_addr);
+		printf("and\n");
+		disassemble_alpha_code(native_addr, supplement->synced_native_addr);
+		printf("with\n");
+		disassemble_alpha_code(sync_block_start, emit_loc);
+		printf("\n\n");
+	    }
+	    */
 
-#ifdef COUNT_INSNS
-		direct_emit_const_add(STANDARD_SYNC_CONST, 1, 0);
+	    if (sync == SYNC_BLOCK_CUSTOM && emit_loc - sync_block_start + 1 <= num_epilogue_insns)
+	    {
+		word_32 *branch_loc = (word_32*)unresolved_jumps[i].start + (emit_loc - sync_block_start);
 
-		*(word_32*)jump_addr = compose_branch(jump_addr, sync_block_start);
-		direct_emit(compose_branch((word_64)emit_loc, entry->native_addr));
-#else
-		*(word_32*)jump_addr = compose_branch(jump_addr, native_addr);
+		memcpy((void*)unresolved_jumps[i].start, sync_block_start, (emit_loc - sync_block_start) * 4);
+		*branch_loc = compose_branch((word_64)branch_loc, supplement->synced_native_addr);
+
+		emit_loc = sync_block_start; /* revert emitting */
+
+#ifdef COLLECT_STATS
+		++num_sync_blocks_in_situ;
 #endif
 	    }
 	    else
 	    {
-		assert(sync == SYNC_BLOCK_CUSTOM);
+		if (sync != SYNC_BLOCK_NONE)
+		    sync = SYNC_BLOCK_STANDARD;
 
-#ifdef COUNT_INSNS
-		direct_emit_const_add(CUSTOM_SYNC_CONST, 1, 0);
+		if (sync == SYNC_BLOCK_NONE)
+		{
+#ifdef COLLECT_STATS
+		    ++num_empty_sync_blocks;
 #endif
 
-		*(word_32*)unresolved_jumps[i].start = compose_branch(unresolved_jumps[i].start, sync_block_start);
-		direct_emit(compose_branch((word_64)emit_loc, entry->synced_native_addr));
+#ifdef COUNT_INSNS
+		    direct_emit_const_add(EMPTY_SYNC_CONST, 1, 0);
+
+		    *(word_32*)unresolved_jumps[i].start = compose_branch(unresolved_jumps[i].start, sync_block_start);
+		    direct_emit(compose_branch((word_64)emit_loc, supplement->synced_native_addr));
+#else
+		    *(word_32*)unresolved_jumps[i].start = compose_branch(unresolved_jumps[i].start, supplement->synced_native_addr);
+#endif
+		}
+		else if (sync == SYNC_BLOCK_STANDARD)
+		{
+		    jump_addr -= 8;
+
+#ifdef COUNT_INSNS
+		    direct_emit_const_add(STANDARD_SYNC_CONST, 1, 0);
+
+		    *(word_32*)jump_addr = compose_branch(jump_addr, sync_block_start);
+		    direct_emit(compose_branch((word_64)emit_loc, supplement->native_addr));
+#else
+		    *(word_32*)jump_addr = compose_branch(jump_addr, native_addr);
+#endif
+		}
+		else
+		{
+		    assert(sync == SYNC_BLOCK_CUSTOM);
+
+#ifdef COUNT_INSNS
+		    direct_emit_const_add(CUSTOM_SYNC_CONST, 1, 0);
+#endif
+
+		    *(word_32*)unresolved_jumps[i].start = compose_branch(unresolved_jumps[i].start, sync_block_start);
+		    direct_emit(compose_branch((word_64)emit_loc, supplement->synced_native_addr));
+		}
 	    }
 
 	    unresolved_jumps[i].addr = 0;
+
+	    stop_timer();
 
 	    flush_icache();
 	}
@@ -2445,6 +2830,9 @@ compile_and_return_first_native_addr (word_32 addr, int regs_in_compiler)
     if (!regs_in_compiler)
 	move_regs_interpreter_to_compiler(compiler_intp);
 
+#ifdef DYNAMO_TRACES
+    native_addr = dynamo_runner(addr);
+#else
 #ifdef COMPILER_THRESHOLD
 #ifdef PROFILE_LOOPS
     native_addr = loop_profiler(compiler_intp, addr);
@@ -2453,6 +2841,7 @@ compile_and_return_first_native_addr (word_32 addr, int regs_in_compiler)
 #endif
 #else
     native_addr = compile_basic_block(addr, 0, 0);
+#endif
 #endif
 
     return native_addr;
@@ -2473,13 +2862,7 @@ isync_handler (word_32 addr)
     ++num_isyncs;
 #endif
 
-    num_constants = num_constants_init;
-    emit_loc = code_area;
-
-    for (i = 0; i < MAX_UNRESOLVED_JUMPS; ++i)
-	unresolved_jumps[i].addr = 0;
-
-    init_fragment_hash();
+    reinit_compiler();
 
     return compile_and_return_first_native_addr(addr, 1);
 }
@@ -2505,6 +2888,9 @@ print_compiler_stats (void)
     printf("generated insns:               %lu\n", emit_loc - code_area - 3 * num_const_adds);
     printf("load/store reg insns:          %lu\n", num_load_store_reg_insns);
     printf("constants:                     %d\n", num_constants - (NUM_EMU_REGISTERS * 2 + 2));
+    printf("sync blocks:                   %ld\n", num_sync_blocks);
+    printf("sync blocks in situ:           %ld\n", num_sync_blocks_in_situ);
+    printf("empty sync blocks:             %ld\n", num_empty_sync_blocks);
     printf("stub calls:                    %lu\n", num_stub_calls);
     printf("loop profiler calls:           %lu\n", num_loop_profiler_calls);
     printf("isyncs:                        %lu\n", num_isyncs);

@@ -33,6 +33,13 @@
 typedef unsigned long old_sigset_t;
 #include <asm/ucontext.h>
 #include <stdio.h>
+#include <sys/types.h>
+#ifdef COMPLANG
+typedef long clock_t;
+#define SA_SIGINFO    0x00000040 /* Invoke signal-catching function with three
+				    arguments instead of one. */
+#include <asm/siginfo.h>
+#endif
 
 #include "bintrans.h"
 
@@ -116,7 +123,7 @@ sigbus_handler (int signo, siginfo_t *si, struct ucontext *uc)
     unsigned int target_reg;
 
 #ifdef NEED_COMPILER
-    if (uc->uc_mcontext.sc_pc < (long)code_area || uc->uc_mcontext.sc_pc >= (long)(code_area + MAX_CODE_INSNS))
+    if (uc->uc_mcontext.sc_pc < (long)code_area || uc->uc_mcontext.sc_pc >= (long)(code_area + MAX_CODE_INSNS + MAX_ALT_CODE_INSNS))
 	printf("unaligned access outside code area\n");
 #endif
 
@@ -176,8 +183,6 @@ sigbus_handler (int signo, siginfo_t *si, struct ucontext *uc)
     }
 
     uc->uc_mcontext.sc_pc += 4;
-
-    sigreturn((void*)uc);
 }
 
 void
@@ -192,8 +197,12 @@ init_unaligned (void)
     error = osf_setsysinfo(SSI_NVPAIRS, buf, 1, 0, 0);
     assert(error == 0);
 
+#ifdef COMPLANG
+    act.sa_handler = sigbus_handler;
+#else
     act.sa_handler = 0;
     act.sa_sigaction = sigbus_handler;
+#endif
     sigemptyset(&act.sa_mask);
     act.sa_flags = SA_NOMASK | SA_SIGINFO;
     error = sigaction(SIGBUS, &act, 0);

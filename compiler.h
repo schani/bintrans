@@ -20,16 +20,25 @@
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
-#define MAX_CODE_INSNS     600000
+#define MAX_CODE_INSNS        700000
+#ifdef DYNAMO_TRACES
+#define MAX_ALT_CODE_INSNS    300000
+#else
+#define MAX_ALT_CODE_INSNS         0
+#endif
 
-extern word_32 code_area[MAX_CODE_INSNS];
+extern word_32 code_area[MAX_CODE_INSNS + MAX_ALT_CODE_INSNS];
 
 typedef word_32 reg_t;
 typedef int label_t;
 
-#define NO_REG         ((reg_t)-1)
+#define NO_REG           ((reg_t)-1)
+#define NO_FOREIGN_ADDR  ((word_32)-1)
 
 extern interpreter_t *compiler_intp;
+#ifdef CROSSDEBUGGER
+extern interpreter_t *debugger_intp;
+#endif
 
 reg_t ref_integer_reg (int foreign_reg, int reading, int writing);
 void unref_integer_reg (reg_t reg);
@@ -59,14 +68,19 @@ void emit (word_32 insn);
 
 #define FIELD_REG_BIT      0x80000000
 
+#ifdef CROSSDEBUGGER
+void compare_register_sets (void);
+#endif
+
 /* ppc_compiler.c */
 void compile_ppc_insn (word_32 insn, word_32 pc, int optimize_taken_jump, label_t taken_jump_label);
 
 word_64 compile_basic_block (word_32 addr, int as_trace, unsigned char *preferred_alloced_integer_regs);
 word_64 compile_trace (word_32 addr, int length, int bits);
+word_64 compile_dynamo_trace (word_32 *addrs, int length);
 
 /* ppc_to_alpha_compiler.c */
-void compile_to_alpha_ppc_insn (word_32 insn, word_32 pc, int optimize_taken_jump, label_t taken_jump_label);
+void compile_to_alpha_ppc_insn (word_32 insn, word_32 pc, int optimize_taken_jump, label_t taken_jump_label, word_32 next_pc);
 
 /* ppc_jump_analyzer.c */
 void jump_analyze_ppc_insn (word_32 insn, word_32 pc, int *_num_targets, word_32 *targets, int *_can_fall_through, int *_can_jump_indirectly);

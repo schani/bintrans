@@ -22,14 +22,24 @@
 
 #include <stdio.h>
 #include <assert.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "bintrans.h"
-#ifdef PROFILE_LOOPS
+#if defined(PROFILE_LOOPS) || defined(DYNAMO_TRACES)
 #include "fragment_hash.h"
 #include "compiler.h"
 
 #define COUNT_POOL_SIZE             32768
 
+#ifdef DYNAMO_TRACES
+#define MAX_DYNAMO_TRACE              128
+int current_dynamo_trace_length;
+word_32 current_dynamo_trace[MAX_DYNAMO_TRACE];
+extern fragment_hash_supplement_t fragment_entry_supplement;
+#endif
+
+#ifdef PROFILE_LOOPS
 trace_count_t count_pool[COUNT_POOL_SIZE];
 int pool_mark = 0;
 
@@ -336,4 +346,320 @@ init_loops (void)
 	count_pool[i] = 0;
     clear_history();
 }
+#endif
+
+#ifdef DYNAMO_TRACES
+void
+run_until_fragment_start (interpreter_t *intp)
+{
+    for (;;)
+    {
+	word_32 prev_pc = intp->pc;
+
+	intp->have_jumped = 0;
+	intp->have_syscalled = 0;
+	interpret_insn(intp);
+
+	if (intp->have_syscalled)
+	    break;
+	if (intp->have_jumped)
+	{
+	    int num_targets, can_fall_through, can_jump_indirectly;
+	    word_32 target;
+
+	    jump_analyze_ppc_insn(mem_get_32(intp, prev_pc), prev_pc, &num_targets, &target, &can_fall_through, &can_jump_indirectly);
+
+	    if (!can_jump_indirectly && prev_pc > intp->pc)
+		break;
+	}
+    }
+}
+
+void
+collect_dynamo_trace (interpreter_t *intp)
+{
+    current_dynamo_trace_length = 0;
+
+    for (;;)
+    {
+	word_32 prev_pc = intp->pc;
+	int i;
+
+	current_dynamo_trace[current_dynamo_trace_length++] = intp->pc;
+
+	intp->have_jumped = 0;
+	intp->have_syscalled = 0;
+	interpret_insn(intp);
+
+	if (intp->have_syscalled)
+	    break;
+	if (intp->have_jumped)
+	{
+	    int num_targets, can_fall_through, can_jump_indirectly;
+	    word_32 target;
+
+	    jump_analyze_ppc_insn(mem_get_32(intp, prev_pc), prev_pc, &num_targets, &target, &can_fall_through, &can_jump_indirectly);
+
+	    if (!can_jump_indirectly && prev_pc > intp->pc)
+		break;
+	}
+	if (current_dynamo_trace_length == MAX_DYNAMO_TRACE)
+	    break;
+	for (i = 0; i < current_dynamo_trace_length; ++i) /* FIXME: this is quadratic! */
+	    if (intp->pc == current_dynamo_trace[i])
+		return;
+    }
+}
+
+#ifdef CROSSDEBUGGER
+word_32 last_native = 0;
+#endif
+
+word_64
+dynamo_runner (word_32 addr)
+{
+    move_regs_compiler_to_interpreter(compiler_intp);
+
+    compiler_intp->pc = addr;
+
+#ifdef CROSSDEBUGGER
+    /* printf("*** jumping to %08x\n", addr); */
+    compare_mem_writes(debugger_intp, compiler_intp);
+#endif
+
+    for (;;)
+    {
+	fragment_hash_entry_t *entry;
+	fragment_hash_supplement_t *supp;
+
+#ifdef CROSSDEBUGGER
+	assert(compiler_intp->pc == debugger_intp->pc);
+	compare_register_sets();
+#endif
+
+	entry = fragment_hash_get(compiler_intp->pc, &supp);
+
+	if (entry != 0)
+	{
+	    if (entry->native_addr != 0)
+	    {
+#ifdef CROSSDEBUGGER
+		int trace_index = 0;
+
+		assert(supp->insn_addrs != 0 && supp->insn_addrs[0] == debugger_intp->pc);
+
+		reset_mem_trace();
+		trace_mem = 1;
+
+		debugger_intp->have_jumped = 0;
+
+		for (;;)
+		{
+		    if (trace_index == supp->num_insns || debugger_intp->pc != supp->insn_addrs[trace_index])
+			break;
+
+		    interpret_insn(debugger_intp);
+		    ++trace_index;
+		}
+
+		trace_mem = 0;
+#endif
+
+		move_regs_interpreter_to_compiler(compiler_intp);
+
+#ifdef CROSSDEBUGGER
+		/* printf("*** native from %08x\n", compiler_intp->pc); */
+		last_native = compiler_intp->pc;
+#endif
+
+		return entry->native_addr;
+	    }
+	    else
+	    {
+		if (++supp->times_executed >= DYNAMO_THRESHOLD)
+		{
+		    word_32 foreign_addr = compiler_intp->pc;
+		    word_64 native_addr;
+		    fragment_hash_supplement_t *dummy;
+
+		    collect_dynamo_trace(compiler_intp);
+
+		    native_addr = compile_dynamo_trace(current_dynamo_trace, current_dynamo_trace_length);
+
+		    if (fragment_hash_get(foreign_addr, &dummy) == 0) /* cache flush */
+		    {
+#ifdef CROSSDEBUGGER
+			assert(0);
+#else
+			fragment_hash_entry_t new_entry;
+			fragment_hash_supplement_t supplement;
+
+			init_fragment_hash_entry(&new_entry, &supplement);
+
+			new_entry.native_addr = native_addr;
+			supplement.times_executed = 1;
+
+			fragment_hash_put(foreign_addr, &new_entry, &supplement);
+
+			entry = fragment_hash_get(foreign_addr, &supp);
+			assert(entry != 0);
+#endif
+		    }
+
+		    entry->native_addr = native_addr;
+
+#ifdef SYNC_BLOCKS
+		    supp->synced_native_addr = fragment_entry_supplement.synced_native_addr;
+		    memcpy(supp->alloced_integer_regs, fragment_entry_supplement.alloced_integer_regs,
+			   sizeof(fragment_entry_supplement.alloced_integer_regs));
+		    memcpy(supp->alloced_float_regs, fragment_entry_supplement.alloced_float_regs,
+			   sizeof(fragment_entry_supplement.alloced_float_regs));
+#endif
+
+#ifdef CROSSDEBUGGER
+		    supp->num_insns = current_dynamo_trace_length;
+		    supp->insn_addrs = (word_32*)malloc(sizeof(word_32) * supp->num_insns);
+		    memcpy(supp->insn_addrs, current_dynamo_trace, sizeof(word_32) * supp->num_insns);
+
+		    collect_dynamo_trace(debugger_intp);
+
+		    assert(compiler_intp->pc == debugger_intp->pc);
+		    compare_register_sets();
+#endif
+
+		    continue;
+
+		    /*
+		    move_regs_interpreter_to_compiler(compiler_intp);
+
+		    return entry->native_addr;
+		    */
+		}
+		else
+		{
+#ifdef CROSSDEBUGGER
+		    run_until_fragment_start(debugger_intp);
+#endif
+
+		    run_until_fragment_start(compiler_intp);
+		}
+	    }
+	}
+	else
+	{
+	    fragment_hash_entry_t entry;
+	    fragment_hash_supplement_t supplement;
+
+	    init_fragment_hash_entry(&entry, &supplement);
+
+	    supplement.times_executed = 1;
+
+	    fragment_hash_put(compiler_intp->pc, &entry, &supplement);
+
+	    run_until_fragment_start(compiler_intp);
+
+#ifdef CROSSDEBUGGER
+	    run_until_fragment_start(debugger_intp);
+#endif
+	}
+    }
+}
+
+#if 0
+void
+dynamo_profiler (interpreter_t *intp)
+{
+    for (;;)
+    {
+	fragment_hash_supplement_t *supp;
+	int trace_index;
+
+	if (fragment_hash_get(intp->pc, &supp) != 0)
+	    ++supp->times_executed;
+	else
+	    supp = 0;
+
+	if (supp != 0)
+	{
+	    if (supp->insn_addrs != 0)
+	    {
+		assert(supp->insn_addrs[0] == intp->pc);
+
+		trace_index = 0;
+
+		intp->have_jumped = 0;
+
+		for (;;)
+		{
+		    if (trace_index == supp->num_insns)
+		    {
+			++supp->times_complete;
+			break;
+		    }
+		    else if (intp->pc != supp->insn_addrs[trace_index])
+		    {
+			++supp->times_incomplete;
+			supp->insns_incomplete += trace_index;
+			break;
+		    }
+
+		    interpret_insn(intp);
+
+		    ++trace_index;
+		}
+	    }
+	    else
+	    {
+		if (supp->times_executed >= DYNAMO_THRESHOLD)
+		{
+		    collect_dynamo_trace(intp);
+
+		    supp->num_insns = current_dynamo_trace_length;
+		    supp->insn_addrs = (word_32*)malloc(sizeof(word_32) * supp->num_insns);
+		    memcpy(supp->insn_addrs, current_dynamo_trace, sizeof(word_32) * supp->num_insns);
+
+		    printf("new trace with %d insns, start %08x:\n", supp->num_insns, current_dynamo_trace[0]);
+		    /*
+		    for (i = 0; i < supp->num_insns; ++i)
+			printf("%08x ", supp->insn_addrs[i]);
+		    printf("\n");
+		    */
+		}
+		else
+		    run_until_fragment_start(intp);
+	    }
+	}
+	else
+	{
+	    fragment_hash_entry_t entry;
+	    fragment_hash_supplement_t supplement;
+
+	    init_fragment_hash_entry(&entry, &supplement);
+
+	    supplement.times_executed = 1;
+
+	    fragment_hash_put(intp->pc, &entry, &supplement);
+
+	    run_until_fragment_start(intp);
+	}
+    }
+}
+void
+print_trace_stats (void)
+{
+#ifdef COLLECT_STATS
+    int i;
+
+    for (i = 0; i < FRAGMENT_HASH_ENTRIES; ++i)
+	if (fragment_hash_table[i].foreign_addr != (word_32)-1
+	    && fragment_hash_supplement[i].insn_addrs != 0)
+	    printf("  %08x length %-4d: e %8ld  c %8ld  i %8ld %8ld\n",
+		   fragment_hash_table[i].foreign_addr, fragment_hash_supplement[i].num_insns,
+		   fragment_hash_supplement[i].times_executed, fragment_hash_supplement[i].times_complete,
+		   fragment_hash_supplement[i].times_incomplete, fragment_hash_supplement[i].insns_incomplete);
+#endif
+}
+#endif
+#endif
+
 #endif

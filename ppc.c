@@ -883,6 +883,9 @@ process_system_call (interpreter_t *intp, word_32 number,
 #ifdef PROFILE_LOOPS
 	    print_loop_stats();
 #endif
+#ifdef DYNAMO_TRACES
+	    /* print_trace_stats(); */
+#endif
 	    exit(arg1);
 	    break;
 
@@ -1951,8 +1954,10 @@ handle_system_call (interpreter_t *intp)
 	intp->regs_GPR[0] = (word_32)result;
 #endif
 
+    intp->have_syscalled = 1;
+
 #ifdef CROSSDEBUGGER
-    intp->have_jumped = 1;
+    intp->have_jumped = 1;	/* FIXME: we should handle this via have_syscalled */
 #endif
 }
 
@@ -2936,8 +2941,10 @@ main (int argc, char *argv[])
 #endif
     start_compiler(compiler.pc);
 #elif defined(INTERPRETER)
-#ifdef PROFILE_LOOPS
+#if defined(PROFILE_LOOPS)
     loop_profiler(&interpreter);
+#elif defined(DYNAMO_TRACES)
+    dynamo_profiler(&interpreter);
 #else
     for (;;)
 	interpret_insn(&interpreter);

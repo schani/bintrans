@@ -125,6 +125,12 @@
 #define announce(x)
 #endif
 
+#ifdef DYNAMO_TRACES
+#define NO_DYNAMO_TRACES         0
+#else
+#define NO_DYNAMO_TRACES         1
+#endif
+
 void
 move_ppc_regs_interpreter_to_compiler (interpreter_t *intp)
 {
@@ -293,6 +299,7 @@ move_ppc_regs_compiler_to_interpreter (interpreter_t *intp)
 
 static int optimize_taken_jump;
 static label_t taken_jump_label;
+static word_32 next_pc;
 
 static void
 gen_rc_code (reg_t reg)
@@ -860,13 +867,59 @@ handle_b_insn (word_32 insn, word_32 pc)
 	emit_branch(COMPOSE_BR(31, 0), taken_jump_label);
 	have_jumped = 1;
     }
+    else if (next_pc != NO_FOREIGN_ADDR)
+	assert(pc + (SEX32(FIELD_LI, 24) << 2) == next_pc);
     else
     {
+	emit_freeze_save();
+
 	emit_start_direct_jump(1);
 
 	emit_store_regs(EMU_INSN_EPILOGUE);
 
 	emit_direct_jump(pc + (SEX32(FIELD_LI, 24) << 2));
+    }
+}
+
+static void
+gen_indirect_branch (void)
+{
+    assert(!optimize_taken_jump);
+
+    if (NO_DYNAMO_TRACES || next_pc == NO_FOREIGN_ADDR)
+    {
+	emit_freeze_save();
+
+	emit_store_regs(EMU_INSN_EPILOGUE);
+
+	emit_indirect_jump();
+    }
+    else
+    {
+	reg_t tmp_reg;
+	label_t alt_label = alloc_label();
+
+	emit_freeze_save();
+
+	tmp_reg = alloc_tmp_integer_reg();
+
+	emit_load_integer_32(tmp_reg, next_pc);
+	emit(COMPOSE_CMPEQ(tmp_reg, JUMP_TARGET_REG, tmp_reg));
+
+	emit_branch(COMPOSE_BEQ(tmp_reg, 0), alt_label);
+
+	free_tmp_integer_reg(tmp_reg);
+
+	emit_begin_alt();
+
+	emit_label(alt_label);
+	free_label(alt_label);
+
+	emit_store_regs(EMU_INSN_EPILOGUE);
+
+	emit_indirect_jump();
+
+	emit_end_alt();
     }
 }
 
@@ -881,11 +934,88 @@ handle_bctr_insn (word_32 insn, word_32 pc)
 
     unref_integer_reg(ctr_reg);
 
-    assert(!optimize_taken_jump);
+    gen_indirect_branch();
+}
 
-    emit_store_regs(EMU_INSN_EPILOGUE);
+static void
+gen_cond_branch (word_32 insn, word_32 pc, void (*pos_emitter) (reg_t, label_t), void (*neg_emitter) (reg_t, label_t),
+		 reg_t cond_reg, int unref_cond_reg)
+{
+    if (optimize_taken_jump)
+    {
+	pos_emitter(cond_reg, taken_jump_label);
 
-    emit_indirect_jump();
+	if (unref_cond_reg)
+	    unref_integer_reg(cond_reg);
+
+	have_jumped = 1;
+    }
+    else if (NO_DYNAMO_TRACES || next_pc == NO_FOREIGN_ADDR)
+    {
+	label_t end_label = alloc_label();
+
+	emit_freeze_save();
+
+	neg_emitter(cond_reg, end_label);
+
+	if (unref_cond_reg)
+	    unref_integer_reg(cond_reg);
+
+	emit_start_direct_jump(1);
+
+	emit_store_regs(EMU_INSN_EPILOGUE);
+
+	emit_direct_jump(pc + (SEX32(FIELD_BD, 14) << 2));
+
+	emit_label(end_label);
+	free_label(end_label);
+    }
+    else
+    {
+	word_32 target = pc + (SEX32(FIELD_BD, 14) << 2);
+	label_t alt_label = alloc_label();
+
+	assert(target != pc + 4);
+	assert(next_pc == target || next_pc == pc + 4);
+
+	emit_freeze_save();
+
+	if (next_pc == pc + 4)
+	    pos_emitter(cond_reg, alt_label);
+	else
+	    neg_emitter(cond_reg, alt_label);
+
+	if (unref_cond_reg)
+	    unref_integer_reg(cond_reg);
+
+	emit_begin_alt();
+
+	emit_label(alt_label);
+	free_label(alt_label);
+
+	emit_start_direct_jump(1);
+
+	emit_store_regs(EMU_INSN_EPILOGUE);
+
+	if (next_pc == pc + 4)
+	    emit_direct_jump(target);
+	else
+	    emit_direct_jump(pc + 4);
+
+	emit_end_alt();
+    }
+}
+
+static void
+emit_beq (reg_t reg, label_t label)
+{
+    emit_branch(COMPOSE_BEQ(reg, 0), label);
+}
+
+static void
+emit_bne (reg_t reg, label_t label)
+{
+    emit_branch(COMPOSE_BNE(reg, 0), label);
 }
 
 static void
@@ -897,42 +1027,25 @@ gen_branch_with_decrement_insn (word_32 insn, word_32 pc, int zero)
 
     emit(COMPOSE_SUBL_IMM(ctr_reg, 1, ctr_reg));
 
-    if (optimize_taken_jump)
-    {
-	if (zero)
-	    emit_branch(COMPOSE_BEQ(ctr_reg, 0), taken_jump_label);
-	else
-	    emit_branch(COMPOSE_BNE(ctr_reg, 0), taken_jump_label);
-	unref_integer_reg(ctr_reg);
-
-	have_jumped = 1;
-    }
-    else
-    {
-	label_t end_label = alloc_label();
-
-	if (zero)
-	    emit_branch(COMPOSE_BNE(ctr_reg, 0), end_label);
-	else
-	    emit_branch(COMPOSE_BEQ(ctr_reg, 0), end_label);
-
-	unref_integer_reg(ctr_reg);
-
-	emit_start_direct_jump(1);
-
-	emit_store_regs(EMU_INSN_EPILOGUE);
-
-	emit_direct_jump(pc + (SEX32(FIELD_BD, 14) << 2));
-
-	emit_label(end_label);
-	free_label(end_label);
-    }
+    gen_cond_branch(insn, pc, zero ? emit_beq : emit_bne, zero ? emit_bne : emit_beq, ctr_reg, 1);
 }
 
 static void
 handle_bdnz_insn (word_32 insn, word_32 pc)
 {
     gen_branch_with_decrement_insn(insn, pc, 0);
+}
+
+static void
+emit_blbs (reg_t reg, label_t label)
+{
+    emit_branch(COMPOSE_BLBS(reg, 0), label);
+}
+
+static void
+emit_blbc (reg_t reg, label_t label)
+{
+    emit_branch(COMPOSE_BLBC(reg, 0), label);
 }
 
 static void
@@ -944,36 +1057,7 @@ gen_bcrfb_insn (word_32 insn, word_32 pc, int eq)
 
 	crfb_reg = ref_ppc_crf0_r(FIELD_BI);
 
-	if (optimize_taken_jump)
-	{
-	    if (eq)
-		emit_branch(COMPOSE_BNE(crfb_reg, 0), taken_jump_label);
-	    else
-		emit_branch(COMPOSE_BEQ(crfb_reg, 0), taken_jump_label);
-	    unref_integer_reg(crfb_reg);
-
-	    have_jumped = 1;
-	}
-	else
-	{
-	    label_t end_label = alloc_label();
-
-	    if (eq)
-		emit_branch(COMPOSE_BEQ(crfb_reg, 0), end_label);
-	    else
-		emit_branch(COMPOSE_BNE(crfb_reg, 0), end_label);
-
-	    unref_integer_reg(crfb_reg);
-
-	    emit_start_direct_jump(1);
-
-	    emit_store_regs(EMU_INSN_EPILOGUE);
-
-	    emit_direct_jump(pc + (SEX32(FIELD_BD, 14) << 2));
-
-	    emit_label(end_label);
-	    free_label(end_label);
-	}
+	gen_cond_branch(insn, pc, eq ? emit_bne : emit_beq, eq ? emit_beq : emit_bne, crfb_reg, 1);
     }
     else
     {
@@ -986,33 +1070,7 @@ gen_bcrfb_insn (word_32 insn, word_32 pc, int eq)
 
 	unref_integer_reg(cr_reg);
 
-	if (optimize_taken_jump)
-	{
-	    if (eq)
-		emit_branch(COMPOSE_BLBS(tmp_reg, 0), taken_jump_label);
-	    else
-		emit_branch(COMPOSE_BLBC(tmp_reg, 0), taken_jump_label);
-
-	    have_jumped = 1;
-	}
-	else
-	{
-	    label_t end_label = alloc_label();
-
-	    if (eq)
-		emit_branch(COMPOSE_BLBC(tmp_reg, 0), end_label);
-	    else
-		emit_branch(COMPOSE_BLBS(tmp_reg, 0), end_label);
-
-	    emit_start_direct_jump(1);
-
-	    emit_store_regs(EMU_INSN_EPILOGUE);
-
-	    emit_direct_jump(pc + (SEX32(FIELD_BD, 14) << 2));
-
-	    emit_label(end_label);
-	    free_label(end_label);
-	}
+	gen_cond_branch(insn, pc, eq ? emit_blbs : emit_blbc, eq ? emit_blbc : emit_blbs, tmp_reg, 0);
 
 	free_tmp_integer_reg(tmp_reg);
     }
@@ -1056,30 +1114,87 @@ gen_bcrfblr_insn (word_32 insn, word_32 pc, int eq)
 	unref_integer_reg(cr_reg);
     }
 
-    if (eq)
-	emit_branch(COMPOSE_BLBC(cond_reg, 0), end_label);
+    if (NO_DYNAMO_TRACES || next_pc == NO_FOREIGN_ADDR)
+    {
+	emit_freeze_save();
+
+	if (eq)
+	    emit_branch(COMPOSE_BLBC(cond_reg, 0), end_label);
+	else
+	    emit_branch(COMPOSE_BLBS(cond_reg, 0), end_label);
+
+	if (FIELD_BI < 4)
+	    unref_integer_reg(cond_reg);
+	else
+	    free_tmp_integer_reg(cond_reg);
+
+	lr_reg = ref_ppc_spr_r(SPR_LR);
+
+	emit(COMPOSE_BIC_IMM(lr_reg, 3, JUMP_TARGET_REG));
+
+	unref_integer_reg(lr_reg);
+
+	assert(!optimize_taken_jump);
+
+	emit_store_regs(EMU_INSN_EPILOGUE);
+
+	emit_indirect_jump();
+
+	emit_label(end_label);
+	free_label(end_label);
+    }
     else
-	emit_branch(COMPOSE_BLBS(cond_reg, 0), end_label);
+    {
+	label_t alt_label = alloc_label();
 
-    if (FIELD_BI < 4)
-	unref_integer_reg(cond_reg);
-    else
-	free_tmp_integer_reg(cond_reg);
+	emit_freeze_save();
 
-    lr_reg = ref_ppc_spr_r(SPR_LR);
+	lr_reg = ref_ppc_spr_r(SPR_LR);
 
-    emit(COMPOSE_BIC_IMM(lr_reg, 3, JUMP_TARGET_REG));
+	if ((eq && next_pc == pc + 4)
+	    || (!eq && next_pc != pc + 4))
+	    emit_branch(COMPOSE_BLBS(cond_reg, 0), alt_label);
+	else
+	    emit_branch(COMPOSE_BLBC(cond_reg, 0), alt_label);
 
-    unref_integer_reg(lr_reg);
+	if (FIELD_BI < 4)
+	    unref_integer_reg(cond_reg);
+	else
+	    free_tmp_integer_reg(cond_reg);
 
-    assert(!optimize_taken_jump);
+	if (next_pc != pc + 4)
+	{
+	    emit(COMPOSE_BIC_IMM(lr_reg, 3, JUMP_TARGET_REG));
 
-    emit_store_regs(EMU_INSN_EPILOGUE);
+	    gen_indirect_branch();
+	}
 
-    emit_indirect_jump();
+	emit_begin_alt();
 
-    emit_label(end_label);
-    free_label(end_label);
+	emit_label(alt_label);
+	free_label(alt_label);
+
+	if (next_pc == pc + 4)
+	{
+	    emit(COMPOSE_BIC_IMM(lr_reg, 3, JUMP_TARGET_REG));
+
+	    emit_store_regs(EMU_INSN_EPILOGUE);
+
+	    emit_indirect_jump();
+	}
+	else
+	{
+	    emit_start_direct_jump(1);
+
+	    emit_store_regs(EMU_INSN_EPILOGUE);
+
+	    emit_direct_jump(pc + 4);
+	}
+
+	emit_end_alt();
+
+	unref_integer_reg(lr_reg);
+    }
 }
 
 static void
@@ -1113,11 +1228,7 @@ handle_blr_insn (word_32 insn, word_32 pc)
 
     unref_integer_reg(lr_reg);
 
-    assert(!optimize_taken_jump);
-
-    emit_store_regs(EMU_INSN_EPILOGUE);
-
-    emit_indirect_jump();
+    gen_indirect_branch();
 }
 
 static void
@@ -1132,11 +1243,7 @@ handle_blrl_insn (word_32 insn, word_32 pc)
 
     unref_integer_reg(lr_reg);
 
-    assert(!optimize_taken_jump);
-
-    emit_store_regs(EMU_INSN_EPILOGUE);
-
-    emit_indirect_jump();
+    gen_indirect_branch();
 }
 
 static void
@@ -3084,6 +3191,9 @@ handle_mtcrf_insn (word_32 insn, word_32 pc)
 	    }
     }
 
+    /* FIXME: we don't have to the all the following if FIELD_CRM ==
+       0x80 */
+
     mask_reg = alloc_tmp_integer_reg();
 
     emit_load_integer_32(mask_reg, maskmask(4, 8, FIELD_CRM & 0x7f));
@@ -3598,6 +3708,8 @@ handle_rlwinmd_insn (word_32 insn, word_32 pc)
 static void
 handle_sc_insn (word_32 insn, word_32 pc)
 {
+    emit_freeze_save();
+
     emit_store_regs(EMU_INSN_EPILOGUE);
 
     emit_system_call();
@@ -4376,7 +4488,7 @@ handle_stwx_insn (word_32 insn, word_32 pc)
     {
 	reg_t ra_reg;
 
-	ra_reg = ref_ppc_gpr_rw(FIELD_RA);
+	ra_reg = ref_ppc_gpr_r(FIELD_RA);
 	addr_reg = alloc_tmp_integer_reg();
 
 	emit(COMPOSE_ADDL(ra_reg, rb_reg, addr_reg));
@@ -4798,13 +4910,18 @@ handle_xoris_insn (word_32 insn, word_32 pc)
 }
 
 void
-compile_to_alpha_ppc_insn (word_32 insn, word_32 pc, int _optimize_taken_jump, label_t _taken_jump_label)
+compile_to_alpha_ppc_insn (word_32 insn, word_32 pc, int _optimize_taken_jump, label_t _taken_jump_label, word_32 _next_pc)
 {
     optimize_taken_jump = _optimize_taken_jump;
     taken_jump_label = _taken_jump_label;
+    next_pc = _next_pc;
 
 #ifdef COLLECT_STATS
     ++num_translated_insns;
+#endif
+
+#ifndef DYNAMO_TRACES
+    assert(next_pc == NO_FOREIGN_ADDR);
 #endif
 
     switch (((insn >> 26) & 0x3F)) {

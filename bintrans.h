@@ -125,6 +125,7 @@ typedef struct
     unsigned long insn_count;
     int halt;
     int have_jumped;
+    int have_syscalled;
     int trace;
     breakpoint_t *breakpoints;
     watchpoint_t *watchpoints;
@@ -134,7 +135,7 @@ typedef struct
     fd_mapping_t fd_map[MAX_FDS];
 } interpreter_t;
 
-typedef unsigned int trace_count_t;
+typedef unsigned long trace_count_t;
 
 #ifdef CROSSDEBUGGER
 #define MAX_MEM_TRACES         128
@@ -286,6 +287,11 @@ void init_unaligned (void);
 word_64 loop_profiler (interpreter_t *intp, word_32 addr);
 #else
 void loop_profiler (interpreter_t *intp);
+#endif
+#ifdef DYNAMO_TRACES
+void dynamo_profiler (interpreter_t *intp);
+word_64 dynamo_runner (word_32 addr);
+void print_trace_stats (void);
 #endif
 void print_loop_stats (void);
 void init_loops (void);

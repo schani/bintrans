@@ -34,11 +34,12 @@ typedef struct
 #ifdef NEED_COMPILER
     word_64 native_addr;
 #endif
-#ifdef PROFILE_FRAGMENTS
-    unsigned long times_executed;
-#ifdef NEED_COMPILER
-    unsigned long pad;
-#endif
+} fragment_hash_entry_t;
+
+typedef struct
+{
+#if defined(PROFILE_FRAGMENTS) || defined(DYNAMO_TRACES)
+    trace_count_t times_executed;
 #endif
 #ifdef PROFILE_LOOPS
     trace_count_t trace0_count;
@@ -49,16 +50,28 @@ typedef struct
     unsigned char alloced_integer_regs[NUM_FREE_INTEGER_REGS];
     unsigned char alloced_float_regs[NUM_FREE_FLOAT_REGS];
 #endif
-} fragment_hash_entry_t;
+#ifdef DYNAMO_TRACES
+    /*
+    trace_count_t times_complete;
+    trace_count_t times_incomplete;
+    trace_count_t insns_incomplete;
+    */
+#ifdef CROSSDEBUGGER
+    int num_insns;
+    word_32 *insn_addrs;
+#endif
+#endif
+} fragment_hash_supplement_t;
 
 #ifdef COLLECT_STATS
 extern unsigned long num_fragment_hash_misses;
 #endif
 
-fragment_hash_entry_t* fragment_hash_get (word_32 addr);
-fragment_hash_entry_t* fragment_hash_put (word_32 foreign_addr, fragment_hash_entry_t *entry);
-void init_fragment_hash_entry (fragment_hash_entry_t *entry);
+fragment_hash_entry_t* fragment_hash_get (word_32 addr, fragment_hash_supplement_t **supplement);
+fragment_hash_entry_t* fragment_hash_put (word_32 foreign_addr, fragment_hash_entry_t *entry, fragment_hash_supplement_t *supplement);
+void init_fragment_hash_entry (fragment_hash_entry_t *entry, fragment_hash_supplement_t *supplement);
 
 void init_fragment_hash (void);
 
 extern fragment_hash_entry_t fragment_hash_table[FRAGMENT_HASH_ENTRIES];
+extern fragment_hash_supplement_t fragment_hash_supplement[FRAGMENT_HASH_TABLE_SIZE + FRAGMENT_HASH_OVERFLOW];

@@ -357,7 +357,7 @@
   ((if (bit-set-p (reg cr) (width 5 (- 31 bi)))
        (nop)
        (jump-relative (shiftl (sex bd) 2))))
-  ("bns %u,0x%x" bi (width 32 (+ addr (shiftl (sex li) 2)))))
+  ("bns %u,0x%x" bi (width 32 (+ addr (shiftl (sex bd) 2)))))
 
 (define-insn bne-
     ((opcd 16)
@@ -367,7 +367,7 @@
   ((if (bit-set-p (reg cr) (width 5 (- 31 bi)))
        (nop)
        (jump-relative (shiftl (sex bd) 2))))
-  ("bns- %u,0x%x" bi (width 32 (+ addr (shiftl (sex li) 2)))))
+  ("bns- %u,0x%x" bi (width 32 (+ addr (shiftl (sex bd) 2)))))
 
 (define-insn bnelr
     ((opcd 19)

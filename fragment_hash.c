@@ -26,6 +26,7 @@
 #include "fragment_hash.h"
 
 fragment_hash_entry_t fragment_hash_table[FRAGMENT_HASH_TABLE_SIZE + FRAGMENT_HASH_OVERFLOW];
+fragment_hash_supplement_t fragment_hash_supplement[FRAGMENT_HASH_TABLE_SIZE + FRAGMENT_HASH_OVERFLOW];
 int first_free_overflow;
 
 #ifdef COLLECT_STATS
@@ -33,7 +34,7 @@ unsigned long num_fragment_hash_misses = 0;
 #endif
 
 fragment_hash_entry_t*
-fragment_hash_get (word_32 addr)
+fragment_hash_get (word_32 addr, fragment_hash_supplement_t **supplement)
 {
     int index = HASH_ADDR(addr);
 
@@ -43,7 +44,10 @@ fragment_hash_get (word_32 addr)
 	return 0;
 
     if (fragment_hash_table[index].foreign_addr == addr)
+    {
+	*supplement = &fragment_hash_supplement[index];
 	return &fragment_hash_table[index];
+    }
 
 #ifdef COLLECT_STATS
     ++num_fragment_hash_misses;
@@ -53,7 +57,10 @@ fragment_hash_get (word_32 addr)
     while (index != -1)
     {
 	if (fragment_hash_table[index].foreign_addr == addr)
+	{
+	    *supplement = &fragment_hash_supplement[index];
 	    return &fragment_hash_table[index];
+	}
 	index = fragment_hash_table[index].next;
     }
 
@@ -65,7 +72,7 @@ fragment_hash_get (word_32 addr)
 }
 
 fragment_hash_entry_t*
-fragment_hash_put (word_32 foreign_addr, fragment_hash_entry_t *entry)
+fragment_hash_put (word_32 foreign_addr, fragment_hash_entry_t *entry, fragment_hash_supplement_t *supplement)
 {
     int index = HASH_ADDR(foreign_addr);
 
@@ -74,6 +81,8 @@ fragment_hash_put (word_32 foreign_addr, fragment_hash_entry_t *entry)
 	fragment_hash_table[index] = *entry;
 	fragment_hash_table[index].foreign_addr = foreign_addr;
 	fragment_hash_table[index].next = -1;
+
+	fragment_hash_supplement[index] = *supplement;
 
 	return &fragment_hash_table[index];
     }
@@ -88,6 +97,8 @@ fragment_hash_put (word_32 foreign_addr, fragment_hash_entry_t *entry)
 	fragment_hash_table[new].foreign_addr = foreign_addr;
 	fragment_hash_table[new].next = -1;
 
+	fragment_hash_supplement[new] = *supplement;
+
 	while (fragment_hash_table[index].next != -1)
 	    index = fragment_hash_table[index].next;
 
@@ -98,7 +109,7 @@ fragment_hash_put (word_32 foreign_addr, fragment_hash_entry_t *entry)
 }
 
 void
-init_fragment_hash_entry (fragment_hash_entry_t *entry)
+init_fragment_hash_entry (fragment_hash_entry_t *entry, fragment_hash_supplement_t *supplement)
 {
 #ifdef PROFILE_LOOPS
     int i;
@@ -109,13 +120,24 @@ init_fragment_hash_entry (fragment_hash_entry_t *entry)
 #ifdef NEED_COMPILER
     entry->native_addr = 0;
 #endif
-#ifdef PROFILE_FRAGMENTS
-    entry->times_executed = 0;
+#if defined(PROFILE_FRAGMENTS) || defined(DYNAMO_TRACES)
+    supplement->times_executed = 0;
 #endif
 #ifdef PROFILE_LOOPS
-    entry->trace0_count = 0;
+    supplement->trace0_count = 0;
     for (i = 0; i < MAX_TRACE_JUMPS; ++i)
-	entry->trace_pool_indexes[i] = -1;
+	supplement->trace_pool_indexes[i] = -1;
+#endif
+#ifdef DYNAMO_TRACES
+    /*
+    supplement->times_complete = 0;
+    supplement->times_incomplete = 0;
+    supplement->insns_incomplete = 0;
+    */
+#ifdef CROSSDEBUGGER
+    supplement->num_insns = 0;
+    supplement->insn_addrs = 0;
+#endif
 #endif
 }
 
