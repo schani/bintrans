@@ -31,6 +31,7 @@
 
 /* #define NO_REGISTER_CACHING */
 /* #define NO_PATCHING */
+#define PATCH_STORE_REGS
 /* #define CHECK_TMP_REGS */
 #define PRESERVE_CONSTANTS
 
@@ -368,6 +369,9 @@ unsigned long num_isyncs = 0;
 unsigned long num_sync_blocks = 0;
 unsigned long num_sync_blocks_in_situ = 0;
 unsigned long num_empty_sync_blocks = 0;
+#ifdef COLLECT_LIVENESS
+unsigned long num_patched_stores = 0;
+#endif
 #endif
 
 fragment_hash_entry_t fragment_entry;
@@ -3047,6 +3051,45 @@ compose_branch (addr_t branch_addr, addr_t target_addr)
 #error unsupported target architecture
 #endif
 
+#ifdef COLLECT_STATS
+word_32*
+patch_store_regs (word_32 *jump, word_32 foreign_addr)
+{
+#ifdef PATCH_STORE_REGS
+    fragment_hash_supplement_t *supplement;
+    fragment_hash_entry_t *entry = fragment_hash_get(foreign_addr, &supplement);
+    word_32 *next;
+
+    assert(entry != 0);
+
+    while ((*--jump & 0xfc1f0000) == COMPOSE_STL(0,0,CONSTANT_AREA_REG))
+	;
+    ++jump;
+
+    next = jump;
+    while ((*jump & 0xfc1f0000) == COMPOSE_STL(0,0,CONSTANT_AREA_REG))
+    {
+	int native_reg = (*jump >> 21) & 0x1f;
+	int foreign_reg = (*jump & 0xffff) >> 3;
+
+	assert(foreign_reg < NUM_EMU_REGISTERS);
+
+	if (emu_reg_live(foreign_reg, supplement->live_cr, supplement->live_xer, supplement->live_gpr))
+	{
+	    *next++ = *jump++;
+	    ++num_patched_stores;
+	}
+	else
+	    ++jump;
+    }
+
+    return next;
+#else
+    return jump;
+#endif
+}
+#endif
+
 addr_t
 provide_fragment_and_patch (addr_t jump_addr)
 {
@@ -3242,6 +3285,10 @@ provide_fragment_and_patch (addr_t jump_addr)
 #error unsupported target architecture
 #endif
 
+#ifdef COLLECT_LIVENESS
+	jump_addr = (addr_t)patch_store_regs((word_32*)jump_addr, foreign_addr);
+#endif
+
 	*(word_32*)jump_addr = compose_branch(jump_addr, native_addr);
 
 #ifdef SYNC_BLOCKS
@@ -3321,6 +3368,9 @@ print_compiler_stats (void)
     printf("translated insns in traces:    %lu\n", num_translated_trace_insns);
     printf("generated insns:               %lu\n", emit_loc - code_area - 3 * num_const_adds);
     printf("load/store reg insns:          %lu\n", num_load_store_reg_insns);
+#ifdef COLLECT_LIVENESS
+    printf("patched store reg insns:       %lu\n", num_patched_stores);
+#endif
     printf("constants:                     %d\n", num_constants - (NUM_EMU_REGISTERS * 2 + 2));
     printf("sync blocks:                   %ld\n", num_sync_blocks);
     printf("sync blocks in situ:           %ld\n", num_sync_blocks_in_situ);
