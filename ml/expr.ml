@@ -81,7 +81,7 @@ let other_byte_order bo =
 
 type unary_op =
     LoadByte
-  | IntToFloat | FloatToInt | ConditionToInt
+  | IntToFloat | FloatToInt | ConditionToInt | IntToCondition
   | IntEven
   | IntNeg | BitNeg | ConditionNeg
   | FloatSqrt | FloatNeg | FloatAbs
@@ -90,7 +90,7 @@ type unary_op =
 let unary_op_value_type op =
   match op with
     LoadByte -> Int
-  | IntToFloat -> Float | FloatToInt -> Int | ConditionToInt -> Int
+  | IntToFloat -> Float | FloatToInt -> Int | ConditionToInt -> Int | IntToCondition -> Condition
   | IntEven -> Condition
   | IntNeg -> Int | BitNeg -> Int | ConditionNeg -> Condition
   | FloatSqrt -> Float | FloatNeg -> Float | FloatAbs -> Float
@@ -99,28 +99,29 @@ let unary_op_value_type op =
 let unary_op_name unary_op =
   match unary_op with
     LoadByte -> "MEM1"
-  | IntToFloat -> "Float" | FloatToInt -> "Int" | ConditionToInt -> "Int"
+  | IntToFloat -> "Float" | FloatToInt -> "Int" | ConditionToInt -> "Int" | IntToCondition -> "Condition"
   | IntEven -> "IntEven"
   | IntNeg -> "IntNeg" | BitNeg -> "BitNeg" | ConditionNeg -> "ConditionNeg"
   | FloatSqrt -> "FloatSqrt" | FloatNeg -> "FloatNeg" | FloatAbs -> "FloatAbs"
   | HighMask -> "HighMask" | LowMask -> "LowMask" | LowOneBits -> "LowOneBits"
 
 type unary_width_op =
-    IntZero | IntParityEven | IntSign
+    IntParityEven | IntSign
   | Sex | Zex
 
 let unary_width_op_value_type op =
   match op with
-    IntZero -> Condition | IntParityEven -> Condition | IntSign -> Condition
+    IntParityEven -> Condition | IntSign -> Condition
   | Sex -> Int | Zex -> Int
 
 let unary_width_op_name unary_width_op =
   match unary_width_op with
-    IntZero -> "IntZero" | IntParityEven -> "IntParityEven" | IntSign -> "IntSign"
+    IntParityEven -> "IntParityEven" | IntSign -> "IntSign"
   | Sex -> "Sex" | Zex -> "Zex"
 
 type binary_op =
-    FloatEqual | FloatLess
+    IntEqual | LessU | LessS
+  | FloatEqual | FloatLess
   | IntAdd | IntMul | BitAnd | BitOr | BitXor
   | ShiftL
   | ConditionAnd | ConditionOr | ConditionXor
@@ -129,7 +130,8 @@ type binary_op =
 
 let binary_op_value_type op =
   match op with
-    FloatEqual -> Condition | FloatLess -> Condition
+    IntEqual -> Condition | LessU -> Condition | LessS -> Condition
+  | FloatEqual -> Condition | FloatLess -> Condition
   | IntAdd -> Int | IntMul -> Int
   | BitAnd -> Int | BitOr -> Int | BitXor -> Int
   | ShiftL -> Int
@@ -139,7 +141,8 @@ let binary_op_value_type op =
 
 let binary_op_name binary_op =
   match binary_op with
-    FloatEqual -> "FloatEqual" | FloatLess -> "FloatLess"
+    IntEqual -> "IntEqual" | LessU -> "IntLessU" | LessS -> "IntLessS"
+  | FloatEqual -> "FloatEqual" | FloatLess -> "FloatLess"
   | IntAdd -> "IntAdd" | IntMul -> "IntMul"
   | BitAnd -> "BitAnd" | BitOr -> "BitOr" | BitXor -> "BitXor"
   | ShiftL -> "ShiftL"
@@ -148,22 +151,19 @@ let binary_op_name binary_op =
   | BitMask -> "BitMask" | BothLowOneBits -> "BothLowOneBits"
 
 type binary_width_op =
-    IntEqual | LessU | LessS
-  | AddCarry | SubCarry | Overflow
+    AddCarry | SubCarry | Overflow
   | LShiftR | AShiftR
   | IntMulHS | IntMulHU
 
 let binary_width_op_value_type op =
   match op with
-    IntEqual -> Condition | LessU -> Condition | LessS -> Condition
-  | AddCarry -> Condition | SubCarry -> Condition | Overflow -> Condition
+    AddCarry -> Condition | SubCarry -> Condition | Overflow -> Condition
   | LShiftR -> Int | AShiftR -> Int
   | IntMulHS -> Int | IntMulHU -> Int
 
 let binary_width_op_name binary_width_op =
   match binary_width_op with
-    IntEqual -> "IntEqual" | LessU -> "IntLessU" | LessS -> "IntLessS"
-  | AddCarry -> "AddCarry" | SubCarry -> "SubCarry" | Overflow -> "Overflow"
+    AddCarry -> "AddCarry" | SubCarry -> "SubCarry" | Overflow -> "Overflow"
   | LShiftR -> "LShiftR" | AShiftR -> "AShiftR"
   | IntMulHS -> "IntMulHS" | IntMulHU -> "IntMulHU"
 
@@ -187,7 +187,7 @@ type int_const =
   | IntField of input_name
 
 type register =
-    GuestRegister of int_const * value_type
+    GuestRegister of string * int_const * value_type (* class name, index, value type *)
   | HostRegister of int * value_type
   | IntermediateRegister of expr
   | LetRegister of input_name * value_type * width
@@ -261,7 +261,7 @@ let lookup_user_op name =
 
 let rec register_value_type reg =
   match reg with
-      GuestRegister (_, value_type) -> value_type
+      GuestRegister (_, _, value_type) -> value_type
     | HostRegister (_, value_type) -> value_type
     | IntermediateRegister expr -> expr_value_type expr
     | LetRegister (_, value_type, _) -> value_type
@@ -363,10 +363,10 @@ let is_bit_set_expr value bit =
   Unary (ConditionNeg, Unary (IntEven, extract_bit_expr value bit))
 
 let is_full_mask_expr x =
-  BinaryWidth (IntEqual, 8, x, int_literal_expr minus_one)
+  Binary (IntEqual, x, int_literal_expr minus_one)
 
 let is_zero_expr x =
-  UnaryWidth (IntZero, 8, x)
+  Binary (IntEqual, x, int_literal_expr zero)
 
 let both_low_one_bits_expr a b =
   Binary (BothLowOneBits, a, b)
@@ -410,7 +410,7 @@ let bitmask_expr a b =
   Binary (BitMask, a, b)
 
 let bitsubset_expr sub super =
-  BinaryWidth (IntEqual, 8, bitand_expr sub super, sub)
+  Binary (IntEqual, bitand_expr sub super, sub)
 
 let add_expr a b =
   Binary (IntAdd, a, b)
@@ -582,14 +582,16 @@ let cfold_expr fields expr =
   and apply_int_unary_width op width arg =
     let arg = mask_int width arg
     in match op with
-	IntZero -> ConditionConst (arg = 0L)
-      | IntParityEven -> ConditionConst ((int_parity arg) = 0L)
+	IntParityEven -> ConditionConst ((int_parity arg) = 0L)
       | IntSign -> ConditionConst ((shift_right_logical arg (width * 8 - 1)) <> 0L)
       | Sex -> IntConst (IntLiteral (sex (width * 8) arg))
       | Zex -> IntConst (IntLiteral arg)
   and apply_int_binary op arg1 arg2 =
     match op with
-	IntAdd -> IntConst (IntLiteral (add arg1 arg2))
+        IntEqual -> ConditionConst (arg1 = arg2)
+      | LessU -> ConditionConst (less_u arg1 arg2)
+      | LessS -> ConditionConst (less_s arg1 arg2)
+      | IntAdd -> IntConst (IntLiteral (add arg1 arg2))
       | IntMul -> IntConst (IntLiteral (mul arg1 arg2))
       | BitAnd -> IntConst (IntLiteral (logand arg1 arg2))
       | BitOr -> IntConst (IntLiteral (logor arg1 arg2))
@@ -617,10 +619,7 @@ let cfold_expr fields expr =
     let arg1 = mask_int width arg1
     and arg2 = mask_int width arg2
     in match op with
-      IntEqual -> ConditionConst (arg1 = arg2)
-    | LessU -> ConditionConst (less_u arg1 arg2)
-    | LessS -> ConditionConst (less_s (sex (width * 8) arg1) (sex (width * 8) arg2))
-    | AddCarry ->
+      AddCarry ->
 	if width > 4 then raise Unsupported_width ;
 	ConditionConst (is_bit_set (add arg1 arg2) (width * 8))
     | SubCarry ->
@@ -774,7 +773,7 @@ let print_int_const const =
 
 let print_register register =
   match register with
-      GuestRegister (num, value_type) -> print_string "G" ; print_value_type value_type ; print_int_const num
+      GuestRegister (_, num, value_type) -> print_string "G" ; print_value_type value_type ; print_int_const num
     | HostRegister (num, value_type) -> print_string "H" ; print_value_type value_type ; print_int num
     | IntermediateRegister expr -> print_string "*IR*"
     | LetRegister (name, value_type, _) -> print_string "L" ; print_string name

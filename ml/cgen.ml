@@ -83,8 +83,8 @@ let int_const_to_c int_const =
 
 let register_to_c allocation reg =
   match reg with
-      GuestRegister (IntLiteral num, _) -> "guest_reg_" ^ (to_string num)
-    | GuestRegister (IntField name, _) -> "guest_reg_" ^ name
+      GuestRegister (rclass, IntLiteral num, _) -> "guest_reg_" ^ rclass ^ "_" ^ (to_string num)
+    | GuestRegister (rclass, IntField name, _) -> "guest_reg_" ^ rclass ^ "_" ^ name
     | HostRegister (num, _) -> "host_reg_" ^ (string_of_int num)
     | IntermediateRegister expr -> "interm_reg_" ^ (string_of_int (lookup_intermediate_reg allocation expr))
     | LetRegister (name, value_type, width) -> "let_reg_" ^ name

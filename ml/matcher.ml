@@ -161,7 +161,7 @@ let match_expr_generic register_const_func fields expr pattern =
       match (int_const, pattern) with
 	  (IntLiteral const, AnyInt input_name) -> return [ ConstBinding (input_name, IntConst int_const) ]
 	| (IntLiteral const1, TheInt const2) ->
-	    when_cfold (BinaryWidth (IntEqual, 8, IntConst int_const, const2))
+	    when_cfold (Binary (IntEqual, IntConst int_const, const2))
 	      (fun _ -> return [])
 	| _ -> raise Expression_not_const
      and match_expr_int_const expr cexpr pattern =
@@ -169,7 +169,7 @@ let match_expr_generic register_const_func fields expr pattern =
 	  (_, AnyInt input_name) when is_register_const fields expr ->
 	    return [ ConstBinding (input_name, expr) ]
 	| (IntConst (IntLiteral const1), TheInt const2) ->
-	    when_cfold (BinaryWidth (IntEqual, 8, expr, const2))
+	    when_cfold (Binary (IntEqual, expr, const2))
 	      (fun _ -> (return []))
 	| (_, TheInt const2) when is_register_const fields expr ->
 	    register_const_func fields expr const2
@@ -245,14 +245,6 @@ let match_expr_generic register_const_func fields expr pattern =
 
 let match_expr =
   match_expr_generic (fun _ _ _ -> cm_fail)
-
-(*
-let match_register_const_expr =
-  match_expr_generic
-    (fun fields expr const ->
-       uc_when fields (BinaryWidth (IntEqual, 8, expr, const))
-       (fun _ -> uc_return []))
-*)
 
 (*** matching against target insns ***)
 
@@ -383,23 +375,40 @@ let combine_uncertain_expr_matches =
 let combine_uncertain_stmt_matches =
   combine_uncertain_matches (fun m -> m.stmt_match_data.cumulative_cost)
 
+let check_for_certain_matches best_matches_alist match_datas =
+  let rec check match_datas =
+    iter (fun match_data ->
+	    iter (fun binding ->
+		    match binding with
+			ExprBinding (_, expr) ->
+			  let matches = assoc expr best_matches_alist
+			  in check (map (fun m -> m.expr_match_data) matches) ;
+			    if exists (fun m -> match m.expr_match_data.cumulative_cost with
+					   Maybe _ -> false
+					 | Certainly _ -> true) matches then
+			      ()
+			    else
+			      (print_string "no certain match for expr " ; print_expr expr ; print_newline () ;
+			       raise No_match)
+		      | _ -> ())
+	      match_data.bindings)
+      match_datas
+  in check match_datas
+
 let rec recursively_match_stmt fields stmt target_insns =
   let rec recursively_match_expr (best_matches_alist, conds) expr =
     let subs = if is_const (cfold_expr fields expr) then [] else expr_sub_exprs expr
     in let (best_matches_alist, conds) = fold_left recursively_match_expr (best_matches_alist, conds) subs
     in let (matches, match_conds) = find_expr_matches expr fields target_insns best_matches_alist
     in let matches = fold_left combine_uncertain_expr_matches [] matches
-    in if exists (fun m -> match m.expr_match_data.cumulative_cost with Maybe _ -> false | Certainly _ -> true) matches then
-	((expr, matches) :: best_matches_alist, match_conds @ conds)
-      else
-	(print_string "no certain match for expr " ; print_expr expr ; print_newline () ;
-	 raise No_match)
+    in ((expr, matches) :: best_matches_alist, match_conds @ conds)
   in let subs = stmt_sub_exprs stmt
   in let (best_matches_alist, conds) = fold_left recursively_match_expr ([], []) subs
   in let (matches, match_conds) = find_stmt_matches stmt fields target_insns best_matches_alist
   in let matches = fold_left combine_uncertain_stmt_matches [] matches
   in if exists (fun m -> match m.stmt_match_data.cumulative_cost with Maybe _ -> false | Certainly _ -> true) matches then
-      (matches, best_matches_alist, match_conds @ conds)
+      (check_for_certain_matches best_matches_alist (map (fun m -> m.stmt_match_data) matches) ;
+       (matches, best_matches_alist, match_conds @ conds))
     else
       (print_string "no certain match for stmt " ; print_stmt stmt ;
        raise No_match)

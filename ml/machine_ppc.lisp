@@ -20,20 +20,94 @@
 ;; Inc.; 675 Massachusetts Avenue; Cambridge, MA 02139, USA.
 
 (setq *fields* '())
+(setq *registers* '())
+(setq *conditions* '())
 (setq *insns* '())
 (setq *machine-macros* '())
 
 (deffields ((rs 5) (rd 5) (ra 5) (rb 5) (srs 5) (sh 5) (mb 5) (me 5) (simm 16) (uimm 16) (d 16)))
+
+(defregisters
+  ((lr spr 0 integer)
+   (cr spr 1 integer)
+   (xer spr 2 integer)
+   (ctr spr 3 integer)
+   (fpscr spr 4 integer)
+   (r0 gpr 0 integer)
+   (r1 gpr 1 integer)
+   (r2 gpr 2 integer)
+   (r3 gpr 3 integer)
+   (r4 gpr 4 integer)
+   (r5 gpr 5 integer)
+   (r6 gpr 6 integer)
+   (r7 gpr 7 integer)
+   (r8 gpr 8 integer)
+   (r9 gpr 9 integer)
+   (r10 gpr 10 integer)
+   (r11 gpr 11 integer)
+   (r12 gpr 12 integer)
+   (r13 gpr 13 integer)
+   (r14 gpr 14 integer)
+   (r15 gpr 15 integer)
+   (r16 gpr 16 integer)
+   (r17 gpr 17 integer)
+   (r18 gpr 18 integer)
+   (r19 gpr 19 integer)
+   (r20 gpr 20 integer)
+   (r21 gpr 21 integer)
+   (r22 gpr 22 integer)
+   (r23 gpr 23 integer)
+   (r24 gpr 24 integer)
+   (r25 gpr 25 integer)
+   (r26 gpr 26 integer)
+   (r27 gpr 27 integer)
+   (r28 gpr 28 integer)
+   (r29 gpr 29 integer)
+   (r30 gpr 30 integer)
+   (r31 gpr 31 integer)))
+
+(defconditions
+  ((cr0-lt cr 31)
+   (cr0-gt cr 30)
+   (cr0-eq cr 29)
+   (cr0-so cr 28)
+   (xer-so xer 31)))
+
+;;;; insn definition macros
+
+(defmacro defrcinsn (name args result-reg body)
+  `(progn
+     (definsn ,name ,args
+       ,body)
+     (definsn ,(intern (string-concat (string name) ".")) ,args
+       (seq
+	,body
+	(seq
+	 (set cr0-lt (<is (register (gpr ,result-reg)) 0))
+	 (seq
+	  (set cr0-gt (<is 0 (register (gpr ,result-reg))))
+	  (seq
+	   (set cr0-eq (=i (register (gpr ,result-reg)) 0))
+	   (set cr0-so xer-so))))))))
 
 ;;;; machine macros
 
 (defmachinemacro ppc-mask (begin-bit end-bit)
   (mask (-i 31 end-bit) (-i 31 begin-bit)))
 
+;(defmachinemacro set-rc0-bits (val)
+;  (seq
+;   (set cr0-lt (<is 4 val 0))
+;   (seq
+;    (set cr0-gt (<is 4 0 val))
+;    (seq
+;     (set cr0-eq (=i 4 val 0))
+;     (set cr0-so xer-so)))))
+
 ;;;; insns
 
-(definsn add ()
-  (set rd (+i (register ra) (register rb))))
+(defrcinsn add () rd
+  (set (gpr rd) (+i (register (gpr ra)) (register (gpr rb)))))
 
 ;; addo
 ;; addc
@@ -42,31 +116,51 @@
 ;; addeo
 
 (definsn addi ((ra 0 32) (simm (0)))
-  (set rd (if (int-zero-p 8 ra)
-	      (sex 2 simm)
-	    (+i (register ra) (sex 2 simm)))))
+  (set (gpr rd) (if (int-zero-p ra)
+		    (sex 2 simm)
+		  (+i (register (gpr ra)) (sex 2 simm)))))
 
 ;; addic
 ;; addic.
 
 (definsn addis ((ra 0 32) (simm (0)))
-  (set rd (if (int-zero-p 8 ra)
-	      (shiftl simm 16)
-	    (+i (register ra) (shiftl simm 16)))))
+  (set (gpr rd) (if (int-zero-p ra)
+		    (shiftl simm 16)
+		  (+i (register (gpr ra)) (shiftl simm 16)))))
 
 ;; addme
 ;; addmeo
 ;; addze
 ;; addzeo
 
-(definsn and ()
-  (set ra (bit-and (register rs) (register rb))))
+(defrcinsn and () ra
+  (set (gpr ra) (bit-and (register (gpr rs)) (register (gpr rb)))))
 
-(definsn andc ()
-  (set ra (bit-and (register rs) (bit-neg (register rb)))))
+(defrcinsn andc () ra
+  (set (gpr ra) (bit-and (register (gpr rs)) (bit-neg (register (gpr rb))))))
 
-;; andi.
-;; andis.
+(definsn andi. ((uimm (0)))
+  (seq
+   (set (gpr ra) (bit-and (register (gpr rs)) (zex 2 uimm)))
+   (seq
+    (set cr0-lt (<is (register (gpr ra)) 0))
+    (seq
+     (set cr0-gt (<is 0 (register (gpr ra))))
+     (seq
+      (set cr0-eq (=i (register (gpr ra)) 0))
+      (set cr0-so xer-so))))))
+
+(definsn andis. ((uimm (0)))
+  (seq
+   (set (gpr ra) (bit-and (register (gpr rs)) (shiftl (zex 2 uimm) 16)))
+   (seq
+    (set cr0-lt (<is (register (gpr ra)) 0))
+    (seq
+     (set cr0-gt (<is 0 (register (gpr ra))))
+     (seq
+      (set cr0-eq (=i (register (gpr ra)) 0))
+      (set cr0-so xer-so))))))
+
 ;; b
 ;; bctrl
 ;; bdnz
@@ -97,103 +191,103 @@
 ;; dcbst
 ;; dcbz
 
-(definsn divw ()
-  (set rd (/is 4 0 (register ra) (register rb))))
+(defrcinsn divw () rd
+  (set (gpr rd) (/is 4 0 (register (gpr ra)) (register (gpr rb)))))
 
 ;; divwo
 
-(definsn divwu ()
-  (set rd (/iu 4 0 (register ra) (register rb))))
+(defrcinsn divwu () rd
+  (set (gpr rd) (/iu 4 0 (register (gpr ra)) (register (gpr rb)))))
 
 ;; divwuo
 
-(definsn eqv ()
-  (set ra (bit-xor (register rs) (bit-neg (register rb)))))
+(defrcinsn eqv () ra
+  (set (gpr ra) (bit-xor (register (gpr rs)) (bit-neg (register (gpr rb))))))
 
 (definsn extsb ()
-  (set ra (sex 1 (register rs))))
+  (set (gpr ra) (sex 1 (register (gpr rs)))))
 
-(definsn extsh ()
-  (set ra (sex 2 (register rs))))
+(defrcinsn extsh () ra
+  (set (gpr ra) (sex 2 (register (gpr rs)))))
 
 ;; icbi
 ;; isync
 
 (definsn lbz ((ra 0 32) (d (0)))
-  (set rd (zex 1 (load-byte (if (int-zero-p 8 ra)
-				(sex 2 d)
-			      (+i (register ra) (sex 2 d)))))))
+  (set (gpr rd) (zex 1 (load-byte (if (int-zero-p ra)
+				      (sex 2 d)
+				    (+i (register (gpr ra)) (sex 2 d)))))))
 
 (definsn lbzu ((d (0)))
   (seq
-   (set ra (+i (register ra) (sex 2 d)))
-   (set rd (zex 1 (load-byte (register ra))))))
+   (set (gpr ra) (+i (register (gpr ra)) (sex 2 d)))
+   (set (gpr rd) (zex 1 (load-byte (register (gpr ra)))))))
 
 (definsn lbzux ()
   (seq
-   (set ra (+i (register ra) (register rb)))
-   (set rd (zex 1 (load-byte (register ra))))))
+   (set (gpr ra) (+i (register (gpr ra)) (register (gpr rb))))
+   (set (gpr rd) (zex 1 (load-byte (register (gpr ra)))))))
 
 (definsn lbzx ((ra 0 32))
-  (set rd (zex 1 (load-byte (if (int-zero-p 8 ra)
-				(register rb)
-			      (+i (register ra) (register rb)))))))
+  (set (gpr rd) (zex 1 (load-byte (if (int-zero-p ra)
+				      (register (gpr rb))
+				    (+i (register (gpr ra)) (register (gpr rb))))))))
 
 (definsn lha ((ra 0 32) (d (0)))
-  (set rd (sex 2 (load big-endian 2 (if (int-zero-p 8 ra)
-					(sex 2 d)
-				      (+i (register ra) (sex 2 d)))))))
+  (set (gpr rd) (sex 2 (load big-endian 2 (if (int-zero-p ra)
+					      (sex 2 d)
+					    (+i (register (gpr ra)) (sex 2 d)))))))
 
 (definsn lhau ((d (0)))
   (seq
-   (set ra (+i (register ra) (sex 2 d)))
-   (set rd (sex 2 (load big-endian 2 (register ra))))))
+   (set (gpr ra) (+i (register (gpr ra)) (sex 2 d)))
+   (set (gpr rd) (sex 2 (load big-endian 2 (register (gpr ra)))))))
 
 (definsn lhax ((ra 0 32))
-  (set rd (sex 2 (load big-endian 2 (if (int-zero-p 8 ra)
-					(register rb)
-				      (+i (register ra) (register rb)))))))
+  (set (gpr rd) (sex 2 (load big-endian 2 (if (int-zero-p ra)
+					      (register (gpr rb))
+					    (+i (register (gpr ra)) (register (gpr rb))))))))
 
 ;; lhbrx
 
 (definsn lhz ((ra 0 32) (d (0)))
-  (set rd (zex 2 (load big-endian 2 (if (int-zero-p 8 ra)
-					(sex 2 d)
-				      (+i (register ra) (sex 2 d)))))))
+  (set (gpr rd) (zex 2 (load big-endian 2 (if (int-zero-p ra)
+					      (sex 2 d)
+					    (+i (register (gpr ra)) (sex 2 d)))))))
 
 (definsn lhzu ((ra 0 32))
   (seq
-   (set ra (+i (register ra) (sex 2 d)))
-   (set rd (zex 2 (load big-endian 2 (register ra))))))
+   (set (gpr ra) (+i (register (gpr ra)) (sex 2 d)))
+   (set (gpr rd) (zex 2 (load big-endian 2 (register (gpr ra)))))))
 
 ;; lhzux
 
 (definsn lhzx ((ra 0 32))
-  (set rd (zex 2 (load big-endian 2 (if (int-zero-p 8 ra)
-					(register rb)
-				      (+i (register ra) (register rb)))))))
+  (set (gpr rd) (zex 2 (load big-endian 2 (if (int-zero-p ra)
+					      (register (gpr rb))
+					    (+i (register (gpr ra)) (register (gpr rb))))))))
 
 ;; lwbrx
 
 (definsn lwz ((ra 0 32) (d (0)))
-  (set rd (load big-endian 4 (if (int-zero-p 8 ra)
-				 (sex 2 d)
-			       (+i (register ra) (sex 2 d))))))
+  (set (gpr rd) (load big-endian 4 (if (int-zero-p ra)
+				       (sex 2 d)
+				     (+i (register (gpr ra)) (sex 2 d))))))
 
 (definsn lwzu ((ra 0 32))
   (seq
-   (set ra (+i (register ra) (sex 2 d)))
-   (set rd (load big-endian 4 (register ra)))))
+   (set (gpr ra) (+i (register (gpr ra)) (sex 2 d)))
+   (set (gpr rd) (load big-endian 4 (register (gpr ra))))))
 
 (definsn lwzux ()
   (seq
-   (set ra (+i (register ra) (register rb)))
-   (set rd (load big-endian 4 (register ra)))))
+   (set (gpr ra) (+i (register (gpr ra)) (register (gpr rb))))
+   (set (gpr rd) (load big-endian 4 (register (gpr ra))))))
 
 (definsn lwzx ((ra 0 32))
-  (set rd (load big-endian 4 (if (int-zero-p 8 ra)
-				 (register rb)
-			       (+i (register ra) (register rb))))))
+  (set (gpr rd) (load big-endian 4 (if (int-zero-p ra)
+				       (register (gpr rb))
+				     (+i (register (gpr ra)) (register (gpr rb)))))))
 
 ;; mcrf
 ;; mcrxr
@@ -207,150 +301,150 @@
 ;; mtxer
 
 (definsn mulhw ()
-  (set rd (ashiftr 8 (*i (sex 4 (register ra))
-			 (sex 4 (register rb)))
-		   32)))
+  (set (gpr rd) (ashiftr 8 (*i (sex 4 (register (gpr ra)))
+			       (sex 4 (register (gpr rb))))
+			 32)))
 
 (definsn mulhwu ()
-  (set rd (ashiftr 8 (*i (zex 4 (register ra))
-			 (zex 4 (register rb)))
-		   32)))
+  (set (gpr rd) (ashiftr 8 (*i (zex 4 (register (gpr ra)))
+			       (zex 4 (register (gpr rb))))
+			 32)))
 
 (definsn mulli ()
-  (set rd (*i (register ra) (sex 2 simm))))
+  (set (gpr rd) (*i (register (gpr ra)) (sex 2 simm))))
 
-(definsn mullw ()
-  (set rd (*i (register ra) (register rb))))
+(defrcinsn mullw () rd
+  (set (gpr rd) (*i (register (gpr ra)) (register (gpr rb)))))
 
 ;; mullwo
 
-(definsn nand ()
-  (set ra (bit-neg (bit-and (register rs) (register rb)))))
+(defrcinsn nand () ra
+  (set (gpr ra) (bit-neg (bit-and (register (gpr rs)) (register (gpr rb))))))
 
-(definsn neg ()
-  (set rd (int-neg (register ra))))
+(defrcinsn neg () rd
+  (set (gpr rd) (int-neg (register (gpr ra)))))
 
 ;; nego
 
-(definsn nor ()
-  (set ra (bit-neg (bit-or (register rs) (register rb)))))
+(defrcinsn nor () ra
+  (set (gpr ra) (bit-neg (bit-or (register (gpr rs)) (register (gpr rb))))))
 
-(definsn or ()
-  (set ra (bit-or (register rs) (register rb))))
+(defrcinsn or () ra
+  (set (gpr ra) (bit-or (register (gpr rs)) (register (gpr rb)))))
 
-(definsn orc ()
-  (set ra (bit-or (register rs) (bit-neg (register rb)))))
+(defrcinsn orc () ra
+  (set (gpr ra) (bit-or (register (gpr rs)) (bit-neg (register (gpr rb))))))
 
 (definsn ori ()
-  (set ra (bit-or (register rs) (zex 2 uimm))))
+  (set (gpr ra) (bit-or (register (gpr rs)) (zex 2 uimm))))
 
 (definsn oris ()
-  (set ra (bit-or (register rs) (shiftl (zex 2 uimm) 16))))
+  (set (gpr ra) (bit-or (register (gpr rs)) (shiftl (zex 2 uimm) 16))))
 
 (definsn rlwimi ((sh 0 32) (mb 0 32) (me 0 32))
-  (set ra (bit-or (bit-and (rotl 4 (register rs) sh) (ppc-mask mb me))
-		  (bit-and (register ra) (bit-neg (ppc-mask mb me))))))
+  (set (gpr ra) (bit-or (bit-and (rotl 4 (register (gpr rs)) sh) (ppc-mask mb me))
+			(bit-and (register (gpr ra)) (bit-neg (ppc-mask mb me))))))
 		  
 (definsn rlwinm ((sh 0 32) (mb 0 32) (me 0 32))
-  (set ra (bit-and (rotl 4 (register rs) sh) (ppc-mask mb me))))
+  (set (gpr ra) (bit-and (rotl 4 (register (gpr rs)) sh) (ppc-mask mb me))))
 
 (definsn rlwnm ((mb 0 32) (me 0 32))
-  (set ra (bit-and (rotl 4 (register rs) (bit-and (register rb) #x1f))
-		   (ppc-mask mb me))))
+  (set (gpr ra) (bit-and (rotl 4 (register (gpr rs)) (bit-and (register (gpr rb)) #x1f))
+			 (ppc-mask mb me))))
 
 ;; sc
 
 (definsn slw ()
-  (set ra (shiftl (register rs) (bit-and (register rb) #x3f))))
+  (set (gpr ra) (shiftl (register (gpr rs)) (bit-and (register (gpr rb)) #x3f))))
 
 ;; sraw
 ;; srawi
 
-(definsn srw ()
-  (set ra (lshiftr 4 (register rs) (bit-and (register rb) #x1f))))
+(defrcinsn srw () ra
+  (set (gpr ra) (lshiftr 4 (register (gpr rs)) (bit-and (register (gpr rb)) #x1f))))
 
 (definsn stb ((ra 0 32) (d (0)))
-  (store big-endian 1 (if (int-zero-p 8 ra)
+  (store big-endian 1 (if (int-zero-p ra)
 			  (sex 2 d)
-			  (+i (register ra) (sex 2 d)))
-	 (register srs)))
+			  (+i (register (gpr ra)) (sex 2 d)))
+	 (register (gpr srs))))
 
 (definsn stbu ((ra 0 32) (srs 0 32) (d (0)))
-  (if (=i 8 ra srs)
+  (if (=i ra srs)
       (seq
-       (store big-endian 1 (+i (register ra) (sex 2 d)) (register srs))
-       (set ra (+i (register ra) (sex 2 d))))
+       (store big-endian 1 (+i (register (gpr ra)) (sex 2 d)) (register (gpr srs)))
+       (set (gpr ra) (+i (register (gpr ra)) (sex 2 d))))
       (seq
-       (set ra (+i (register ra) (sex 2 d)))
-       (store big-endian 1 (register ra) (register srs)))))
+       (set (gpr ra) (+i (register (gpr ra)) (sex 2 d)))
+       (store big-endian 1 (register (gpr ra)) (register (gpr srs))))))
 
 ;; stbux
 
 (definsn stbx ((ra 0 32))
-  (store big-endian 1 (if (int-zero-p 8 ra)
-			  (register rb)
-			  (+i (register ra) (register rb)))
-	 (register srs)))
+  (store big-endian 1 (if (int-zero-p ra)
+			  (register (gpr rb))
+			  (+i (register (gpr ra)) (register (gpr rb))))
+	 (register (gpr srs))))
 
 (definsn sth ((ra 0 32) (d (0)))
-  (store big-endian 2 (if (int-zero-p 8 ra)
+  (store big-endian 2 (if (int-zero-p ra)
 			  (sex 2 d)
-			  (+i (register ra) (sex 2 d)))
-	 (register srs)))
+			  (+i (register (gpr ra)) (sex 2 d)))
+	 (register (gpr srs))))
 
 ;; sthbrx
 
 (definsn sthu ((ra 0 32) (srs 0 32) (d (0)))
-  (if (=i 8 ra srs)
+  (if (=i ra srs)
       (seq
-       (store big-endian 2 (+i (register ra) (sex 2 d)) (register srs))
-       (set ra (+i (register ra) (sex 2 d))))
+       (store big-endian 2 (+i (register (gpr ra)) (sex 2 d)) (register (gpr srs)))
+       (set (gpr ra) (+i (register (gpr ra)) (sex 2 d))))
       (seq
-       (set ra (+i (register ra) (sex 2 d)))
-       (store big-endian 2 (register ra) (register srs)))))
+       (set (gpr ra) (+i (register (gpr ra)) (sex 2 d)))
+       (store big-endian 2 (register (gpr ra)) (register (gpr srs))))))
       
 ;; sthux
 
 (definsn sthx ((ra 0 32))
-  (store big-endian 2 (if (int-zero-p 8 ra)
-			  (register rb)
-			  (+i (register ra) (register rb)))
-	 (register srs)))
+  (store big-endian 2 (if (int-zero-p ra)
+			  (register (gpr rb))
+			  (+i (register (gpr ra)) (register (gpr rb))))
+	 (register (gpr srs))))
 
 (definsn stw ((ra 0 32) (d (0)))
-  (store big-endian 4 (if (int-zero-p 8 ra)
+  (store big-endian 4 (if (int-zero-p ra)
 			  (sex 2 d)
-			  (+i (register ra) (sex 2 d)))
-	 (register srs)))
+			  (+i (register (gpr ra)) (sex 2 d)))
+	 (register (gpr srs))))
 
 ;; stwbrx
 
 (definsn stwu ((ra 0 32) (srs 0 32) (d (0)))
-  (if (=i 8 ra srs)
+  (if (=i ra srs)
       (seq
-       (store big-endian 4 (+i (register ra) (sex 2 d)) (register srs))
-       (set ra (+i (register ra) (sex 2 d))))
+       (store big-endian 4 (+i (register (gpr ra)) (sex 2 d)) (register (gpr srs)))
+       (set (gpr ra) (+i (register (gpr ra)) (sex 2 d))))
       (seq
-       (set ra (+i (register ra) (sex 2 d)))
-       (store big-endian 4 (register ra) (register srs)))))
+       (set (gpr ra) (+i (register (gpr ra)) (sex 2 d)))
+       (store big-endian 4 (register (gpr ra)) (register (gpr srs))))))
 
 (definsn stwux ((ra 0 32) (srs 0 32))
-  (if (=i 8 ra srs)
+  (if (=i ra srs)
       (seq
-       (store big-endian 4 (+i (register ra) (register rb)) (register srs))
-       (set ra (+i (register ra) (register rb))))
+       (store big-endian 4 (+i (register (gpr ra)) (register (gpr rb))) (register (gpr srs)))
+       (set (gpr ra) (+i (register (gpr ra)) (register (gpr rb)))))
       (seq
-       (set ra (+i (register ra) (register rb)))
-       (store big-endian 4 (register ra) (register srs)))))
+       (set (gpr ra) (+i (register (gpr ra)) (register (gpr rb))))
+       (store big-endian 4 (register (gpr ra)) (register (gpr srs))))))
 
 (definsn stwx ((ra 0 32))
-  (store big-endian 4 (if (int-zero-p 8 ra)
-			  (register rb)
-			  (+i (register ra) (register rb)))
-	 (register srs)))
+  (store big-endian 4 (if (int-zero-p ra)
+			  (register (gpr rb))
+			  (+i (register (gpr ra)) (register (gpr rb))))
+	 (register (gpr srs))))
 
-(definsn subf ()
-  (set rd (-i (register rb) (register ra))))
+(defrcinsn subf () rd
+  (set (gpr rd) (-i (register (gpr rb)) (register (gpr ra)))))
 
 ;; subfo
 ;; subfc
@@ -365,11 +459,11 @@
 
 ;; sync
 
-(definsn xor ()
-  (set ra (bit-xor (register rs) (register rb))))
+(defrcinsn xor () ra
+  (set (gpr ra) (bit-xor (register (gpr rs)) (register (gpr rb)))))
 
 (definsn xori ()
-  (set ra (bit-xor (register rs) (zex 2 uimm))))
+  (set (gpr ra) (bit-xor (register (gpr rs)) (zex 2 uimm))))
 
 (definsn xoris ()
-  (set ra (bit-xor (register rs) (shiftl (zex 2 uimm) 16))))
+  (set (gpr ra) (bit-xor (register (gpr rs)) (shiftl (zex 2 uimm) 16))))

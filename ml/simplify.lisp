@@ -47,3 +47,11 @@
 
 (defsimplify (sex 4 (ashiftr 8 ?x 32))
   (ashiftr 8 x 32))
+
+;; conditions
+
+(defsimplify (int-to-condition (condition-to-int ?x))
+  x)
+
+(defsimplify (condition-to-int (int-to-condition ?x))
+  (bit-and x 1))

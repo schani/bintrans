@@ -36,6 +36,7 @@
     (int-to-float "IntToFloat" unary)
     (float-to-int "FloatToInt" unary)
     (condition-to-int "ConditionToInt" unary)
+    (int-to-condition "IntToCondition" unary)
     (int-even-p "IntEven" unary)
     (int-neg "IntNeg" unary)
     (bit-neg "BitNeg" unary)
@@ -47,12 +48,14 @@
     (low-mask "LowMask" unary)
     (high-mask "HighMask" unary)
 
-    (int-zero-p "IntZero" unary-width)
     (int-parity-even-p "IntParityEven" unary-width)
     (int-sign-p "IntSign" unary-width)
     (sex "Sex" unary-width)
     (zex "Zex" unary-width)
 
+    (=i "IntEqual" binary)
+    (<iu "LessU" binary)
+    (<is "LessS" binary)
     (=f "FloatEqual" binary)
     (<f "FloatLess" binary)
     (+i "IntAdd" binary)
@@ -71,9 +74,6 @@
     (both-low-one-bits "BothLowOneBits" binary)
     (bit-mask "BitMask" binary)
 
-    (=i "IntEqual" binary-width)
-    (<iu "LessU" binary-width)
-    (<is "LessS" binary-width)
     (add-carry-p "AddCarry" binary-width)
     (sub-carry-p "SubCarry" binary-width)
     (overflow-p "Overflow" binary-width)
@@ -125,6 +125,31 @@
 
 (defmacro deffields (fields)
   `(setq *fields* ',fields))
+
+;; a register is a list (name class index type)
+(defvar *registers* '())
+
+(defmacro defregisters (regs)
+  `(setq *registers* ',regs))
+
+;; returns nil or a list (class index type)
+(defun lookup-register (name)
+  (cdr (assoc name *registers*)))
+
+;; a condition is a list (name reg-class reg-index bit-index)
+(defvar *conditions* '())
+
+(defmacro defconditions (conds)
+  `(setq *conditions* ',(mapcar #'(lambda (condition)
+				    (let ((reg (lookup-register (second condition))))
+				      (when (null reg)
+					(error "unknown register ~A" name))
+				      (list (first condition) (first reg) (second reg) (third condition))))
+				conds)))
+
+;; returns nil or a list (reg-class reg-index bit-index)
+(defun lookup-condition (name)
+  (cdr (assoc name *conditions*)))
 
 ;; an insn is a list (name field-ranges stmt)
 (defvar *insns* '())
@@ -201,15 +226,28 @@
 		 ((symbolp width)
 		  (format nil "(to_int ~A)" (lookup-int bindings width)))
 		 (t
-		  (error "illegal width ~A" width)))))
+		  (error "illegal width ~A" width))))
+	 (convert-register (bindings reg)
+	   (case-match reg
+	     ((?class ?int-const)
+	      (format nil "GuestRegister (\"~A\", ~A, Int)"
+		      class (convert-int-const bindings int-const)))
+	     (?name
+	      (let ((reg (lookup-register name)))
+		(when (null reg)
+		  (error "unknown register ~A" name))
+		(destructuring-bind (class index type)
+		    reg
+		  (format nil "GuestRegister (\"~A\", ~A, Int)"
+			  class index)))))))
   (defun convert-expr (expr bindings)
     (labels ((convert (expr)
 	       (case-match expr
 		 ((const int ?expr)
 		  (convert expr))
 		 ((register ?reg)
-		  (format nil "Register (GuestRegister (~A, Int))"
-			  (convert-int-const bindings reg)))
+		  (format nil "Register (~A)"
+			  (convert-register bindings reg)))
 		 ((load ?byte-order ?width ?addr)
 		  (format nil "LoadBO (~A, ~A, ~A)"
 			  (convert-byte-order byte-order)
@@ -256,6 +294,13 @@
 			 (format nil "int_literal_expr (~AL)" expr))
 			((floatp expr)
 			 (format nil "FloatConst ~A" expr))
+			((lookup-condition expr)
+			 (destructuring-bind (reg-class reg-index bit-index)
+			     (lookup-condition expr)
+			   (format nil (string-concat "Unary (IntToCondition,"
+						              "Extract (Register (GuestRegister (\"~A\", IntLiteral ~AL, Int)), "
+					 	                       "IntConst (IntLiteral ~AL), IntConst (IntLiteral 1L)))")
+				   reg-class reg-index bit-index)))
 			((eql expr 't)
 			 "ConditionConst true")
 			((eql expr 'nil)
@@ -271,9 +316,21 @@
     (labels ((convert (stmt)
 	       (case-match stmt
 		 ((set ?reg ?value)
-		  (format nil "Assign (GuestRegister (~A, Int), ~A)"
-			  (convert-int-const bindings reg)
-			  (convert-expr value bindings)))
+		  (cond ((lookup-register reg)
+			 (error "register lhs not implemented yet"))
+			((lookup-condition reg)
+			 (destructuring-bind (reg-class reg-index bit-index)
+			     (lookup-condition reg)
+			   (format nil (string-concat "Assign (GuestRegister (\"~A\", IntLiteral ~AL, Int), "
+						              "Insert (Register (GuestRegister (\"~A\", IntLiteral ~AL, Int)), "
+						                      "Unary (ConditionToInt, ~A), IntLiteral ~AL, IntLiteral 1L))")
+				   reg-class reg-index reg-class reg-index
+				   (convert-expr value bindings)
+				   bit-index)))
+			(t
+			 (format nil "Assign (~A, ~A)"
+				 (convert-register bindings reg)
+				 (convert-expr value bindings)))))
 		 ((store ?byte-order ?width ?addr ?value)
 		  (format nil "Store (~A, ~A, ~A, ~A)"
 			  (convert-byte-order byte-order)

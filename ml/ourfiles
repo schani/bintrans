@@ -10,6 +10,7 @@ memoize.ml
 monad.ml
 normal_form.ml
 pruner.ml
+sex.ml
 simple_opts.ml
 simplify.ml
 switcher.ml

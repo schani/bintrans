@@ -32,13 +32,16 @@
 (defun mappend (func &rest lists)
   (reduce #'append (apply #'mapcar func lists)))
 
+(defun substitute-special-chars (s)
+  (substitute #\l #\< (substitute #\e #\= (substitute #\d #\. (substitute #\p #\+ (substitute #\_ #\- s))))))
+
 ;; down-case-symbol
 (defun dcs (x)
-  (substitute #\d #\. (substitute #\p #\+ (substitute #\_ #\- (string-downcase (symbol-name x))))))
+  (substitute-special-chars (string-downcase (symbol-name x))))
 
 ;; up-case-symbol
 (defun ucs (x)
-  (substitute #\d #\. (substitute #\p #\+ (substitute #\_ #\- (string-upcase (symbol-name x))))))
+  (substitute-special-chars (string-upcase (symbol-name x))))
 
 (defvar *tmp-num* 0)
 (defun make-tmp-name ()

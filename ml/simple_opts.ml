@@ -34,8 +34,8 @@ let rec sex_optimize_expr mapping fields expr =
     (fun expr ->
        match expr with
 	   UnaryWidth (Sex, width, Binary (BitAnd, arg1, arg2)) when is_const (cfold_expr fields arg2) ->
-	     cm_if fields (make_zero_or_full_p 8 (BinaryWidth (AShiftR, 8, expr_known mapping fields arg1,
-							       int_literal_expr (of_int (width * 8 - 1)))))
+	     cm_if fields (make_zero_or_full_p (BinaryWidth (AShiftR, 8, expr_known mapping fields arg1,
+							     int_literal_expr (of_int (width * 8 - 1)))))
 	       (fun _ ->
 		  cm_return (bitand_expr arg1 (bitor_expr arg2 (int_literal_expr (lognot (width_mask width))))))
 	       (fun _ ->
@@ -70,7 +70,7 @@ let rec simple_optimize_expr fields expr =
 	       (* bitand (extract x s l) m when is_low_mask m -> extract x s (min l (low_mask_length m)) *)
 	       cm_if fields (UserOp ("IsLowMask", [m]))
 		 (fun _ ->
-		    cm_if fields (BinaryWidth (LessU, 8, UserOp ("LowMaskLength", [m]), l))
+		    cm_if fields (Binary (LessU, UserOp ("LowMaskLength", [m]), l))
 		      (fun _ ->
 			 cm_return (Extract (x, s, UserOp ("LowMaskLength", [m]))))
 		      (fun _ ->
@@ -80,9 +80,9 @@ let rec simple_optimize_expr fields expr =
 	   | Extract (Extract (x, s1, l1), s2, l2)
 	       when (is_const (cfold_expr fields l1)) && (is_const (cfold_expr fields s2))
 		 && (is_const (cfold_expr fields l2)) ->
-	       cm_if fields (BinaryWidth (LessU, 8, s2, l1))
+	       cm_if fields (Binary (LessU, s2, l1))
 		 (fun _ ->
-		    cm_if fields (BinaryWidth (LessU, 8, l1, add_expr s2 l2))
+		    cm_if fields (Binary (LessU, l1, add_expr s2 l2))
 		      (fun _ ->
 			 cm_return (Extract (x, add_expr s1 s2, sub_expr l1 s2)))
 		      (fun _ ->

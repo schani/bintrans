@@ -21,7 +21,7 @@
 
 (setq *matchers* '())
 
-(defmacro defopmatcher (name rhs c-format)
+(defmacro defopmatcher (name rhs c-format &key (zero nil))
   (let ((a-rhs (subst '(register ?ra) 'a rhs)))
     `(progn
       (defmatcher ,name
@@ -31,10 +31,17 @@
 	(,(format nil "emit(COMPOSE_~A(~~A, ~~A, ~~A));" name) ra rb rs))
       (defmatcher ,(intern (string-concat (string name) "-IMM"))
 	(set ?rs ,(subst '(any-int ?i) 'b a-rhs))
-	(when (int-zero-p 8 (lshiftr 8 i 8))
+	(when (int-zero-p (lshiftr 8 i 8))
 	  1)
 	(,(format nil "~~A = ~A;" c-format) rs ra i)
-	(,(format nil "emit(COMPOSE_~A_IMM(~~A, ~~A, ~~A));" name) ra i rs)))))
+	(,(format nil "emit(COMPOSE_~A_IMM(~~A, ~~A, ~~A));" name) ra i rs))
+      ,(if zero
+	   `(defmatcher ,(intern (string-concat (string name) "-31"))
+	      (set ?rs ,(subst '(register ?rb) 'b (subst '0 'a rhs)))
+	      1
+	      (,(format nil "~~A = ~A;" (format nil c-format "0LL" "~A")) rs rb)
+	      (,(format nil "emit(COMPOSE_~A(31, ~~A, ~~A));" name) rb rs))
+	 '()))))
 
 (defmacro defldmatcher (name rhs c-format mnemonic)
   `(progn
@@ -45,7 +52,7 @@
        (,(format nil "emit(COMPOSE_~A(~~A, 0, ~~A));" mnemonic) ra rb))
      (defmatcher ,(intern (string-concat (string name) "-DISP"))
        (set ?ra ,(subst '(+i (register ?rb) (any-int ?disp)) 'ea rhs))
-       (when (zero-or-full-p 8 (ashiftr 8 disp 16))
+       (when (zero-or-full-p (ashiftr 8 disp 16))
 	 2)
        (,(format nil "~~A = ~A;" (format nil c-format "~A + ~A")) ra disp rb)
        (,(format nil "emit(COMPOSE_~A(~~A, ~~A & 0xffff, ~~A));" mnemonic) ra disp rb))))
@@ -59,7 +66,7 @@
       (,(format nil "emit(COMPOSE_~A(~~A, 0, ~~A));" mnemonic) rb ra))
     (defmatcher ,(intern (string-concat (string name) "-DISP"))
       (store little-endian ,width (+i (register ?ra) (any-int ?disp)) (register ?rb))
-      (when (zero-or-full-p 8 (ashiftr 8 disp 16))
+      (when (zero-or-full-p (ashiftr 8 disp 16))
 	2)
       (,(format nil "mem_store_~A(~~A + ~~A, ~~A);" (* width 8)) ra disp rb)
       (,(format nil "emit(COMPOSE_~A(~~A, ~~A & 0xffff, ~~A));" mnemonic) rb disp ra))))
@@ -84,30 +91,30 @@
 
 (defmatcher lda
   (set ?rs (+i (register ?ra) (any-int ?i)))
-  (when (zero-or-full-p 8 (ashiftr 8 i 15))
+  (when (zero-or-full-p (ashiftr 8 i 15))
     1)
   ("~A = ~A + ~A;" rs ra i)
   ("emit(COMPOSE_LDA(~A, ~A & 0xffff, ~A));" rs i ra))
 
 (defmatcher lda-31
   (set ?rs (any-int ?i))
-  (when (zero-or-full-p 8 (ashiftr 8 i 15))
+  (when (zero-or-full-p (ashiftr 8 i 15))
     1)
   ("~A = ~A;" rs i)
   ("emit(COMPOSE_LDA(~A, ~A & 0xffff, 31));" rs i))
 
 (defmatcher ldah
   (set ?rs (+i (register ?ra) (any-int ?i)))
-  (when (and (int-zero-p 8 (bit-and i #xffff))
-	     (zero-or-full-p 8 (ashiftr 8 i 31)))
+  (when (and (int-zero-p (bit-and i #xffff))
+	     (zero-or-full-p (ashiftr 8 i 31)))
     1)
   ("~A = ~A + ~A;" rs ra i)
   ("emit(COMPOSE_LDAH(~A, (~A >> 16) & 0xffff, ~A));" rs i ra))
 
 (defmatcher ldah-31
   (set ?rs (any-int ?i))
-  (when (and (int-zero-p 8 (bit-and i #xffff))
-	     (zero-or-full-p 8 (ashiftr 8 i 31)))
+  (when (and (int-zero-p (bit-and i #xffff))
+	     (zero-or-full-p (ashiftr 8 i 31)))
     1)
   ("~A = ~A;" rs i)
   ("emit(COMPOSE_LDAH(~A, (~A >> 16) & 0xffff, 31));" rs i))
@@ -128,7 +135,7 @@
 
 (defmatcher bic-imm-for-and
   (set ?rs (bit-and (register ?ra) (any-int ?i)))
-  (when (full-mask-p 8 (ashiftr 8 i 8))
+  (when (full-mask-p (ashiftr 8 i 8))
     1)
   ("~A = ~A & ~A;" rs ra i)
   ("emit(COMPOSE_BIC_IMM(~A, unary_BitNeg(~A), ~A));" ra i rs))
@@ -190,16 +197,16 @@
 
 (defmatcher extbl-imm-8
   (set ?rs (bit-and (lshiftr 8 (register ?ra) (any-int ?i)) #xff))
-  (when (and (int-zero-p 8 (bit-and i 7))
-	     (int-zero-p 8 (lshiftr 8 i 6)))
+  (when (and (int-zero-p (bit-and i 7))
+	     (int-zero-p (lshiftr 8 i 6)))
     1)
   ("~A = (~A >> ~A) & 0xff;" rs ra i)
   ("emit(COMPOSE_EXTBL_IMM(~A, ~A >> 3, ~A));" ra i rs))
 
 (defmatcher extbl-imm-4
   (set ?rs (bit-and (lshiftr 4 (register ?ra) (any-int ?i)) #xff))
-  (when (and (int-zero-p 8 (bit-and i 7))
-	     (int-zero-p 8 (lshiftr 8 i 5)))
+  (when (and (int-zero-p (bit-and i 7))
+	     (int-zero-p (lshiftr 8 i 5)))
     1)
   ("~A = (~A >> ~A) & 0xff;" rs ra i)
   ("emit(COMPOSE_EXTBL_IMM(~A, ~A >> 3, ~A));" ra i rs))
@@ -212,16 +219,16 @@
 
 (defmatcher extwl-imm-8
   (set ?rs (bit-and (lshiftr 8 (register ?ra) (any-int ?i)) #xffff))
-  (when (and (int-zero-p 8 (bit-and i 7))
-	     (int-zero-p 8 (lshiftr 8 i 6)))
+  (when (and (int-zero-p (bit-and i 7))
+	     (int-zero-p (lshiftr 8 i 6)))
     1)
   ("~A = (~A >> ~A) & 0xffff;" rs ra i)
   ("emit(COMPOSE_EXTWL_IMM(~A, ~A >> 3, ~A));" ra i rs))
 
 (defmatcher extwl-imm-4
   (set ?rs (bit-and (lshiftr 4 (register ?ra) (any-int ?i)) #xffff))
-  (when (and (int-zero-p 8 (bit-and i 7))
-	     (int-zero-p 8 (lshiftr 8 i 5)))
+  (when (and (int-zero-p (bit-and i 7))
+	     (int-zero-p (lshiftr 8 i 5)))
     1)
   ("~A = (~A >> ~A) & 0xffff;" rs ra i)
   ("emit(COMPOSE_EXTWL_IMM(~A, ~A >> 3, ~A));" ra i rs))
@@ -252,7 +259,7 @@
 
 (defmatcher subl-imm
     (set ?rs (sex 4 (+i (register ?ra) (any-int ?i))))
-  (when (int-zero-p 8 (lshiftr 8 (int-neg i) 8))
+  (when (int-zero-p (lshiftr 8 (int-neg i) 8))
     1)
   ("~A = sex_32(~A + ~A);" rs ra i)
   ("emit(COMPOSE_SUBL_IMM(~A, -~A, ~A));" ra i rs))
@@ -299,35 +306,35 @@
 
 (defmatcher extract-and-imm
   (set ?rs (extract (register ?ra) 0 ?l))
-  (when (<iu 8 l 8)
+  (when (<iu l 8)
     1)
   ("~A = bit_extract(~A, 0, ~A);" rs ra l)
   ("emit(COMPOSE_AND_IMM(~A, (1 << ~A) - 1, ~A));" ra l rs))
 
 (defmatcher extract-zapnot-imm
   (set ?rs (extract (register ?ra) 0 ?l))
-  (when (int-zero-p 8 (bit-and l 7))
+  (when (int-zero-p (bit-and l 7))
     1)
   ("~A = bit_extract(~A, 0, ~A);" rs ra l)
   ("emit(COMPOSE_ZAPNOT_IMM(~A, (1 << (~A >> 3)) - 1, ~A));" ra l rs))
 
 (defmatcher extract-srl
   (set ?rs (extract (register ?ra) ?s ?l))
-  (when (=i 8 (+i s l) 64)
+  (when (=i (+i s l) 64)
     1)
   ("~A = bit_extract(~A, ~A, ~A);" rs ra s l)
   ("emit(COMPOSE_SRL_IMM(~A, 64 - ~A, ~A));" ra s rs))
 
 (defmatcher extract-extbl-imm
   (set ?rs (extract (register ?ra) ?s 8))
-  (when (int-zero-p 8 (bit-and s 7))
+  (when (int-zero-p (bit-and s 7))
     1)
   ("~A = bit_extract(~A, ~A, 8);" rs ra s)
   ("emit(COMPOSE_EXTBL_IMM(~A, ~A >> 3, ~A));" ra s rs))
 
 (defmatcher extract-extwl-imm
   (set ?rs (extract (register ?ra) ?s 16))
-  (when (int-zero-p 8 (bit-and s 7))
+  (when (int-zero-p (bit-and s 7))
     1)
   ("~A = bit_extract(~A, ~A, 16);" rs ra s)
   ("emit(COMPOSE_EXTWL_IMM(~A, ~A >> 3, ~A));" ra s rs))
@@ -342,6 +349,29 @@
       free_tmp_integer_reg(tmp); }"
    ra s l				;sll
    l rs))				;srl
+
+;;; insert
+
+(defmatcher insert-full
+  (set ?rs (insert (register ?ra) (register ?rb) ?s ?l))
+  7
+  ("~A = bit_insert(~A, ~A, ~A, ~A);" rs ra rb s l)
+  ("{ reg_t mask_tmp = alloc_tmp_integer_reg(), source_tmp;
+      emit(COMPOSE_NOT(31, mask_tmp));
+      emit(COMPOSE_SLL_IMM(mask_tmp, 64 - ~A, mask_tmp));
+      emit(COMPOSE_SRL_IMM(mask_tmp, 64 - (~A + ~A), mask_tmp));
+      source_tmp = alloc_tmp_integer_reg();
+      emit(COMPOSE_SLL_IMM(~A, ~A, source_tmp));
+      emit(COMPOSE_BIC(source_tmp, mask_tmp, source_tmp));
+      emit(COMPOSE_BIC(~A, mask_tmp, ~A));
+      free_tmp_integer_reg(mask_tmp);
+      emit(COMPOSE_BIS(source_tmp, ~A, ~A));
+      free_tmp_integer_reg(source_tmp); }"
+   l					;sll
+   s l					;srl
+   rb s					;sll
+   ra rs				;bic
+   rs rs))				;bis
 
 ;;; loads
 
@@ -381,3 +411,11 @@
 (defstmatcher stw 2 "STW")
 (defstmatcher stl 4 "STL")
 (defstmatcher stq 8 "STQ")
+
+;;; comparisons
+
+(defopmatcher cmpeq (condition-to-int (=i a b)) "(~A == ~A)")
+(defopmatcher cmplt (condition-to-int (<is a b)) "(((sword_64)~A) < ((sword_64)~A))" :zero t)
+(defopmatcher cmple (condition-to-int (<=is a b)) "(((sword_64)~A) <= ((sword_64)~A))" :zero t)
+(defopmatcher cmpult (condition-to-int (<iu a b)) "~A < ~A" :zero t)
+(defopmatcher cmpule (condition-to-int (<=iu a b)) "~A <= ~A" :zero t)

@@ -134,8 +134,8 @@ let print_c_func reg_type result_passed printers name stmt fields =
 			     (join_strings ", "
 				(map (fun (reg, read, write) ->
 					match reg with
-					    GuestRegister (int_const, _) ->
-					      (register_to_c [] reg) ^ " = ALLOC_GUEST_REG_" ^
+					    GuestRegister (rclass, int_const, _) ->
+					      (register_to_c [] reg) ^ " = ALLOC_GUEST_REG_" ^ rclass ^ "_" ^
 					      (if read then "R" else "") ^ (if write then "W" else "") ^
 					      "(" ^ (int_const_to_c int_const) ^ ")"
 					  | _ -> raise Not_guest_register)
@@ -157,15 +157,22 @@ let print_c_func reg_type result_passed printers name stmt fields =
 		switch ;
 	      iter (fun (reg, _, _) ->
 		      match reg with
-			  GuestRegister (int_const, _) ->
-			    print_string ("FREE_GUEST_REG(" ^ (register_to_c [] reg) ^ ");\n")
+			  GuestRegister (rclass, int_const, _) ->
+			    print_string ("FREE_GUEST_REG_" ^ rclass ^ "(" ^ (register_to_c [] reg) ^ ");\n")
 			| _ -> raise Not_guest_register)
 		guest_regs)
 	 switch
   and handle_stmt stmt =
     match stmt with
 	Store _ -> handle_leaf_stmt stmt
-      | Assign _ -> handle_leaf_stmt stmt
+      | Assign (reg, _) ->
+	  (match reg with
+	       GuestRegister (cname, index, _) ->
+		 print_string ("if (KILL_" ^ cname ^ "(" ^ (int_const_to_c index) ^ "))\n{\n") ;
+		 handle_leaf_stmt stmt ;
+		 print_string "}\n"
+	     | _ ->
+		 handle_leaf_stmt stmt)
       | Let (name, width, rhs, sub) ->
 	  print_string ("reg_t let_reg_" ^ name ^ " = alloc_tmp_integer_reg();\n{\n") ;
 	  handle_leaf_stmt (Assign (LetRegister (name, expr_value_type rhs, width), rhs)) ;
@@ -204,10 +211,10 @@ let print_gen_func =
   print_c_func "reg_t" true
 
 let make_registers () =
-  let rs = GuestRegister (IntField "rs", Int)
-  and rd = GuestRegister (IntField "rd", Int)
-  and ra = GuestRegister (IntField "ra", Int)
-  and rb = GuestRegister (IntField "rb", Int)
+  let rs = GuestRegister ("GPR", IntField "rs", Int)
+  and rd = GuestRegister ("GPR", IntField "rd", Int)
+  and ra = GuestRegister ("GPR", IntField "ra", Int)
+  and rb = GuestRegister ("GPR", IntField "rb", Int)
   in (rs, rd, ra, rb)
 
 let rec alpha_wrap stmt =
@@ -226,7 +233,7 @@ let rec alpha_wrap stmt =
 	| _ ->
 	    apply_to_expr_subs wrap_expr expr
   in match stmt with
-      Assign (GuestRegister (i, Int), expr) -> Assign (GuestRegister (i, Int), sex_expr 4 (wrap_expr expr))
+      Assign (GuestRegister (c, i, Int), expr) -> Assign (GuestRegister (c, i, Int), sex_expr 4 (wrap_expr expr))
     | Assign (reg, expr) -> Assign (reg, wrap_expr expr)
     | Store (bo, width, addr, rhs) -> Store (other_byte_order bo, width, wrap_addr width (wrap_expr addr), wrap_expr rhs)
     | Let (name, width, rhs, sub) -> Let (name, width, wrap_expr rhs, alpha_wrap sub)
@@ -234,7 +241,9 @@ let rec alpha_wrap stmt =
     | IfStmt (expr, sub1, sub2) -> IfStmt (wrap_expr expr, alpha_wrap sub1, alpha_wrap sub2)
 
 let print_gen machine_insn =
-  print_gen_func alpha_gen_gens machine_insn.machine_insn_name (alpha_wrap machine_insn.insn_stmt) machine_insn.explore_fields
+  let insn = (alpha_wrap (map_condition_bits mapping_ppc_to_alpha machine_insn.insn_stmt))
+  in (* print_stmt insn ; *)
+    print_gen_func alpha_gen_gens machine_insn.machine_insn_name insn machine_insn.explore_fields
 
 let test_maybe () =
   let (r1, r2, r3, r4) = make_registers ()

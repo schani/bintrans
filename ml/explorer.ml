@@ -203,7 +203,7 @@ let explore_all_fields stmt mapping fields target_insns =
 	  in explore_some_values fields_so_far name rest rest_fields stmts_so_far conds_so_far
   and make_value_conds name values =
     map (fun v ->
-	   Unary (ConditionNeg, BinaryWidth (IntEqual, 8, IntConst (IntField name), int_literal_expr v)))
+	   Unary (ConditionNeg, Binary (IntEqual, IntConst (IntField name), int_literal_expr v)))
       values
   and explore fields_so_far rest_fields stmts_so_far conds_so_far =
     match rest_fields with

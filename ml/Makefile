@@ -11,7 +11,7 @@ ENGINE_OBJS = monad.$(OEXT) memoize.$(OEXT) bitmath.$(OEXT) utils.$(OEXT) \
 	      expr.$(OEXT) cond_monad.$(OEXT) uncertainty.$(OEXT) \
 	      machine.$(OEXT) mapping.$(OEXT) \
 	      matcher.$(OEXT) \
-	      normal_form.$(OEXT) simplifiers.$(OEXT) simplify.$(OEXT) \
+	      normal_form.$(OEXT) simplifiers.$(OEXT) simplify.$(OEXT) sex.$(OEXT)\
 	      irmacros.$(OEXT) \
 	      pruner.$(OEXT) simple_opts.$(OEXT) \
 	      explorer.$(OEXT) \
