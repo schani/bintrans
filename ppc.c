@@ -294,7 +294,7 @@ int emu_errnos[] = { 0,
 #define SYSCALL_FSTAT64          197
 #endif
 
-#define SYSCALL_OUTPUT
+/* #define SYSCALL_OUTPUT */
 #ifdef SYSCALL_OUTPUT
 #define ANNOUNCE_SYSCALL(n)         printf("%s\n", (n))
 #else

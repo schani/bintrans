@@ -129,6 +129,22 @@ fragment_hash_put (word_32 foreign_addr, fragment_hash_entry_t *entry, fragment_
 }
 
 void
+count_fragment_hash_entries (int *used, int *compiled)
+{
+    int i;
+
+    *used = 0;
+    *compiled = 0;
+    for (i = 0; i < FRAGMENT_HASH_ENTRIES; ++i)
+	if (fragment_hash_table[i].foreign_addr != (word_32)-1)
+	{
+	    ++*used;
+	    if (fragment_hash_table[i].native_addr != 0)
+		++*compiled;
+	}
+}
+
+void
 init_fragment_hash_entry (fragment_hash_entry_t *entry, fragment_hash_supplement_t *supplement)
 {
 #ifdef PROFILE_LOOPS

@@ -107,10 +107,13 @@
 #define PREMATURE_EXITS_CONST      (NUM_REG_CONSTANTS + 50)
 #define END_EXITS_CONST            (NUM_REG_CONSTANTS + 52)
 #define EMULATED_TRACE_INSNS_CONST (NUM_REG_CONSTANTS + 54)
-#ifdef SYNC_BLOCKS
+#if defined(SYNC_BLOCKS)
 #define EMPTY_SYNC_CONST           (NUM_REG_CONSTANTS + 56)
 #define STANDARD_SYNC_CONST        (NUM_REG_CONSTANTS + 58)
 #define CUSTOM_SYNC_CONST          (NUM_REG_CONSTANTS + 60)
+#elif defined(COUNT_LOAD_STORES)
+#define LOAD_INSNS_COUNT           (NUM_REG_CONSTANTS + 56)
+#define STORE_INSNS_COUNT          (NUM_REG_CONSTANTS + 58)
 #endif
 #endif
 #elif defined(ARCH_PPC)
@@ -371,6 +374,10 @@ unsigned long num_sync_blocks_in_situ = 0;
 unsigned long num_empty_sync_blocks = 0;
 #ifdef COLLECT_LIVENESS
 unsigned long num_patched_stores = 0;
+#endif
+#ifdef COUNT_LOAD_STORES
+int num_load_insns;
+int num_store_insns;
 #endif
 #endif
 
@@ -640,6 +647,9 @@ load_reg (reg_t native_reg, reg_t foreign_reg)
 #ifdef COLLECT_STATS
     ++num_load_store_reg_insns;
 #endif
+#ifdef COUNT_LOAD_STORES
+    ++num_load_insns;
+#endif
 
     switch (emu_regs[foreign_reg].type)
     {
@@ -661,6 +671,9 @@ store_reg (reg_t native_reg, reg_t foreign_reg)
 {
 #ifdef COLLECT_STATS
     ++num_load_store_reg_insns;
+#endif
+#ifdef COUNT_LOAD_STORES
+    ++num_store_insns;
 #endif
 
     switch (emu_regs[foreign_reg].type)
@@ -1178,6 +1191,40 @@ emit_system_call (void)
 #endif
 }
 
+#ifdef ARCH_ALPHA
+void
+emit_const_add (int const_index, int amount, word_32 **lda_loc)
+{
+    assert(amount >= -32768 && amount < 32768);
+
+    emit(COMPOSE_LDQ(28, const_index * 4, CONSTANT_AREA_REG));
+    if (lda_loc != 0)
+	*lda_loc = &fragment_insns[num_fragment_insns];
+    emit(COMPOSE_LDA(28, amount, 28));
+    emit(COMPOSE_STQ(28, const_index * 4, CONSTANT_AREA_REG));
+
+#ifdef COLLECT_STATS
+    ++num_const_adds;
+#endif
+}
+
+void
+direct_emit_const_add (int const_index, int amount, word_32 **lda_loc)
+{
+    assert(amount >= -32768 && amount < 32768);
+
+    direct_emit(COMPOSE_LDQ(28, const_index * 4, CONSTANT_AREA_REG));
+    if (lda_loc != 0)
+	*lda_loc = emit_loc;
+    direct_emit(COMPOSE_LDA(28, amount, 28));
+    direct_emit(COMPOSE_STQ(28, const_index * 4, CONSTANT_AREA_REG));
+
+#ifdef COLLECT_STATS
+    ++num_const_adds;
+#endif
+}
+#endif
+
 void
 start_fragment (void)
 {
@@ -1408,9 +1455,16 @@ finish_fragment (word_32 *addrs, unsigned char *preferred_alloced_integer_regs)
 #define EMIT_LOC           emit_loc
 #define START              body_start
 #endif
+#ifdef COUNT_LOAD_STORES
+    int num_load_insns_save = -1, num_store_insns_save;
+#endif
 
 #ifdef DYNAMO_TRACES
     emit_alt = 0;
+#endif
+
+#ifdef COUNT_LOAD_STORES
+    num_load_insns = num_store_insns = 0;
 #endif
 
     init_fragment_hash_entry(&fragment_entry, &fragment_entry_supplement);
@@ -1589,6 +1643,12 @@ finish_fragment (word_32 *addrs, unsigned char *preferred_alloced_integer_regs)
 		    assert(first + 1 == last);
 
 		    assert(i > 0);
+
+#ifdef COUNT_LOAD_STORES
+		    num_load_insns_save = num_load_insns;
+		    num_store_insns_save = num_store_insns;
+#endif
+
 #ifdef NEED_REGISTER_ALLOCATOR
 		    execute_reg_locks(&rl, first, fragment_emu_insns[i - 1].addr);
 #endif
@@ -1609,6 +1669,15 @@ finish_fragment (word_32 *addrs, unsigned char *preferred_alloced_integer_regs)
 			    if (live)
 				store_reg(emu_regs[j].native_reg, j);
 			}
+#endif
+#ifdef COUNT_LOAD_STORES
+		    if (num_load_insns > 0)
+			direct_emit_const_add(LOAD_INSNS_COUNT, num_load_insns, 0);
+		    if (num_store_insns > 0)
+			direct_emit_const_add(STORE_INSNS_COUNT, num_store_insns, 0);
+
+		    num_load_insns = num_load_insns_save;
+		    num_store_insns = num_store_insns_save;
 #endif
 		}
 		break;
@@ -2224,10 +2293,13 @@ init_compiler (interpreter_t *intp, interpreter_t *dbg_intp)
     add_const_64(0);		/* premature exits */
     add_const_64(0);		/* end exits */
     add_const_64(0);		/* emulated trace insns executed */
-#ifdef SYNC_BLOCKS
+#if defined(SYNC_BLOCKS)
     add_const_64(0);		/* empty sync blocks */
     add_const_64(0);		/* standard sync blocks */
     add_const_64(0);		/* custom sync blocks */
+#elif defined(COUNT_LOAD_STORES)
+    add_const_64(0);		/* load insns */
+    add_const_64(0);		/* store insns */
 #endif
 #endif
 
@@ -2332,38 +2404,6 @@ compile_until_jump (word_32 *addr, int optimize_taken_jump, label_t taken_jump_l
 #endif
 
 #ifdef ARCH_ALPHA
-void
-emit_const_add (int const_index, int amount, word_32 **lda_loc)
-{
-    assert(amount >= -32768 && amount < 32768);
-
-    emit(COMPOSE_LDQ(16, const_index * 4, CONSTANT_AREA_REG));
-    if (lda_loc != 0)
-	*lda_loc = &fragment_insns[num_fragment_insns];
-    emit(COMPOSE_LDA(16, amount, 16));
-    emit(COMPOSE_STQ(16, const_index * 4, CONSTANT_AREA_REG));
-
-#ifdef COLLECT_STATS
-    ++num_const_adds;
-#endif
-}
-
-void
-direct_emit_const_add (int const_index, int amount, word_32 **lda_loc)
-{
-    assert(amount >= -32768 && amount < 32768);
-
-    direct_emit(COMPOSE_LDQ(16, const_index * 4, CONSTANT_AREA_REG));
-    if (lda_loc != 0)
-	*lda_loc = emit_loc;
-    direct_emit(COMPOSE_LDA(16, amount, 16));
-    direct_emit(COMPOSE_STQ(16, const_index * 4, CONSTANT_AREA_REG));
-
-#ifdef COLLECT_STATS
-    ++num_const_adds;
-#endif
-}
-
 word_32
 patch_mem_disp (word_32 insn, word_16 val)
 {
@@ -3051,7 +3091,7 @@ compose_branch (addr_t branch_addr, addr_t target_addr)
 #error unsupported target architecture
 #endif
 
-#ifdef COLLECT_STATS
+#ifdef COLLECT_LIVENESS
 word_32*
 patch_store_regs (word_32 *jump, word_32 foreign_addr)
 {
@@ -3075,12 +3115,12 @@ patch_store_regs (word_32 *jump, word_32 foreign_addr)
 	assert(foreign_reg < NUM_EMU_REGISTERS);
 
 	if (emu_reg_live(foreign_reg, supplement->live_cr, supplement->live_xer, supplement->live_gpr))
-	{
 	    *next++ = *jump++;
+	else
+	{
+	    ++jump;
 	    ++num_patched_stores;
 	}
-	else
-	    ++jump;
     }
 
     return next;
@@ -3353,6 +3393,7 @@ print_compiler_stats (void)
 {
 #ifdef COLLECT_STATS
     int i;
+    int hash_used, hash_compiled;
 
 #ifdef COMPILER_THRESHOLD
     printf("patched direct jumps:          %lu\n", num_patched_direct_jumps);
@@ -3395,10 +3436,13 @@ print_compiler_stats (void)
     printf("emulated block insns executed: %lu\n", get_const_64(EMULATED_INSNS_CONST));
     printf("emulated trace insns executed: %lu\n", get_const_64(EMULATED_TRACE_INSNS_CONST));
     printf("native block insns executed:   %lu\n", get_const_64(NATIVE_INSNS_CONST));
-#ifdef SYNC_BLOCKS
+#if defined(SYNC_BLOCKS)
     printf("empty sync blocks:             %lu\n", get_const_64(EMPTY_SYNC_CONST));
     printf("standard sync blocks:          %lu\n", get_const_64(STANDARD_SYNC_CONST));
     printf("custom sync blocks:            %lu\n", get_const_64(CUSTOM_SYNC_CONST));
+#elif defined(COUNT_LOAD_STORES)
+    printf("executed load insns:           %lu\n", get_const_64(LOAD_INSNS_COUNT));
+    printf("executed store insns:          %lu\n", get_const_64(STORE_INSNS_COUNT));
 #endif
 #endif
 
@@ -3416,6 +3460,12 @@ print_compiler_stats (void)
 
 #ifdef COLLECT_LIVENESS
     save_liveness_info();
+#endif
+
+#ifdef COLLECT_STATS
+    count_fragment_hash_entries(&hash_used, &hash_compiled);
+    printf("used hash entries:             %d\n", hash_used);
+    printf("compiled hash entries:         %d\n", hash_compiled);
 #endif
 }
 

@@ -1,30 +1,31 @@
-EMU = I386
-#EMU = PPC
-#LOCATION = -DCOMPLANG
+#EMU = I386
+EMU = PPC
+LOCATION = -DCOMPLANG
 
 #MODE = INTERPRETER
-#MODE = COMPILER
+MODE = COMPILER
 #MODE = DEBUGGER
-MODE = CROSSDEBUGGER
+#MODE = CROSSDEBUGGER
 
-#ARCH = -DARCH_ALPHA
+ARCH = -DARCH_ALPHA
 #ARCH = -DARCH_I386
-ARCH = -DARCH_PPC
+#ARCH = -DARCH_PPC
 
-#ASM_OBJS = alpha_asm.o
-ASM_OBJS = ppc_asm.o
+ASM_OBJS = alpha_asm.o
+#ASM_OBJS = ppc_asm.o
 
 COMPILER_OBJS = compiler.o
 
-DIET = diet
-LDOPTS = -Wl,-Ttext,0x70000000
+#DIET = diet
+#LDOPTS = -Wl,-Ttext,0x70000000
 
 #DEFINES = -DUSE_HAND_TRANSLATOR -DCOLLECT_STATS -DDYNAMO_TRACES -DDYNAMO_THRESHOLD=50 -DSYNC_BLOCKS
 #-DDUMP_CODE
-#DEFINES = -DUSE_HAND_TRANSLATOR -DCOLLECT_STATS -DCOLLECT_LIVENESS -DLIVENESS_DEPTH=1
+DEFINES = -DUSE_HAND_TRANSLATOR -DCOLLECT_STATS -DCOLLECT_LIVENESS -DLIVENESS_DEPTH=0
+#-DCOUNT_INSNS -DCOUNT_LOAD_STORES
+#-DDUMP_CFG
 #-DDUMP_CODE
 #-DSYNC_BLOCKS
-#-DCOUNT_INSNS
 #-DMEASURE_TIME
 #DEFINES = -DUSE_HAND_TRANSLATOR -DCOLLECT_STATS -DDUMP_CODE -DSYNC_BLOCKS
 #DEFINES = -DUSE_HAND_TRANSLATOR -DPROFILE_LOOPS -DCOMPILER_THRESHOLD=50 -DCOLLECT_STATS -DCOUNT_INSNS
@@ -32,7 +33,7 @@ LDOPTS = -Wl,-Ttext,0x70000000
 # 
 #  -DFAST_PPC_FPR
 #  -DCOLLECT_PPC_FPR_STATS
-DEFINES = -DUSE_HAND_TRANSLATOR -DDUMP_CODE
+#DEFINES = -DUSE_HAND_TRANSLATOR -DDUMP_CODE
 #DEFINES =
 #DEFINES = -O -DPROFILE_LOOPS -DPROFILE_FRAGMENTS -DCOLLECT_STATS
 #DEFINES = -DEMULATED_MEM
@@ -93,7 +94,7 @@ endif
 
 CFLAGS = $(MODE_DEFS) $(DEFINES) $(ARCH) $(EMU_DEFS) $(LOCATION) -fno-inline
 
-all : bintrans dump_liveness
+all : bintrans dump_liveness undump_liveness convert_liveness
 
 bintrans : ppc.o mm.o fragment_hash.o loops.o liveness.o lispreader.o $(OBJS)
 	$(DIET) gcc $(LDOPTS) -o bintrans ppc.o mm.o fragment_hash.o loops.o liveness.o lispreader.o $(OBJS)
@@ -101,6 +102,12 @@ bintrans : ppc.o mm.o fragment_hash.o loops.o liveness.o lispreader.o $(OBJS)
 
 dump_liveness : dump_liveness.c bintrans.h compiler.h
 	$(DIET) gcc $(CFLAGS) -Wall -o dump_liveness dump_liveness.c
+
+undump_liveness : undump_liveness.c bintrans.h compiler.h
+	$(DIET) gcc $(CFLAGS) -Wall -o undump_liveness undump_liveness.c
+
+convert_liveness : convert_liveness.c bintrans.h compiler.h
+	$(DIET) gcc $(CFLAGS) -Wall -o convert_liveness convert_liveness.c
 
 ppc.o : ppc.c ppc_interpreter.c ppc_disassembler.c alpha_types.h bintrans.h
 	$(DIET) gcc $(CFLAGS) -Wall -g -c ppc.c

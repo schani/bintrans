@@ -81,5 +81,7 @@ void init_fragment_hash_entry (fragment_hash_entry_t *entry, fragment_hash_suppl
 
 void init_fragment_hash (void);
 
+void count_fragment_hash_entries (int *used, int *compiled);
+
 extern fragment_hash_entry_t fragment_hash_table[FRAGMENT_HASH_ENTRIES];
 extern fragment_hash_supplement_t fragment_hash_supplement[FRAGMENT_HASH_ENTRIES];

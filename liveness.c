@@ -520,23 +520,64 @@ load_liveness_info (void)
     fclose(in);
 }
 
+#ifdef DUMP_CFG
+void
+dump_bits (word_32 bits, FILE *out)
+{
+    int i;
+
+    for (i = 31; i >= 0; --i)
+	fputc("01"[(bits >> i) & 1], out);
+}
+
+#define SWAP(a,b)          ({ typeof (a) t = a; a = b; b = t; })
+
+#include "ppc_gen_kill.c"
+
+void
+compute_gen_kill (interpreter_t *intp, word_32 addr, word_32 last_addr,
+		  word_32 *gen_cr, word_32 *gen_xer, word_32 *gen_gpr,
+		  word_32 *kill_cr, word_32 *kill_xer, word_32 *kill_gpr)
+{
+    *gen_cr = *gen_xer = *gen_gpr = 0;
+    *kill_cr = *kill_xer = *kill_gpr = 0;
+
+    while (addr < last_addr)
+    {
+	word_32 insn = mem_get_32(intp, addr);
+
+	gen_kill_ppc_insn(insn, addr, gen_cr, kill_cr, gen_xer, kill_xer, gen_gpr, kill_gpr);
+
+	addr += 4;
+    }
+}
+#endif
+
 void
 save_liveness_info (void)
 {
     FILE *out = fopen("liveness.out", "w");
     int i;
+#ifdef DUMP_CFG
+    FILE *cfg = fopen("cfg.txt", "w");
+
+    assert(cfg != 0);
+#endif
 
     assert(out != 0);
 
     for (i = 0; i < FRAGMENT_HASH_ENTRIES; ++i)
-	if (fragment_hash_table[i].foreign_addr != (word_32)-1
+    {
+	word_32 foreign_addr = fragment_hash_table[i].foreign_addr;
+
+	if (foreign_addr != (word_32)-1
 	    && (fragment_hash_supplement[i].live_cr != 0xffffffff
 		|| fragment_hash_supplement[i].live_xer != 0xffffffff
 		|| fragment_hash_supplement[i].live_gpr != 0xffffffff))
 	{
 	    ppc_liveness_info_t info;
 
-	    info.foreign_addr = fragment_hash_table[i].foreign_addr;
+	    info.foreign_addr = foreign_addr;
 	    /*
 #if LIVENESS_DEPTH > 0
 	    info.depth = fragment_hash_supplement[i].depth;
@@ -550,6 +591,36 @@ save_liveness_info (void)
 
 	    assert(fwrite(&info, sizeof(ppc_liveness_info_t), 1, out) == 1);
 	}
+
+#ifdef DUMP_CFG
+	if (foreign_addr != -1)
+	{
+	    word_32 last_addr;
+	    int can_jump_indirectly, num_targets;
+	    word_32 targets[2];
+	    word_32 gen_cr, gen_xer, gen_gpr, kill_cr, kill_xer, kill_gpr;
+	    int j;
+
+	    discover_block(compiler_intp, foreign_addr, 0, &last_addr, &can_jump_indirectly,
+			   &num_targets, targets);
+	    compute_gen_kill(compiler_intp, foreign_addr, last_addr,
+			     &gen_cr, &gen_xer, &gen_gpr, &kill_cr, &kill_xer, &kill_gpr);
+
+	    fprintf(cfg, "%08x ", foreign_addr);
+	    dump_bits(gen_cr, cfg);
+	    dump_bits(gen_xer, cfg);
+	    dump_bits(gen_gpr, cfg);
+	    fprintf(cfg, " ");
+	    dump_bits(kill_cr, cfg);
+	    dump_bits(kill_xer, cfg);
+	    dump_bits(kill_gpr, cfg);
+	    fprintf(cfg, can_jump_indirectly ? " 1 %d" : " 0 %d", num_targets);
+	    for (j = 0; j < num_targets; ++j)
+		fprintf(cfg, " %08x", targets[j]);
+	    fprintf(cfg, "\n");
+	}
+#endif
+    }
 
     fclose(out);
 

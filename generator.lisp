@@ -4588,6 +4588,9 @@ save_live = live;~%"
 		      (generate (expr)
 			(expr-case expr
 			  (let (let-bindings body)
+			    (format t "consumed |= 0 ~{| ~A~};~%"
+				    (mapcar #'(lambda (binding) (funcall used-bits-func (cdr binding)))
+					    let-bindings))
 			    (mapc #'generate body))
 			  (set (lvalue rhs)
 			       (format t "consumed |= ~A | ~A;~%" (generate-for-lvalue lvalue) (funcall used-bits-func rhs)))
