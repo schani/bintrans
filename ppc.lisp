@@ -129,16 +129,15 @@
   ((set (reg rd gpr) (+ (reg ra gpr) (reg rb gpr))))
   ("add r%u,r%u,r%u" rd ra rb))
 
-(define-insn adde
+(define-rc-insn adde rd
     ((opcd 31)
      (xo9 138)
-     (oe 0)
-     (rc 0))
+     (oe 0))
   ((let ((old-ca (width 32 (zex xer-ca))))
      (set (reg rd gpr) (+ (+ (reg ra gpr) (reg rb gpr)) (zex xer-ca)))
      (set xer-ca (logor (+carry (reg ra gpr) (reg rb gpr))
 			(+carry (+ (reg ra gpr) (reg rb gpr)) (zex old-ca))))))
-  ("adde r%u,r%u,r%u" rd ra rb))
+  ("~A r%u,r%u,r%u" rd ra rb))
 
 (define-insn addi
     ((opcd 14))
@@ -234,6 +233,18 @@
        (nop)
        (jump-relative (shiftl (sex bd) 2))))
   ("bdnz 0x%x" (width 32 (+ addr (shiftl (sex li) 2)))))
+
+(define-insn bdz			;branch with decrement if zero
+    ((opcd 16)
+     (bo 18)
+     (bi dont-care)
+     (aa 0)
+     (lk 0))
+  ((set (reg ctr) (- (reg ctr) 1))
+   (if (= (reg ctr) 0)
+       (jump-relative (shiftl (sex bd) 2))
+       (nop)))
+  ("bdz 0x%x" (width 32 (+ addr (shiftl (sex li) 2)))))
 
 (define-insn beq
     ((opcd 16)
@@ -402,6 +413,14 @@
   ((set (reg ra gpr) (leading-zeros (reg rs gpr))))
   ("cntlzw r%u,r%u" ra rs))
 
+(define-insn creqv
+    ((opcd 19)
+     (xo1 289)
+     (rc 0))
+  ((set (numbered-subreg 1 (- (width 5 31) crbd) cr)
+	(if (= (numbered-subreg 1 (- (width 5 31) crba) cr) (numbered-subreg 1 (- (width 5 31) crbb) cr)) 1 0)))
+  ("creqv crb%u,crb%u,crb%u" crbd crba crbb))
+
 (define-insn crxor
     ((opcd 19)
      (xo1 193)
@@ -444,6 +463,12 @@
   ((set (reg rd gpr) (/ (reg ra gpr) (reg rb gpr))))
   ("divwu r%u,r%u,r%u" rd ra rb))
 
+(define-rc-insn eqv ra
+  ((opcd 31)
+   (xo1 284))
+  ((set (reg ra gpr) (bitneg (logxor (reg rs gpr) (reg rb gpr)))))
+  ("~A r%u,r%u,r%u" ra rs rb))
+
 (define-insn extsb
     ((opcd 31)
      (xo1 954)
@@ -451,6 +476,29 @@
      (rc 0))
   ((set (reg ra gpr) (width 32 (sex (subreg 0 7 rs gpr)))))
   ("extsb r%u,r%u" ra rs))
+
+(define-rc-insn extsh ra
+    ((opcd 31)
+     (xo1 922)
+     (rb 0))
+  ((set (reg ra gpr) (width 32 (sex (subreg 0 15 rs gpr)))))
+  ("~A r%u,r%u" ra rs))
+
+(define-insn fabs
+    ((opcd 63)
+     (fra 0)
+     (xo1 264)
+     (rc 0))
+  ((set (reg frd fpr) (bits-to-double (logand (double-to-bits (reg frb fpr)) #x7fffffffffffffff))))
+  ("fabs fr%u,fr%u" frd frb))
+
+(define-insn fadd
+    ((opcd 63)
+     (frc 0)
+     (xo5 21)
+     (rc 0))
+  ((set (reg frd fpr) (+f (reg fra fpr) (reg frb fpr))))
+  ("fadd fr%u,fr%u,fr%u" frd fra frb))
 
 (define-insn fadds
     ((opcd 59)
@@ -497,6 +545,13 @@
   ((set (reg frd fpr) (/f (reg fra fpr) (reg frb fpr))))
   ("fdiv fr%u,fr%u,fr%u" frd fra frb))
 
+(define-insn fmadd
+    ((opcd 63)
+     (xo5 29)
+     (rc 0))
+  ((set (reg frd fpr) (+f (*f (reg fra fpr) (reg frc fpr)) (reg frb fpr))))
+  ("fmadd fr%u,fr%u,fr%u,fr%u" frd fra frc frb))
+
 (define-insn fmadds
     ((opcd 59)
      (xo5 29)
@@ -511,6 +566,13 @@
      (rc 0))
   ((set (reg frd fpr) (reg frb fpr)))
   ("fmr fr%u,fr%u" frd frb))
+
+(define-insn fmsub
+    ((opcd 63)
+     (xo5 28)
+     (rc 0))
+  ((set (reg frd fpr) (-f (*f (reg fra fpr) (reg frc fpr)) (reg frb fpr))))
+  ("fmsub fr%u,fr%u,fr%u,fr%u" frd fra frc frb))
 
 (define-insn fmsubs
     ((opcd 59)
@@ -591,17 +653,26 @@
 
 (define-insn lfd
     ((opcd 50))
-  ((set (reg rd fpr) (bits-to-double (mem (if (= ra (width 5 0))
-					      (sex d)
-					      (+ (reg ra gpr) (sex d)))))))
-  ("lfd fr%u,%d(r%u)" rd d ra))
+  ((set (reg frd fpr) (bits-to-double (mem (if (= ra (width 5 0))
+					       (sex d)
+					       (+ (reg ra gpr) (sex d)))))))
+  ("lfd fr%u,%d(r%u)" frd d ra))
+
+(define-insn lfdx
+    ((opcd 31)
+     (xo1 599)
+     (rc 0))
+  ((set (reg frd fpr) (bits-to-double (mem (if (= ra (width 5 0))
+					       (reg rb gpr)
+					       (+ (reg ra gpr) (reg rb gpr)))))))
+  ("lfdx fr%u,r%u,r%u" frd ra rb))
 
 (define-insn lfs
     ((opcd 48))
-  ((set (reg rd fpr) (single-to-double (bits-to-single (mem (if (= ra (width 5 0))
-								(sex d)
-								(+ (reg ra gpr) (sex d))))))))
-  ("lfs fr%u,%d(r%u)" rd d ra))
+  ((set (reg frd fpr) (single-to-double (bits-to-single (mem (if (= ra (width 5 0))
+								 (sex d)
+								 (+ (reg ra gpr) (sex d))))))))
+  ("lfs fr%u,%d(r%u)" frd d ra))
 
 (define-insn lfsx
     ((opcd 31)
@@ -831,17 +902,16 @@
 			 (shiftl (reg rs gpr) (subreg 0 4 rb gpr)))))
   ("slw r%u,r%u,r%u" ra rs rb))
 
-(define-insn srawi
+(define-rc-insn srawi ra
     ((opcd 31)
-     (xo1 824)
-     (rc 0))
+     (xo1 824))
   ((set xer-ca (if (<s (reg rs gpr) 0)
 		   (if (= (bitneg (logand (- (shiftl 1 sh) 1) (reg rs gpr))) 0)
 		       0
 		       1)
 		   0))
    (set (reg ra gpr) (ashiftr (reg rs gpr) sh)))
-  ("srawi r%u,r%u,%u" ra rs sh))
+  ("~A r%u,r%u,%u" ra rs sh))
 
 (define-insn srw
     ((opcd 31)
@@ -876,6 +946,13 @@
   ((set (mem (+ (if (= ra (width 5 0)) 0 (reg ra gpr)) (sex d)) 64) (double-to-bits (reg rs fpr))))
   ("stfd fr%u,%d(r%u)" rs d ra))
 
+(define-insn stfdx
+    ((opcd 31)
+     (xo1 727)
+     (rc 0))
+  ((set (mem (+ (if (= ra (width 5 0)) 0 (reg ra gpr)) (reg rb gpr)) 64) (double-to-bits (reg frs fpr))))
+  ("stfdx fr%u,r%u,r%u" frs ra rb))
+
 (define-insn stfs
     ((opcd 52))
   ((set (mem (+ (if (= ra (width 5 0)) 0 (reg ra gpr)) (sex d))) (single-to-bits (double-to-single (reg rs fpr)))))
@@ -895,6 +972,13 @@
 		 (+ (reg ra gpr) (sex d))) 16)
 	(subreg 0 15 rs gpr)))
   ("sth r%u,%d(r%u)" rs d ra))
+
+(define-insn sthx
+    ((opcd 31)
+     (xo1 407)
+     (rc 0))
+  ((set (mem (+ (if (= ra (width 5 0)) 0 (reg ra gpr)) (reg rb gpr)) 16) (subreg 0 15 rs gpr)))
+  ("sthx r%u,r%u,r%u" rs ra rb))
 
 (define-insn stw
     ((opcd 36))
@@ -956,12 +1040,11 @@
    (set (reg rd gpr) (- (sex simm) (reg ra gpr))))
   ("subfic r%u,r%u,%d" rd ra simm))
 
-(define-insn xor
+(define-rc-insn xor ra
     ((opcd 31)
-     (xo1 316)
-     (rc 0))
+     (xo1 316))
   ((set (reg ra gpr) (logxor (reg rs gpr) (reg rb gpr))))
-  ("xor r%u,r%u,r%u" ra rs rb))
+  ("~A r%u,r%u,r%u" ra rs rb))
 
 (define-insn xori
     ((opcd 26))

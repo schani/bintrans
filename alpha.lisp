@@ -758,3 +758,20 @@
 
 (define-mnemonic not (s d)
   (ornot 31 s d))
+
+;;;; generators
+
+(define-generator
+  :inputs ((x integer (<= 64) reg)
+	   (lt integer (= 4) const)
+	   (gt integer (= 4) const)
+	   (eq integer (= 4) const))
+  :result (res integer 4)
+  :expr (if (<s x 0)
+	    lt
+	    (if (>s x 0)
+		gt
+		eq))
+  :code ((cmovlt_imm x lt res)
+	 (cmoveq_imm x eq res)
+	 (cmovgt_imm x gt res)))

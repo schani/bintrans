@@ -27,7 +27,7 @@ void c_stub (void);
 #define SEGMENT_EXECUTABLE 4
 #define SEGMENT_MMAPPED    8
 
-#define MAX_SEGMENTS 8
+#define MAX_SEGMENTS 16
 
 typedef struct
 {

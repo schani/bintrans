@@ -12,6 +12,13 @@
 #include <sys/types.h>
 #include <ctype.h>
 #include <asm/param.h>
+#include <fcntl.h>
+#include <time.h>
+#include <sys/socket.h>
+#include <linux/net.h>
+#include <sys/time.h>
+#include <errno.h>
+#include <sys/un.h>
 
 #include "bintrans.h"
 
@@ -40,10 +47,62 @@
 #define STACK_SIZE        128
 #define MMAP_START 0x30000000
 
+#define PPC_MAP_SHARED    0x01
 #define PPC_MAP_PRIVATE   0x02
+#define PPC_MAP_FIXED     0x10
 #define PPC_MAP_ANONYMOUS 0x20
 
+#define PPC_O_ACCMODE	  0003
+#define PPC_O_RDONLY	    00
+#define PPC_O_WRONLY	    01
+#define PPC_O_RDWR	    02
+#define PPC_O_CREAT	  0100	/* not fcntl */
+#define PPC_O_EXCL	  0200	/* not fcntl */
+#define PPC_O_NOCTTY	  0400	/* not fcntl */
+#define PPC_O_TRUNC	 01000	/* not fcntl */
+#define PPC_O_APPEND	 02000
+#define PPC_O_NONBLOCK	 04000
+#define PPC_O_NDELAY	PPC_O_NONBLOCK
+#define PPC_O_SYNC	010000
+#define PPC_FASYNC	020000	/* fcntl, for BSD compatibility */
+#define PPC_O_DIRECTORY	040000	/* must be a directory */
+#define PPC_O_NOFOLLOW	0100000	/* don't follow links */
+
 #define PPC_TCGETS  0x402c7413
+
+#define PPC_SOCK_STREAM		1
+#define PPC_SOCK_DGRAM		2
+#define PPC_SOCK_RAW		3
+#define PPC_SOCK_RDM		4
+#define PPC_SOCK_SEQPACKET	5
+#define PPC_SOCK_PACKET		10
+
+#define PPC_ROOT                "/mnt/itch/schani/ppc-root"
+
+int ppc_errnos[] = { 0,
+		     EPERM, ENOENT, ESRCH, EINTR, EIO, ENXIO, E2BIG, ENOEXEC, EBADF,
+		     ECHILD, EAGAIN, ENOMEM, EACCES, EFAULT, ENOTBLK, EBUSY, EEXIST,
+		     EXDEV, ENODEV, ENOTDIR, EISDIR, EINVAL, ENFILE, EMFILE, ENOTTY,
+		     ETXTBSY, EFBIG, ENOSPC, ESPIPE, EROFS, EMLINK, EPIPE, EDOM, ERANGE,
+		     EDEADLK, ENAMETOOLONG, ENOLCK, ENOSYS, ENOTEMPTY, ELOOP,
+		     0 /* EWOULDBLOCK */, ENOMSG, EIDRM, ECHRNG, EL2NSYNC, EL3HLT, EL3RST,
+		     ELNRNG, EUNATCH, ENOCSI, EL2HLT, EBADE, EBADR, EXFULL, ENOANO,
+		     EBADRQC, EBADSLT, EDEADLOCK, EBFONT, ENOSTR, ENODATA, ETIME, ENOSR,
+		     ENONET, ENOPKG, EREMOTE, ENOLINK, EADV, ESRMNT, ECOMM, EPROTO,
+		     EMULTIHOP, EDOTDOT, EBADMSG, EOVERFLOW, ENOTUNIQ, EBADFD, EREMCHG,
+		     ELIBACC, ELIBBAD, ELIBSCN, ELIBMAX, ELIBEXEC, EILSEQ, ERESTART,
+		     ESTRPIPE, EUSERS, ENOTSOCK, EDESTADDRREQ, EMSGSIZE, EPROTOTYPE,
+		     ENOPROTOOPT, EPROTONOSUPPORT, ESOCKTNOSUPPORT, EOPNOTSUPP,
+		     EPFNOSUPPORT, EAFNOSUPPORT, EADDRINUSE, EADDRNOTAVAIL, ENETDOWN,
+		     ENETUNREACH, ENETRESET, ECONNABORTED, ECONNRESET, ENOBUFS, EISCONN,
+		     ENOTCONN, ESHUTDOWN, ETOOMANYREFS, ETIMEDOUT, ECONNREFUSED,
+		     EHOSTDOWN, EHOSTUNREACH, EALREADY, EINPROGRESS, ESTALE, EUCLEAN,
+		     ENOTNAM, ENAVAIL, EISNAM, EREMOTEIO, EDQUOT, ENOMEDIUM,
+		     EMEDIUMTYPE };
+
+#define LAST_PPC_ERRNO 124
+
+#define PPC_PAGE_ALIGN(a)      (((a)+PAGE_SIZE-1)&~(PAGE_SIZE-1))
 
 int debug = 0;
 
@@ -185,7 +244,16 @@ emulated_mem_set_64 (interpreter_t *intp, word_32 addr, word_64 value)
 }
 
 void
-mem_copy (interpreter_t *intp, word_32 addr, byte *buf, word_32 len)
+mem_copy_from_user_8 (interpreter_t *intp, byte *buf, word_32 addr, word_32 len)
+{
+    word_32 w;
+
+    for (w = 0; w < len; ++w)
+	buf[w] = mem_get_8(intp, addr + w);
+}
+
+void
+mem_copy_to_user_32 (interpreter_t *intp, word_32 addr, byte *buf, word_32 len)
 {
     word_32 w;
 
@@ -194,6 +262,18 @@ mem_copy (interpreter_t *intp, word_32 addr, byte *buf, word_32 len)
 
     for (w = 0; w < len; w += 4)
 	mem_set_32(intp, addr + w, *(word_32*)(buf + w));
+}
+
+void
+mem_copy_from_user_32 (interpreter_t *intp, byte *buf, word_32 addr, word_32 len)
+{
+    word_32 w;
+
+    assert((addr & 3) == 0);
+    assert((len & 3) == 0);
+
+    for (w = 0; w < len; w += 4)
+	*(word_32*)(buf + w) = mem_get_32(intp, addr + w);
 }
 
 word_32
@@ -351,31 +431,58 @@ addcarry (word_32 op1, word_32 op2)
 #include "ppc_interpreter.c"
 #include "ppc_disassembler.c"
 
+int
+can_mmap (interpreter_t *intp, word_32 addr, word_32 len)
+{
+    int i;
+
+    if (intp->direct_memory)
+	assert(0);
+    else
+	for (i = 0; i < intp->num_segments; ++i)
+	    if (intp->segments[i].len > 0)
+	    {
+		if ((addr <= intp->segments[i].addr && addr + len >= intp->segments[i].addr)
+		    || (addr >= intp->segments[i].addr && addr < intp->segments[i].addr + intp->segments[i].len))
+		    return 0;
+	    }
+
+    return 1;
+}
+
 segment_t*
-mmap_anonymous_segment (interpreter_t *intp, word_32 len, int prot)
+mmap_segment (interpreter_t *intp, word_32 len, int prot, int fixed, word_32 addr)
 {
     byte *mem;
     segment_t *segment;
+    int map_to_addr;
 
-    if (!intp->direct_memory)
+    if (addr != 0)
+	map_to_addr = can_mmap(intp, addr, len);
+    else
     {
-	mem = (byte*)malloc(len);
-	if (mem == 0)
-	    return 0;
+	map_to_addr = 0;
+	assert(can_mmap(intp, intp->mmap_addr, len));
     }
+
+    if (fixed)
+	assert(map_to_addr);
 
     assert(intp->num_segments < MAX_SEGMENTS);
 
     segment = &intp->segments[intp->num_segments++];
 
-    segment->addr = intp->mmap_addr;
+    if (map_to_addr)
+	segment->addr = addr;
+    else
+	segment->addr = intp->mmap_addr;
 
     if (intp->direct_memory)
     {
 	word_32 real_addr, real_len;
 
-	align_segment(intp->mmap_addr, len, &real_addr, &real_len);
-	assert(intp->mmap_addr == real_addr);
+	align_segment(segment->addr, len, &real_addr, &real_len);
+	assert(segment->addr == real_addr);
 	mem = (byte*)mmap((void*)REAL_ADDR(real_addr), real_len, prot, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 	assert((addr_t)mem == REAL_ADDR(real_addr));
 
@@ -383,10 +490,18 @@ mmap_anonymous_segment (interpreter_t *intp, word_32 len, int prot)
 	segment->real_len = real_len;
 	segment->real_mem = mem;
 
-	intp->mmap_addr += real_len;
+	if (!map_to_addr)
+	    intp->mmap_addr += real_len;
     }
     else
-	intp->mmap_addr += len;
+    {
+	mem = (byte*)malloc(len);
+	if (mem == 0)
+	    return 0;
+
+	if (!map_to_addr)
+	    intp->mmap_addr += len;
+    }
 
     segment->len = len;
 
@@ -403,9 +518,142 @@ mmap_anonymous_segment (interpreter_t *intp, word_32 len, int prot)
     return segment;
 }
 
+segment_t*
+mmap_anonymous_segment (interpreter_t *intp, word_32 len, int prot, int fixed, word_32 addr)
+{
+    return mmap_segment(intp, len, prot, fixed, addr);
+}
+
+void
+unbigendify_mem (word_32 *p, word_32 len)
+{
+    word_32 i;
+
+    assert((len & 3) == 0);
+    len >>= 2;
+
+    for (i = 0; i < len; ++i)
+	p[i] = ntohl(p[i]);
+}
+
+ssize_t
+read_all (int fd, byte *buf, size_t count)
+{
+    size_t num_read = 0;
+
+    while (num_read < count)
+    {
+	ssize_t result = read(fd, buf + num_read, count - num_read);
+
+	if (result == 0)
+	    return num_read;
+	if (result > 0)
+	    num_read += result;
+	else if (result != EINTR && result != EAGAIN)
+	    return -1;
+    }
+
+    return -1;
+}
+
+segment_t*
+mmap_file (interpreter_t *intp, word_32 len, int prot, int fixed, word_32 addr, int fd, word_32 offset)
+{
+    segment_t *segment = mmap_segment(intp, len, prot, fixed, addr);
+    off_t curr_offset;
+    off_t seek_result;
+    word_32 num_read;
+
+    curr_offset = lseek(fd, 0, SEEK_CUR);
+    assert(curr_offset != (off_t)-1);
+
+    seek_result = lseek(fd, offset, SEEK_SET);
+    assert(seek_result != (off_t)-1);
+
+    num_read = read_all(fd, segment->mem, len);
+    assert(num_read != -1);
+
+    unbigendify_mem((word_32*)segment->mem, len);
+
+    seek_result = lseek(fd, curr_offset, SEEK_SET);
+    assert(seek_result != (off_t)-1);
+
+    return segment;
+}
+
+word_32
+copy_string (interpreter_t *intp, char *str, word_32 p)
+{
+    word_32 len = strlen(str) + 1;
+    word_32 i;
+
+    p -= len;
+
+    for (i = 0; i < len; ++i)
+	mem_set_8(intp, p + i, str[i]);
+
+    return p;
+}
+
+word_32
+copy_strings (interpreter_t *intp, int num, char **strs, word_32 p)
+{
+    int i;
+
+    for (i = num - 1; i >= 0; --i)
+	p = copy_string(intp, strs[i], p);
+
+    return p;
+}
+
+word_32
+strlen_user (interpreter_t *intp, word_32 p)
+{
+    word_32 e = p;
+
+    while (mem_get_8(intp, e++) != 0)
+	;
+
+    return e - p;
+}
+
+char*
+strdup_from_user (interpreter_t *intp, word_32 p)
+{
+    word_32 len = strlen_user(intp, p);
+    char *mem = (char*)malloc(len + 1);
+    word_32 i;
+
+    assert(mem != 0);
+    for (i = 0; i <= len; ++i)
+	mem[i] = mem_get_8(intp, p + i);
+
+    return mem;
+}
+
+#define MAX_FILENAME_LEN      1023
+
+char*
+translate_filename (char *file)
+{
+    static char mangled[MAX_FILENAME_LEN + 1];
+
+    if (file[0] != '/')
+	return file;
+
+    assert(strlen(file) + strlen(PPC_ROOT) <= MAX_FILENAME_LEN);
+
+    strcpy(mangled, PPC_ROOT);
+    strcat(mangled, file);
+
+    return mangled;
+}
+
 void
 handle_system_call (interpreter_t *intp)
 {
+    int result;
+
     switch (intp->regs_GPR[0])
     {
 	case 1 :
@@ -417,12 +665,32 @@ handle_system_call (interpreter_t *intp)
 	    exit(intp->regs_GPR[3]);
 	    break;
 
+	case 3 :
+	    printf("read\n");
+	    {
+		byte *mem = (byte*)malloc(intp->regs_GPR[5]);
+
+		assert(mem != 0);
+
+		result = read(intp->regs_GPR[3], mem, intp->regs_GPR[5]);
+
+		if (result > 0)
+		{
+		    word_32 i;
+
+		    for (i = 0; i < result; ++i)
+			mem_set_8(intp, intp->regs_GPR[4] + i, mem[i]);
+		}
+
+		free(mem);
+	    }
+	    break;
+
 	case 4 :
 	    /* printf("write\n"); */
 	    {
 		byte *mem = (byte*)malloc(intp->regs_GPR[5]);
 		word_32 i;
-		int result;
 
 		assert(mem != 0);
 
@@ -431,28 +699,79 @@ handle_system_call (interpreter_t *intp)
 		result = write(intp->regs_GPR[3], mem, intp->regs_GPR[5]);
 
 		free(mem);
-
-		intp->regs_GPR[3] = (word_32)result;
-		intp->regs_SPR[1] &= ~0x1000000;
 	    }
+	    break;
+
+	case 5 :
+	    printf("open\n");
+	    {
+		char *real_name = strdup_from_user(intp, intp->regs_GPR[3]);
+		char *name = translate_filename(real_name);
+		word_32 ppc_flags = intp->regs_GPR[4];
+		int flags;
+
+		if ((ppc_flags & PPC_O_ACCMODE) == PPC_O_RDONLY)
+		    flags = O_RDONLY;
+		else if ((ppc_flags & PPC_O_ACCMODE) == PPC_O_WRONLY)
+		    flags = O_WRONLY;
+		else if ((ppc_flags & PPC_O_ACCMODE) == PPC_O_RDWR)
+		    flags = O_RDWR;
+		else
+		    assert(0);
+		if (ppc_flags & PPC_O_CREAT)
+		    flags |= O_CREAT;
+		if (ppc_flags & PPC_O_EXCL)
+		    flags |= O_EXCL;
+		if (ppc_flags & PPC_O_NOCTTY)
+		    flags |= O_NOCTTY;
+		if (ppc_flags & PPC_O_TRUNC)
+		    flags |= O_TRUNC;
+		if (ppc_flags & PPC_O_APPEND)
+		    flags |= O_APPEND;
+		if (ppc_flags & PPC_O_NONBLOCK)
+		    flags |= O_NONBLOCK;
+		if (ppc_flags & PPC_O_SYNC)
+		    flags |= O_SYNC;
+		if (ppc_flags & PPC_FASYNC)
+		    flags |= FASYNC;
+		/*
+		if (ppc_flags & PPC_O_DIRECTORY)
+		    flags |= O_DIRECTORY;
+		if (ppc_flags & PPC_O_NOFOLLOW)
+		    flags |= O_NOFOLLOW;
+		*/
+
+		result = open(name, flags);
+
+		free(real_name);
+	    }
+	    break;
+
+	case 6 :
+	    printf("close\n");
+	    result = close(intp->regs_GPR[3]);
+	    break;
+
+	case 13 :
+	    printf("time\n");
+	    assert(intp->regs_GPR[3] == 0);
+	    result = (int)time(0);
 	    break;
 
 	case 20 :
 	    printf("getpid\n");
-	    intp->regs_GPR[3] = getpid();
-	    intp->regs_SPR[1] &= ~0x1000000;
+	    result = getpid();
 	    break;
 
 	case 24 :
 	    printf("getuid\n");
-	    intp->regs_GPR[3] = getuid();
-	    intp->regs_SPR[1] &= ~0x1000000;
+	    result = getuid();
 	    break;
 
 	case 45 :
 	    printf("brk\n");
 	    if (intp->regs_GPR[3] == 0)
-		intp->regs_GPR[3] = intp->data_segment->addr + intp->data_segment->len;
+		result = (int)(intp->data_segment->addr + intp->data_segment->len);
 	    else
 	    {
 		if (intp->direct_memory)
@@ -500,67 +819,85 @@ handle_system_call (interpreter_t *intp)
 		    intp->data_segment->mem = new_mem;
 		    intp->data_segment->len = new_len;
 		}
-		/* gpr3 untouched */
+
+		result = (int)intp->regs_GPR[3];
 	    }
-	    intp->regs_SPR[1] &= ~0x1000000;
 	    break;
 
 	case 47 :
 	    printf("getgid\n");
-	    intp->regs_GPR[3] = getgid();
-	    intp->regs_SPR[1] &= ~0x1000000;
+	    result = getgid();
 	    break;
 
 	case 49 :
 	    printf("geteuid\n");
-	    intp->regs_GPR[3] = geteuid();
-	    intp->regs_SPR[1] &= ~0x1000000;
+	    result = geteuid();
 	    break;
 
 	case 50 :
 	    printf("getegid\n");
-	    intp->regs_GPR[3] = getegid();
-	    intp->regs_SPR[1] &= ~0x1000000;
+	    result = getegid();
 	    break;
 
 	case 54 :
 	    printf("ioctl\n");
 	    {
 		struct termios arg;
-		int result;
 
 		assert(intp->regs_GPR[4] == PPC_TCGETS);
 		result = ioctl(intp->regs_GPR[3], TCGETS, &arg);
 		if (result == 0)
-		    mem_copy(intp, intp->regs_GPR[5], (byte*)&arg, sizeof(struct termios));
+		    mem_copy_to_user_32(intp, intp->regs_GPR[5], (byte*)&arg, sizeof(struct termios));
 		else
 		    assert(0);
-		intp->regs_GPR[3] = result;
 	    }
-	    intp->regs_SPR[1] &= ~0x1000000;
+	    break;
+
+	case 78 :
+	    printf("gettimeofday\n");
+	    {
+		struct timeval tv;
+
+		assert(intp->regs_GPR[4] == 0);	/* timezone */
+
+		result = gettimeofday(&tv, 0);
+
+		if (result == 0)
+		{
+		    mem_set_32(intp, intp->regs_GPR[3] + 0, tv.tv_sec);
+		    mem_set_32(intp, intp->regs_GPR[3] + 4, tv.tv_usec);
+		}
+	    }
 	    break;
 
 	case 90 :
 	    printf("mmap\n");
 	    {
 		segment_t *segment;
+		word_32 len = PPC_PAGE_ALIGN(intp->regs_GPR[4]);
 
-		assert(intp->regs_GPR[3] == 0);
-		assert((intp->regs_GPR[4] & (PAGE_SIZE - 1)) == 0);
-		assert(intp->regs_GPR[6] == (PPC_MAP_PRIVATE | PPC_MAP_ANONYMOUS));
-		assert(intp->regs_GPR[7] == -1);
-		assert(intp->regs_GPR[8] == 0);
+		assert(!(intp->regs_GPR[6] & PPC_MAP_SHARED));
+		assert(intp->regs_GPR[6] & PPC_MAP_PRIVATE);
 
-		segment = mmap_anonymous_segment(intp, intp->regs_GPR[4], intp->regs_GPR[5]);
+		if (intp->regs_GPR[6] & PPC_MAP_ANONYMOUS)
+		{
+		    assert(intp->regs_GPR[7] == -1);
+		    assert(intp->regs_GPR[8] == 0);
+
+		    segment = mmap_anonymous_segment(intp, len, intp->regs_GPR[5], intp->regs_GPR[6] & PPC_MAP_FIXED, intp->regs_GPR[3]);
+		}
+		else
+		    segment = mmap_file(intp, len, intp->regs_GPR[5], intp->regs_GPR[6] & PPC_MAP_FIXED, intp->regs_GPR[3],
+					intp->regs_GPR[7], intp->regs_GPR[8]);
+
 		if (segment == 0)
 		{
-		    intp->regs_GPR[3] = 0xffffffff;
+		    result = -1;
 		    assert(0);
 		}
 		else
-		    intp->regs_GPR[3] = segment->addr;
+		    result = (int)segment->addr;
 	    }
-	    intp->regs_SPR[1] &= ~0x1000000;
 	    break;
 
 	case 91 :
@@ -588,22 +925,119 @@ handle_system_call (interpreter_t *intp)
 		    }
 		    else
 			free(intp->segments[i].mem);
-		    intp->regs_GPR[3] = 0;
+		    result = 0;
 		}
 		else
 		{
-		    intp->regs_GPR[3] = 0xffffffff;
+		    result = -1;
 		    assert(0);
 		}
 	    }
-	    intp->regs_SPR[1] &= ~0x1000000;
+	    break;
+
+	case 102 :
+#define ARG(n)             (mem_get_32(intp, intp->regs_GPR[4] + (n) * 4))
+	    switch (intp->regs_GPR[3])
+	    {
+		case SYS_SOCKET :
+		    {
+			int type;
+
+			printf("socket\n");
+
+			switch (ARG(1))
+			{
+			    case PPC_SOCK_STREAM :
+				type = SOCK_STREAM;
+				break;
+			    case PPC_SOCK_DGRAM :
+				type = SOCK_DGRAM;
+				break;
+			    case PPC_SOCK_RAW :
+				type = SOCK_RAW;
+				break;
+			    case PPC_SOCK_RDM :
+				type = SOCK_RDM;
+				break;
+			    case PPC_SOCK_SEQPACKET :
+				type = SOCK_SEQPACKET;
+				break;
+			    case PPC_SOCK_PACKET :
+				type = SOCK_PACKET;
+				break;
+			    default :
+				assert(0);
+			}
+
+			assert(ARG(2) == 0);
+
+			result = socket(ARG(0), type, 0);
+		    }
+		    break;
+
+		case SYS_CONNECT :
+		    {
+			sa_family_t family = mem_get_16(intp, ARG(1));
+
+			printf("connect\n");
+
+			switch (family)
+			{
+			    case AF_UNIX :
+				{
+				    struct sockaddr_un su;
+				    word_32 len = ARG(2) - 2;
+				    char *real_name = malloc(len + 1);
+				    char *name;
+
+				    assert(len <= sizeof(su.sun_path));
+
+				    mem_copy_from_user_8(intp, real_name, ARG(1) + 2, len);
+				    real_name[len] = '\0';
+				    name = translate_filename(real_name);
+				    free(real_name);
+
+				    su.sun_family = AF_UNIX;
+				    assert(strlen(name) < sizeof(su.sun_path));
+				    strcpy(su.sun_path, name);
+
+				    result = connect(ARG(0), &su, sizeof(su) - sizeof(su.sun_path) + len);
+				}
+				break;
+
+			    default :
+				assert(0);
+			}
+		    }
+		    break;
+
+		case SYS_SETSOCKOPT :
+		    {
+			byte *optval;
+
+			printf("setsockopt\n");
+
+			optval = (byte*)malloc(ARG(4));
+			assert(optval != 0);
+			mem_copy_from_user_32(intp, optval, ARG(3), ARG(4));
+
+			result = setsockopt(ARG(0), ARG(1), ARG(2), optval, ARG(4));
+
+			free(optval);
+		    }
+		    break;
+
+		default :
+		    printf("unhandled socket call %d\n", intp->regs_GPR[3]);
+		    intp->halt = 1;
+	    }
+#undef ARG
 	    break;
 
 	case 108 :
 	    printf("fstat\n");
 	    {
 		struct stat buf;
-		int result;
 
 		result = fstat(intp->regs_GPR[3], &buf);
 		if (result == 0)
@@ -622,23 +1056,44 @@ handle_system_call (interpreter_t *intp)
 		    mem_set_32(intp, intp->regs_GPR[4] + 48, buf.st_mtime);
 		    mem_set_32(intp, intp->regs_GPR[4] + 56, buf.st_ctime);
 		}
-		else
-		    assert(0);
-		intp->regs_GPR[3] = result;
 	    }
-	    intp->regs_SPR[1] &= ~0x1000000;
+	    break;
+
+	case 125 :
+	    printf("mprotect\n");
+	    result = 0;
 	    break;
 
 	case 136 :
 	    printf("personality\n");
 	    assert(intp->regs_GPR[3] == 0);
-	    intp->regs_GPR[3] = 0;
-	    intp->regs_SPR[1] &= ~0x1000000;
+	    result = 0;
 	    break;
 
 	default :
 	    printf("unhandled system call %d\n", intp->regs_GPR[0]);
 	    intp->halt = 1;
+    }
+
+    if (result == -1)
+    {
+	int i;
+
+	assert(errno > 0);
+
+	for (i = 1; i <= LAST_PPC_ERRNO; ++i)
+	    if (ppc_errnos[i] == errno)
+		break;
+
+	assert(i <= LAST_PPC_ERRNO);
+
+	intp->regs_GPR[3] = (word_32)i;
+	intp->regs_SPR[1] |= 0x10000000;
+    }
+    else
+    {
+	intp->regs_GPR[3] = (word_32)result;
+	intp->regs_SPR[1] &= ~0x10000000;
     }
 }
 
@@ -671,42 +1126,6 @@ lsbify_elf32_phdr (Elf32_Phdr *hdr)
     hdr->p_memsz = ntohl(hdr->p_memsz);
     hdr->p_flags = ntohl(hdr->p_flags);
     hdr->p_align = ntohl(hdr->p_align);
-}
-
-word_32
-copy_string (interpreter_t *intp, char *str, word_32 p)
-{
-    word_32 len = strlen(str) + 1;
-    word_32 i;
-
-    p -= len;
-
-    for (i = 0; i < len; ++i)
-	mem_set_8(intp, p + i, str[i]);
-
-    return p;
-}
-
-word_32
-copy_strings (interpreter_t *intp, int num, char **strs, word_32 p)
-{
-    int i;
-
-    for (i = num - 1; i >= 0; --i)
-	p = copy_string(intp, strs[i], p);
-
-    return p;
-}
-
-word_32
-strlen_user (interpreter_t *intp, word_32 p)
-{
-    word_32 e = p;
-
-    while (mem_get_8(intp, e++) != 0)
-	;
-
-    return e - p;
 }
 
 word_32
@@ -934,6 +1353,32 @@ disassemble (interpreter_t *intp, word_32 addr, word_32 len)
 }
 
 void
+show_segments (interpreter_t *intp)
+{
+    int i;
+
+    printf("start     end       len       flags\n");
+    printf("-----------------------------------\n");
+    for (i = 0; i < intp->num_segments; ++i)
+	if (intp->segments[i].len > 0)
+	{
+	    char flags[5] = "    ";
+
+	    if (intp->segments[i].flags & SEGMENT_READABLE)
+		flags[0] = 'r';
+	    if (intp->segments[i].flags & SEGMENT_WRITEABLE)
+		flags[1] = 'w';
+	    if (intp->segments[i].flags & SEGMENT_EXECUTABLE)
+		flags[2] = 'x';
+	    if (intp->segments[i].flags & SEGMENT_MMAPPED)
+		flags[3] = 'm';
+
+	    printf("%08x  %08x  %8u  %s\n", intp->segments[i].addr,
+		   intp->segments[i].addr + intp->segments[i].len, intp->segments[i].len, flags);
+	}
+}
+
+void
 debugger (interpreter_t *intp)
 {
     char cmdline[CMDLINE_LENGTH];
@@ -962,6 +1407,8 @@ debugger (interpreter_t *intp)
 	    show_breakpoints(intp);
 	else if (strcmp(token, "help") == 0)
 	    printf("rotfl!\n");
+	else if (strcmp(token, "segs") == 0)
+	    show_segments(intp);
 	else if (strcmp(token, "trace") == 0)
 	{
 	    p = get_token(p, token);
@@ -1110,7 +1557,7 @@ main (int argc, char *argv[])
 	ppc_argv[i - 1] = argv[i];
     ppc_argv[argc - 1] = 0;
 
-    file = fopen(argv[1], "r");
+    file = fopen(translate_filename(argv[1]), "r");
     assert(file != 0);
 
     num_read = fread(&ehdr, sizeof(Elf32_Ehdr), 1, file);
@@ -1145,7 +1592,6 @@ main (int argc, char *argv[])
 
     for (i = 0; i < ehdr.e_phnum; ++i)
     {
-	word_32 w;
 	int flags = 0;
 	segment_t *segment;
 
@@ -1169,8 +1615,7 @@ main (int argc, char *argv[])
 	num_read = fread(segment->mem, 1, phdrs[i].p_filesz, file);
 	assert(num_read = phdrs[i].p_filesz);
 
-	for (w = 0; w < segment->len; w += 4)
-	    *(word_32*)(segment->mem + w) = ntohl(*(word_32*)(segment->mem + w));
+	unbigendify_mem((word_32*)segment->mem, segment->len);
 
 	if (phdrs[i].p_type == PT_LOAD && phdrs[i].p_flags == (PF_W | PF_R))
 	    interpreter.data_segment = segment;
@@ -1185,8 +1630,7 @@ main (int argc, char *argv[])
 	num_read = fread(segment->mem, 1, phdrs[i].p_filesz, file);
 	assert(num_read = phdrs[i].p_filesz);
 
-	for (w = 0; w < segment->len; w += 4)
-	    *(word_32*)(segment->mem + w) = ntohl(*(word_32*)(segment->mem + w));
+	unbigendify_mem((word_32*)segment->mem, segment->len);
 
 	protect_segment(&compiler, segment);
 
@@ -1194,6 +1638,8 @@ main (int argc, char *argv[])
 	    compiler.data_segment = segment;
 #endif
     }
+
+    fclose(file);
 
 #ifdef NEED_INTERPRETER
     stack_segment = setup_segment(&interpreter, STACK_TOP - STACK_SIZE * PAGE_SIZE, STACK_SIZE * PAGE_SIZE, SEGMENT_READABLE | SEGMENT_WRITEABLE);
