@@ -79,6 +79,17 @@ sigbus_handler (int signo, siginfo_t *si, struct ucontext *uc)
 	    uc->uc_mcontext.sc_regs[target_reg] = load_unaligned_32_bigendian(uc->uc_mcontext.sc_traparg_a0);
 	    break;
 
+	case 0x22 :		/* LDS */
+	    {
+		double f64;
+		word_32 val32;
+
+		val32 = load_unaligned_32_bigendian(uc->uc_mcontext.sc_traparg_a0);
+		f64 = (double)*(float*)&val32;
+		uc->uc_mcontext.sc_fpregs[target_reg] = *(long*)&f64;
+	    }
+	    break;
+
 	default :
 	    assert(0);
     }

@@ -7,13 +7,17 @@ ARCH = -DARCH_ALPHA
 ASM_OBJS = alpha_asm.o
 COMPILER_OBJS = compiler.o
 #DEFINES = -DINTERPRETER
+DEFINES = -O -DINTERPRETER -DPROFILE_LOOPS -DPROFILE_FRAGMENTS
 #DEFINES = -DINTERPRETER -DEMULATED_MEM
 #DEFINES = -DCROSSDEBUGGER -DCOLLECT_STATS -DDUMP_CODE
 #DEFINES = -DCOMPILER -DCOLLECT_STATS -DDUMP_CODE
 #DEFINES = -DCOMPILER -DCOLLECT_STATS -DPERIODIC_STAT_DUMP
 #DEFINES = -DDEBUGGER -DEMULATED_MEM
 #DEFINES = -DCOMPILER -DDUMP_CODE
-DEFINES = -O -DCOMPILER
+#DEFINES = -O -DCOMPILER
+#DEFINES = -DCOMPILER -DCOMPILER_THRESHOLD=20 -DCOLLECT_STATS
+#DEFINES = -DCOMPILER -DCOLLECT_STATS
+# -DDUMP_CODE
 # -DCOLLECT_STATS
 # -DMEASURE_TIME
 #DEFINES = -O -fno-inline -DCOMPILER
@@ -45,8 +49,8 @@ endif
 
 CFLAGS = $(DEFINES) $(ARCH) $(EMU_DEFS) $(LOCATION)
 
-bintrans : ppc.o mm.o $(EMU_OBJS) $(COMPILER_OBJS) $(ASM_OBJS) 
-	gcc -o bintrans ppc.o mm.o $(EMU_OBJS) $(COMPILER_OBJS) $(ASM_OBJS)
+bintrans : ppc.o mm.o fragment_hash.o loops.o $(EMU_OBJS) $(COMPILER_OBJS) $(ASM_OBJS) 
+	gcc -o bintrans ppc.o mm.o fragment_hash.o loops.o $(EMU_OBJS) $(COMPILER_OBJS) $(ASM_OBJS)
 
 ppc.o : ppc.c ppc_interpreter.c ppc_disassembler.c alpha_types.h bintrans.h
 	gcc $(CFLAGS) -Wall -g -c ppc.c
@@ -54,7 +58,7 @@ ppc.o : ppc.c ppc_interpreter.c ppc_disassembler.c alpha_types.h bintrans.h
 i386.o : i386.c i386_interpreter.c i386_disassembler.c i386_livenesser.c bintrans.h
 	gcc $(CFLAGS) -Wall -g -c i386.c
 
-compiler.o : compiler.c alpha_composer.h ppc_compiler.c i386_compiler.c alpha_disassembler.c alpha_types.h bintrans.h
+compiler.o : compiler.c alpha_composer.h ppc_compiler.c i386_compiler.c alpha_disassembler.c alpha_types.h bintrans.h fragment_hash.h
 	gcc $(CFLAGS) -Wall -g -c compiler.c
 
 mm.o : mm.c bintrans.h alpha_types.h ppc_defines.h
@@ -63,7 +67,13 @@ mm.o : mm.c bintrans.h alpha_types.h ppc_defines.h
 unaligned.o : unaligned.c bintrans.h
 	gcc $(CFLAGS) -Wall -g -c unaligned.c
 
-alpha_asm.o : alpha_asm.S
+fragment_hash.o : fragment_hash.c fragment_hash.h bintrans.h
+	gcc $(CFLAGS) -Wall -g -c fragment_hash.c
+
+loops.o : loops.c fragment_hash.h bintrans.h
+	gcc $(CFLAGS) -Wall -g -c loops.c
+
+alpha_asm.o : alpha_asm.S Makefile
 	gcc $(DEFINES) $(EMU_DEFS) -g -c alpha_asm.S
 
 i386_%_compiler.o : i386_%_compiler.c bintrans.h alpha_composer.h

@@ -1,3 +1,6 @@
+#include "config_defs.h"
+	
+#ifdef NEED_COMPILER
 #define v0	$0
 #define a0	$16
 #define a1	$17
@@ -117,7 +120,11 @@ indirect_dispatcher:
 	lda	a1,fragment_hash_table
 	ldiq	a2,16383*4
 	and	a0,a2,a2
+#ifdef PROFILE_FRAGMENTS
+	s8addq	a2,a1,a1
+#else
 	s4addq	a2,a1,a1
+#endif
 	ldq	a2,8(a1)	# a2 = native_addr
 	beq	a2,call_provide_fragment
 	ldl	a3,0(a1)	# a3 = foreign_addr
@@ -241,3 +248,4 @@ c_stub:
 	lda	sp,96(sp)
 	ret	$31,(ra)
 	.end	c_stub
+#endif

@@ -1,14 +1,8 @@
 #include <unistd.h>
 
+#include "config_defs.h"
 #include "target_arch.h"
 #include "emu_arch.h"
-
-#if defined(INTERPRETER) || defined(DEBUGGER) || defined(CROSSDEBUGGER)
-#define NEED_INTERPRETER
-#endif
-#if defined(COMPILER) || defined(CROSSDEBUGGER)
-#define NEED_COMPILER
-#endif
 
 word_32 leading_zeros (word_32);
 word_32 mask_32 (word_32 begin, word_32 end);
@@ -83,7 +77,6 @@ typedef struct _breakpoint_t
 typedef struct
 {
     int direct_memory;
-    int compiler;
     word_32 data_segment_top;
     unsigned long insn_count;
     int halt;
@@ -100,6 +93,11 @@ typedef struct
     int free;
     int native_fd;
 } fd_mapping_t;
+
+typedef unsigned int trace_count_t;
+
+#define MAX_TRACE_JUMPS     6
+#define MAX_TRACE_BLOCKS    (MAX_TRACE_JUMPS + 1)
 
 #define DIRECT_MEM_BASE     0x000000000
 #define REAL_ADDR(a)        ((addr_t)(a) + DIRECT_MEM_BASE)
@@ -198,6 +196,11 @@ void move_i386_regs_compiler_to_interpreter (interpreter_t *intp);
 
 /* from unaligned.c */
 void init_unaligned (void);
+
+/* from loops.c */
+void loop_profiler (interpreter_t *intp);
+void print_loop_stats (void);
+void init_loops (void);
 
 #if defined(EMU_PPC)
 #define interpret_insn                        interpret_ppc_insn

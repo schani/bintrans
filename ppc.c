@@ -23,6 +23,7 @@
 #include <sys/utsname.h>
 
 #include "bintrans.h"
+#include "fragment_hash.h"
 
 /* Symbolic values for the entries in the auxiliary table
    put on the initial stack */
@@ -730,6 +731,9 @@ process_system_call (interpreter_t *intp, word_32 number,
 	    printf("%ld insn executed\n", intp->insn_count);
 #ifdef COMPILER
 	    print_compiler_stats();
+#endif
+#ifdef PROFILE_LOOPS
+	    print_loop_stats();
 #endif
 	    exit(arg1);
 	    break;
@@ -2317,7 +2321,6 @@ init_interpreter_struct (interpreter_t *intp, int direct_memory, int compiler)
     int i;
 
     intp->direct_memory = direct_memory;
-    intp->compiler = compiler;
     intp->data_segment_top = 0;
     intp->insn_count = 0;
     intp->halt = 0;
@@ -2546,6 +2549,8 @@ main (int argc, char *argv[])
     init_unaligned();
 #endif
 
+    init_fragment_hash();
+
 #if defined(DEBUGGER)
     debugger(&interpreter);
 #elif defined(COMPILER) || defined(CROSSDEBUGGER)
@@ -2556,8 +2561,12 @@ main (int argc, char *argv[])
 #endif
     start_compiler(compiler.pc);
 #elif defined(INTERPRETER)
+#ifdef PROFILE_LOOPS
+    loop_profiler(&interpreter);
+#else
     for (;;)
 	interpret_insn(&interpreter);
+#endif
 #endif
 
     return 0;
