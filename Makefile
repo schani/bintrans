@@ -1,12 +1,12 @@
 # -*- makefile -*-
 
 ## ATT: choose which architecture you want to emulate
-#EMU = I386
-EMU = PPC
+EMU = I386
+#EMU = PPC
 
 ## ATT: choose the native architecture you're using
-NATIVE = ALPHA
-#NATIVE = PPC
+#NATIVE = ALPHA
+NATIVE = PPC
 #NATIVE = I386
 
 ## ATT: choose which mode you want bintrans to run in

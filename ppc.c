@@ -357,6 +357,18 @@ bt_assert_fail (char *expr, char *file, int line, char *fn)
     exit(1);
 }
 
+void
+bt_warning (char *msg)
+{
+    fprintf(stderr,
+	    "\nbintrans: warning: %s\n"
+	    "Please report the above message and some details about the program you're\n"
+	    "running in bintrans to schani@complang.tuwien.ac.at (unless you think the\n"
+	    "warning is insubstantial).\n"
+	    "Thank you.\n",
+	    msg);
+}
+
 word_32
 rotl_32 (word_32 x, word_32 i)
 {
@@ -1411,8 +1423,13 @@ process_system_call (interpreter_t *intp, word_32 number,
 			break;
 
 		    default :
-			printf("unhandled fcntl %d\n", arg2);
-			intp->halt = 1;
+			{
+			    char buf[128];
+
+			    sprintf(buf, "unhandled fcntl %d", arg2);
+			    bt_warning(buf);
+			    intp->halt = 1;
+			}
 		}
 	    break;
 
@@ -1764,8 +1781,13 @@ process_system_call (interpreter_t *intp, word_32 number,
 		    break;
 
 		default :
-		    printf("unhandled socket call %d\n", arg1);
-		    intp->halt = 1;
+		    {
+			char buf[128];
+
+			sprintf(buf, "unhandled socket call %d", arg1);
+			bt_warning(buf);
+			intp->halt = 1;
+		    }
 	    }
 #undef ARG
 	    break;
@@ -2120,8 +2142,13 @@ process_system_call (interpreter_t *intp, word_32 number,
 	    break;
 
 	default :
-	    printf("unhandled system call %d\n", number);
-	    intp->halt = 1;
+	    {
+		char buf[128];
+
+		sprintf(buf, "unhandled system call %d", number);
+		bt_warning(buf);
+		intp->halt = 1;
+	    }
     }
 
 #ifdef SYSCALL_OUTPUT
@@ -2223,7 +2250,10 @@ handle_system_call (interpreter_t *intp)
 
     if (syscall_args[i].num == (word_32)-1)
     {
-	printf("unhandled system call %d\n", num);
+	char buf[128];
+
+	sprintf(buf, "unhandled system call %d", num);
+	bt_warning(buf);
 	intp->halt = 1;
 	return;
     }
@@ -3119,7 +3149,11 @@ read_rc (void)
     strcat(rcname, "/.bintransrc");
 
     rcfile = fopen(rcname, "r");
-    bt_assert(rcfile != 0);
+    if (rcfile == 0)
+    {
+	fprintf(stderr, "Could not open `%s' -- see README\n", rcname);
+	exit(1);
+    }
     free(rcname);
 
     lisp_stream_init_file(&stream, rcfile);
@@ -3159,7 +3193,9 @@ usage (void)
     fprintf(stderr,
 	    "Usage:\n"
 	    "  bintrans EXECUTABLE-NAME [EXECUTABLE-OPTION]...\n"
-	    "\n");
+	    "\n"
+	    "EXECUTABLE-NAME is the name of the foreign executable\n"
+	    "you wish to run.  See the README file for details.\n");
 }
 
 int
