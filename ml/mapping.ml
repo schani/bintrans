@@ -20,4 +20,29 @@
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  *)
 
+open Int64
+
+open Expr
+open Machine
+
+exception Not_supported_in_dummy_mapping
+
+type mapping =
+    { source_machine : machine ;
+      needed_target_width : register -> int ;
+      register_known : register -> int64 ;
+      register_bits : register -> int64 }
+
 let mapping_needed_target_width register = 8
+
+let mapping_ppc_to_alpha =
+  { source_machine = machine_ppc ;
+    needed_target_width = (fun _ -> 8) ;
+    register_known = (fun _ -> zero) ;
+    register_bits = (fun _ -> zero) }
+
+let dummy_mapping =
+  { source_machine = dummy_machine ;
+    needed_target_width = (fun _ -> raise Not_supported_in_dummy_mapping) ;
+    register_known = (fun _ -> raise Not_supported_in_dummy_mapping) ;
+    register_bits = (fun _ -> raise Not_supported_in_dummy_mapping) }

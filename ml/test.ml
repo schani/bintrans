@@ -28,6 +28,7 @@ open Expr
 open Cond_monad
 open Target_alpha
 open Matcher
+open Mapping
 open Explorer
 open Switcher
 open Cgen
@@ -146,7 +147,7 @@ let print_c_func reg_type reg_alloc_string free_reg_func result_passed printers 
       print_string (reg_type ^ " guest_reg_1;\n\n")
     else
       () ;
-    let stmt_forms = explore_all_fields stmt fields alpha_matchers
+    let stmt_forms = explore_all_fields stmt mapping_ppc_to_alpha fields alpha_matchers
     in let switch = switch_cases (map (fun form -> (form.form_conditions, form)) stmt_forms)
     in print_switch
 	 (fun form ->
@@ -233,7 +234,7 @@ let main () =
 				     (make_mask (int_literal_expr 0L) (int_literal_expr 15L))))
      and stmt2 = make_ppc_rlwinm r1 (Register r2) (IntConst (IntField "sh")) (IntConst (IntField "mb")) (IntConst (IntField "me"))
      and fields = [("sh", 0L); ("mb", 3L); ("me", 30L)]
-  in let (stmt, conds) = cm_yield (simplify_and_prune_stmt_until_fixpoint fields stmt2)
+  in let (stmt, conds) = cm_yield (simplify_and_prune_stmt_until_fixpoint mapping_ppc_to_alpha fields stmt2)
   in let conds = simplify_conditions conds
   in print_stmt stmt2 ; print_string "->\n" ;
     print_stmt (cfold_stmt [] stmt) ; print_string "=\n" ;

@@ -29,6 +29,7 @@ open Expr
 open Matcher
 open Pruner
 open Simplify
+open Mapping
 
 (*** simplifying expressions and statements ***)
 
@@ -46,17 +47,17 @@ let rec simplify_and_prune_until_fixpoint depth print prune simplify fields x =
 	  else
 	    simplify_and_prune_until_fixpoint (depth + 1) print prune simplify fields spx))
 
-let simplify_and_prune_expr_until_fixpoint =
-  simplify_and_prune_until_fixpoint 0 print_expr (fun f x -> prune_expr f x minus_one) simplify_expr
+let simplify_and_prune_expr_until_fixpoint mapping =
+  simplify_and_prune_until_fixpoint 0 print_expr (fun f x -> prune_expr mapping f x minus_one) simplify_expr
 
-let simplify_and_prune_stmt_until_fixpoint =
-  simplify_and_prune_until_fixpoint 0 (fun _ -> ()) prune_stmt simplify_stmt
+let simplify_and_prune_stmt_until_fixpoint mapping =
+  simplify_and_prune_until_fixpoint 0 (fun _ -> ()) (prune_stmt mapping) simplify_stmt
 
 (*** simplifying the conditions ***)
 
 let simplify_conditions conds =
   let prune_and_simplify x =
-    fst (cm_yield (simplify_and_prune_expr_until_fixpoint [] x))
+    fst (cm_yield (simplify_and_prune_expr_until_fixpoint dummy_mapping [] x))
   in uniq (map (fun x -> cfold_expr [] (prune_and_simplify x))
 	     (filter (fun x -> not (is_const (cfold_expr [] x))) conds))
 
@@ -76,7 +77,7 @@ type stmt_form =
       form_conditions : expr list ;
       matches : stmt_form_match list }
 
-let explore_all_fields stmt fields target_insns =
+let explore_all_fields stmt mapping fields target_insns =
   let rec add_stmt_form_match fields stmt matches =
     match matches with
 	[] ->
@@ -97,7 +98,7 @@ let explore_all_fields stmt fields target_insns =
   and add_stmt_form fields stmt_forms =
     match stmt_forms with
 	[] ->
-	  let (new_stmt, new_conds) = cm_yield (simplify_and_prune_stmt_until_fixpoint fields stmt)
+	  let (new_stmt, new_conds) = cm_yield (simplify_and_prune_stmt_until_fixpoint mapping fields stmt)
 	  in [{ stmt = new_stmt ;
 		form_conditions = simplify_conditions new_conds ;
 		matches = add_stmt_form_match fields new_stmt [] }]

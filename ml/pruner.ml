@@ -39,11 +39,11 @@ let full_mask =
 and empty_mask =
   int_literal_expr zero
 
-let unmemoized_expr_known known_one_arg bits_one_arg fields expr =
+let unmemoized_expr_known known_one_arg bits_one_arg mapping fields expr =
   let rec known expr =
-    known_one_arg (fields, expr)
+    known_one_arg (mapping, fields, expr)
   and bits expr =
-    bits_one_arg (fields, expr)
+    bits_one_arg (mapping, fields, expr)
   and cfold =
     cfold_expr fields
   and known_unary op arg =
@@ -159,11 +159,11 @@ let unmemoized_expr_known known_one_arg bits_one_arg fields expr =
   else
     unmemoized_known expr
 
-let unmemoized_expr_bits bits_one_arg known_one_arg fields expr =
+let unmemoized_expr_bits bits_one_arg known_one_arg mapping fields expr =
   let rec known expr =
-    known_one_arg (fields, expr)
+    known_one_arg (mapping, fields, expr)
   and bits expr =
-    bits_one_arg (fields, expr)
+    bits_one_arg (mapping, fields, expr)
   and cfold =
     cfold_expr fields
   and bits_unary op arg =
@@ -286,28 +286,28 @@ let unmemoized_expr_bits bits_one_arg known_one_arg fields expr =
 
 let (expr_known_one_arg, expr_bits_one_arg) =
   memoize2
-    (fun known bits (fields, expr) ->
-       unmemoized_expr_known known bits fields expr)
-    (fun known bits (fields, expr) ->
-       unmemoized_expr_bits bits known fields expr)
+    (fun known bits (mapping, fields, expr) ->
+       unmemoized_expr_known known bits mapping fields expr)
+    (fun known bits (mapping, fields, expr) ->
+       unmemoized_expr_bits bits known mapping fields expr)
     
-let expr_known fields expr =
-  expr_known_one_arg (fields, expr)
-and expr_bits fields expr =
-  expr_bits_one_arg (fields, expr)
+let expr_known mapping fields expr =
+  expr_known_one_arg (mapping, fields, expr)
+and expr_bits mapping fields expr =
+  expr_bits_one_arg (mapping, fields, expr)
 
-let unmemoized_prune_expr prune_one_arg fields expr needed =
+let unmemoized_prune_expr prune_one_arg mapping fields expr needed =
   let prune expr needed =
-    prune_one_arg (fields, expr, needed)
+    prune_one_arg (mapping, fields, expr, needed)
   and return = cm_return
   and let1 = cm_bind
   and let2 = (make_bind2 cm_bind cm_bind)
   and let3 = (make_bind3 cm_bind cm_bind cm_bind)
   and if_prune = cm_if fields
   and bits expr =
-    expr_bits fields expr
+    expr_bits mapping fields expr
   and known expr =
-    expr_known fields expr
+    expr_known mapping fields expr
   in let rec unmemoized_prune expr needed =
     let prune_unary op arg =
       match op with
@@ -615,21 +615,21 @@ let unmemoized_prune_expr prune_one_arg fields expr needed =
   in unmemoized_prune expr needed
 
 let rec prune_expr_one_arg =
-  memoize (fun prune (fields, expr, needed) ->
-	     unmemoized_prune_expr prune fields expr needed)
-and prune_expr fields expr needed =
-  prune_expr_one_arg (fields, expr, (int_literal_expr needed))
+  memoize (fun prune (mapping, fields, expr, needed) ->
+	     unmemoized_prune_expr prune mapping fields expr needed)
+and prune_expr mapping fields expr needed =
+  prune_expr_one_arg (mapping, fields, expr, (int_literal_expr needed))
 
-let prune_stmt fields stmt =
+let prune_stmt mapping fields stmt =
   match stmt with
     Store (byte_order, width, addr, value) ->
       (make_bind2 cm_bind cm_bind)
-	(prune_expr fields addr (width_mask (machine_addr_width ())))
-	(prune_expr fields value (width_mask width))
+	(prune_expr mapping fields addr (width_mask (mapping.source_machine.addr_width)))
+	(prune_expr mapping fields value (width_mask width))
 	(fun paddr pvalue ->
 	  cm_return (Store (byte_order, width, paddr, pvalue)))
   | Assign (register, value) ->
       cm_bind
-	(prune_expr fields value (width_mask (mapping_needed_target_width register)))
+	(prune_expr mapping fields value (width_mask (mapping.needed_target_width register)))
 	(fun pvalue ->
 	  cm_return (Assign (register, pvalue)))

@@ -20,6 +20,18 @@
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  *)
 
-let machine_addr_width _ = 4
+open Expr
 
-let machine_register_width register = 4
+exception Not_supported_in_dummy_machine
+
+type machine =
+    { addr_width : int ;
+      register_width : register -> int }
+
+let machine_ppc =
+  { addr_width = 4 ;
+    register_width = (fun _ -> 4) }
+
+let dummy_machine =
+  { addr_width = 8 ;
+    register_width = (fun _ -> raise Not_supported_in_dummy_machine) }
