@@ -4772,7 +4772,10 @@ save_live = live;~%"
   (if (insn-p tree)
       (progn
 	(format t "/* ~A */~%" (insn-name tree) (insn-name tree))
-	(format t "assert((insn & 0x~X) == 0x~X);~%" (bit-vector-to-integer (insn-known-bits tree)) (bit-vector-to-integer (insn-known-bit-values tree)))
+	(format t "if ((insn & 0x~X) != 0x~X) ~A~%"
+		(bit-vector-to-integer (insn-known-bits tree))
+		(bit-vector-to-integer (insn-known-bit-values tree))
+		unrecognized-action)
 	(funcall action tree))
       (let ((begin (caar tree))
 	    (end (cdar tree))
@@ -4857,9 +4860,12 @@ save_live = live;~%"
 	      (mappend #'(lambda (r) (list (c-type (register-width r) 'integer) (register-name r))) registers)
 	      class-names)
       (generate-insn-recognizer decision-tree #'(lambda (insn)
-						  (generate-live-killed registers classes (insn-effect insn))))
+						  (generate-live-killed registers classes (insn-effect insn)))
+				:unrecognized-action "goto unrecognized;")
       (format t "~{*_live_~A = live_~:*~A;
-*_killed_~:*~A = killed_~:*~A;~%~}}~%"
+*_killed_~:*~A = killed_~:*~A;~%~}return;
+unrecognized:
+~:*~{*_live_~A = 0xffffffff;~%*_killed_~:*~A = 0xffffffff;~%~}}~%" ;FIXME: this constant should be dependent on the register width
 	      (append (mapcar #'register-name registers) class-names)))))
 
 (defun generate-killer (machine registers classes)
