@@ -79,18 +79,18 @@ endif
 ifeq ($(EMU),I386)
 EMU_DEFS = -DEMU_I386 -DEMU_LITTLE_ENDIAN
 EMU_OBJS = i386.o
-ifeq ($(NATIVE),ALPHA)
-COMPILER_OBJS += i386_add_rm32_simm8_compiler.o i386_add_rm32_r32_compiler.o \
-		i386_inc_pr32_compiler.o i386_inc_rm32_compiler.o \
-		i386_lea_r32_rm32_compiler.o \
-		i386_mov_eax_moffs32_compiler.o i386_mov_moffs32_eax_compiler.o i386_mov_rm32_imm32_compiler.o i386_mov_rm32_r32_compiler.o \
-			i386_mov_r32_rm32_compiler.o \
-		i386_pop_pr32_compiler.o i386_pop_m32_compiler.o \
-		i386_push_imm32_compiler.o i386_push_pr32_compiler.o i386_push_simm8_compiler.o i386_push_rm32_compiler.o \
-		i386_sub_rm32_r32_compiler.o \
-		i386_xor_al_imm8_compiler.o i386_xor_ax_imm16_compiler.o i386_xor_eax_imm32_compiler.o i386_xor_rm32_imm32_compiler.o \
-			i386_xor_rm32_simm8_compiler.o i386_xor_rm32_r32_compiler.o i386_xor_r32_rm32_compiler.o
-endif
+#ifeq ($(NATIVE),ALPHA)
+#COMPILER_OBJS += i386_add_rm32_simm8_compiler.o i386_add_rm32_r32_compiler.o \
+#		i386_inc_pr32_compiler.o i386_inc_rm32_compiler.o \
+#		i386_lea_r32_rm32_compiler.o \
+#		i386_mov_eax_moffs32_compiler.o i386_mov_moffs32_eax_compiler.o i386_mov_rm32_imm32_compiler.o i386_mov_rm32_r32_compiler.o \
+#			i386_mov_r32_rm32_compiler.o \
+#		i386_pop_pr32_compiler.o i386_pop_m32_compiler.o \
+#		i386_push_imm32_compiler.o i386_push_pr32_compiler.o i386_push_simm8_compiler.o i386_push_rm32_compiler.o \
+#		i386_sub_rm32_r32_compiler.o \
+#		i386_xor_al_imm8_compiler.o i386_xor_ax_imm16_compiler.o i386_xor_eax_imm32_compiler.o i386_xor_rm32_imm32_compiler.o \
+#			i386_xor_rm32_simm8_compiler.o i386_xor_rm32_r32_compiler.o i386_xor_r32_rm32_compiler.o
+#endif
 endif
 
 ifeq ($(MODE),INTERPRETER)
@@ -143,7 +143,7 @@ ppc.o : ppc.c ppc_interpreter.c ppc_disassembler.c alpha_types.h bintrans.h ppc_
 i386.o : i386.c i386_interpreter.c i386_disassembler.c i386_livenesser.c i386_jump_analyzer.c bintrans.h
 	$(DIET) $(CC) $(CFLAGS) -Wall -g -c i386.c
 
-compiler.o : compiler.c alpha_composer.h ppc_to_alpha_compiler.c ppc_jump_analyzer.c i386_compiler.c i386_to_ppc_compiler.c i386_skeleton.c alpha_disassembler.c alpha_types.h bintrans.h fragment_hash.h compiler.h
+compiler.o : compiler.c alpha_composer.h ppc_to_alpha_compiler.c ppc_jump_analyzer.c i386_to_ppc_compiler.c i386_skeleton.c alpha_disassembler.c alpha_types.h bintrans.h fragment_hash.h compiler.h
 	$(DIET) $(CC) $(CFLAGS) -Wall -g -c compiler.c
 
 mm.o : mm.c bintrans.h alpha_types.h ppc_defines.h

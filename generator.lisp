@@ -5089,7 +5089,7 @@ pc = _pc;~%"
 						    (format t "handle_~A_insn(insn, pc);~%" (dcs (insn-name insn)))))
 	(format t "~%}~%")))))
 
-(defun generate-defines-file (machine)
+(defun generate-defines-file (machine &optional (define-fields t))
   (let ((*this-machine* machine))
     (with-open-file (out (format nil "~A_defines.h" (dcs (machine-name machine))) :direction :output :if-exists :supersede)
       (let ((*standard-output* out))
@@ -5111,8 +5111,9 @@ pc = _pc;~%"
 	  (format t "#define REG_INDEX_~A ~A~%"
 		  (register-name reg)
 		  (+ (register-number reg) (register-class-start-index (register-register-class reg)))))
-	(dolist (field (machine-fields machine))
-	  (format t "#define ~A_FIELD_~A    ~A~%" (machine-name machine) (car field) (generate-interpreter (cdr field) nil)))))))
+	(when define-fields
+	  (dolist (field (machine-fields machine))
+	    (format t "#define ~A_FIELD_~A    ~A~%" (machine-name machine) (car field) (generate-interpreter (cdr field) nil))))))))
 
 (defun generate-composer-file (machine &key (safe t))
   (labels ((sexp-to-c (x)
