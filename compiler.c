@@ -397,6 +397,7 @@ emit_load_mem_64 (reg_t value_reg, reg_t addr_reg)
     emit(COMPOSE_LDL(tmp_reg, 0, addr_reg));
     emit(COMPOSE_SLL_IMM(tmp_reg, 32, tmp_reg));
     emit(COMPOSE_LDL(value_reg, 4, addr_reg));
+    emit(COMPOSE_ZAPNOT_IMM(value_reg, 15, value_reg));
     emit(COMPOSE_BIS(value_reg, tmp_reg, value_reg));
     free_integer_reg(tmp_reg);
 }
@@ -525,7 +526,7 @@ compile_basic_block (word_32 addr)
 {
     word_64 start = (word_64)emit_loc;
     word_32 insnp = addr;
-    word_64 x;
+    word_64 x = start;
     int old_num_constants = num_constants;
     int i;
 
@@ -534,24 +535,30 @@ compile_basic_block (word_32 addr)
     while (!have_jumped)
     {
 	compile_ppc_insn(mem_get_32(compiler_intp, insnp), insnp);
+
+#ifdef DUMP_CODE
+	printf("++++++++++++++++\n%08x  ", insnp);
+	disassemble_ppc_insn(mem_get_32(compiler_intp, insnp), insnp);
+	printf("\n- - - - - - - - \n");
+	while (x < (word_64)emit_loc)
+	{
+	    printf("%016lx  ", x);
+	    disassemble_alpha_insn(*(word_32*)x, x);
+	    printf("\n");
+	    x += 4;
+	}
+#endif
+
 	insnp += 4;
     }
     emit_direct_jump(insnp);	/* this is not necessary if the jump at the end of the basic block was unconditional */
 
     finish_fragment();
 
-    /*
-    printf("-----\n");
-    for (x = start; x < (word_64)emit_loc; x += 4)
-    {
-	printf("%016lx  ", x);
-	disassemble_alpha_insn(*(word_32*)x, x);
-	printf("\n");
-    }
-
+#ifdef DUMP_CODE
     for (i = old_num_constants; i < num_constants; ++i)
 	printf("%4d    %08x\n", i * 4, constant_area[i]);
-    */
+#endif
 
     enter_fragment(addr, start);
 
@@ -596,7 +603,6 @@ provide_fragment (word_32 addr)
 
     /*
     move_ppc_regs_compiler_to_interpreter(compiler_intp);
-    printf("*** jumping to %08x\n", addr);
     dump_ppc_registers(compiler_intp);
     */
 
@@ -605,6 +611,7 @@ provide_fragment (word_32 addr)
 #endif
 
 #ifdef CROSSDEBUGGER
+    printf("*** jumping to %08x\n", addr);
     debugger_intp->have_jumped = 0;
     while (!debugger_intp->have_jumped)
 	interpret_ppc_insn(debugger_intp);

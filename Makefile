@@ -1,4 +1,5 @@
-CFLAGS = -DCOMPILER -DCOLLECT_STATS
+CFLAGS = -DCOMPILER -O
+# -DCOLLECT_STATS -DDUMP_CODE
 
 bintrans : ppc.o compiler.o alpha_asm.o
 	gcc -o bintrans ppc.o compiler.o alpha_asm.o

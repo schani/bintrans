@@ -344,7 +344,7 @@
    (fc dont-care)))
 
 (define-float-insn cvtqt #x16 #x0be
-  ((set-fc (integer-to-double (double-to-bits (fop fb))))) ;FIXME (negative values are complemented)
+  ((set-fc (integer-to-double (double-to-bits (fop fb)))))
   ((fa 31)))
 
 (define-float-insn cvtst #x16 #x2ac
@@ -354,10 +354,12 @@
    (fc dont-care)))
 
 (define-float-insn cvttq #x16 #x0af
-  ()					;FIXME
-  ((fa dont-care)
-   (fb dont-care)
-   (fc dont-care)))
+  ((set-fc (bits-to-double (double-to-integer (fop fb)))))
+  ((fa 31)))
+
+(define-float-insn cvttqc #x16 #x02f
+  ((set-fc (bits-to-double (double-to-integer (fop fb)))))
+  ((fa 31)))
 
 (define-float-insn cvtts #x16 #x0ac
   ()					;FIXME

@@ -1198,19 +1198,22 @@ free_float_reg(~A);
 							(generate-compiler float-reg value bindings) float-char float-reg
 							int-char target
 							float-reg))))
-			  (float-to-integer ,#'(lambda (value) ;security hole!!!!
-						 (let ((float-reg (make-tmp-name))
-						       (float-char (if (= (expr-width expr) 32) "S" "T"))
-						       (int-char (if (= (expr-width expr) 32) "L" "Q")))
+			  (float-to-integer ,#'(lambda (value)
+						 (let* ((float-reg (make-tmp-name))
+							(width (expr-width expr))
+							(float-char (if (= width 32) "S" "T"))
+							(int-char (if (= width 32) "L" "Q")))
 						   (format nil "{
 reg_t ~A = alloc_float_reg();
-~Aemit(COMPOSE_CVTQT(~A, ~A));
+~Aemit(COMPOSE_CVTTQC(~A, ~A));
+~A
 emit(COMPOSE_ST~A(~A, SCRATCH_OFFSET, REG_SAVE_AREA_REG));
 emit(COMPOSE_LD~A(~A, SCRATCH_OFFSET, REG_SAVE_AREA_REG));
 free_float_reg(~A);
 }~%"
 							   float-reg
 							   (generate-compiler float-reg value bindings) float-reg float-reg
+							   (if (= width 32) (format nil "emit(COMPOSE_CVTQL(~A, ~A));~%" float-reg float-reg) "")
 							   float-char float-reg
 							   int-char target
 							   float-reg))))
@@ -1432,7 +1435,7 @@ emit(COMPOSE_MOV(0, ~A));
       (generate-insn-recognizer decision-tree #'(lambda (insn)
 						  (dolist (expr (insn-effect insn))
 						    (princ (generate-compiler nil expr nil)))))
-      (format t "++num_translated_insns;~%}~%"))))
+      (format t "~%#ifdef COLLECT_STATS~%++num_translated_insns;~%#endif~%}~%"))))
 
 (defun generate-defines-file ()
   (with-open-file (out (format nil "~A_defines.h" (dcs *machine-name*)) :direction :output :if-exists :supersede)

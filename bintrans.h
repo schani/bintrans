@@ -106,3 +106,4 @@ void move_ppc_regs_compiler_to_interpreter (interpreter_t *intp);
 /* theser are from ppc_interpreter.c */
 void interpret_ppc_insn (interpreter_t *intp);
 void dump_ppc_registers (interpreter_t *intp);
+void disassemble_ppc_insn (word_32 insn, word_32 addr);
