@@ -13,12 +13,12 @@ typedef int label_t;
 #define MAX_BACKPATCHES         8
 #define MAX_CONSTANTS        8192
 
-#define MAX_UNRESOLVED_JUMPS 2048
+#define MAX_UNRESOLVED_JUMPS 8192 /* should be a lot less if we actually do resolve branches */
 
-#define MAX_CODE_INSNS      65536
+#define MAX_CODE_INSNS     300000
 
-#define FRAGMENT_HASH_TABLE_SIZE   2048
-#define FRAGMENT_HASH_OVERFLOW     1024
+#define FRAGMENT_HASH_TABLE_SIZE   8192
+#define FRAGMENT_HASH_OVERFLOW     4096
 
 #define HASH_ADDR(addr)         (((addr) >> 2) & (FRAGMENT_HASH_TABLE_SIZE - 1))
 
@@ -439,6 +439,28 @@ emit_load_integer_32 (reg_t reg, word_32 val)
     }
 }
 
+void
+emit_load_integer_64 (reg_t reg, word_64 val)
+{
+    if ((val >> 15) == 0 || (val >> 15) == ((word_64)-1 >> 15))
+	emit(COMPOSE_LDA(reg, val & 0xffff, 31));
+    else if ((val & 0xffff) == 0 && (val >> 32) == 0)
+	emit(COMPOSE_LDAH(reg, val >> 16, 31));
+    else
+    {
+	assert(num_constants + 1 < MAX_CONSTANTS);
+
+	emit(COMPOSE_LDQ(reg, num_constants * 4, CONSTANT_AREA_REG));
+	constant_area[num_constants++] = val & 0xffffffff;
+	constant_area[num_constants++] = val >> 32;
+
+	/*
+	printf("  load $%u,%u\n", reg, val);
+	assert(0);
+	*/
+    }
+}
+
 label_t
 alloc_label (void)
 {
@@ -706,6 +728,9 @@ enter_fragment (word_32 foreign_addr, word_64 native_addr)
 
 #ifdef COLLECT_STATS
     ++num_translated_fragments;
+
+    if (num_translated_fragments % 100 == 0)
+	print_compiler_stats();
 #endif
 
     if (fragment_hash_table[index].native_addr == 0)

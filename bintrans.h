@@ -24,10 +24,13 @@ void indirect_dispatcher (void);
 void system_call_entry (void);
 void c_stub (void);
 
-#define PAGE_READABLE   1
-#define PAGE_WRITEABLE  2
-#define PAGE_EXECUTABLE 4
-#define PAGE_MMAPPED    8
+#define PAGE_READABLE         1
+#define PAGE_WRITEABLE        2
+#define PAGE_EXECUTABLE       4
+#define PAGE_MMAPPED          8
+#define PAGE_NATIVE_MMAPPED  16
+
+#define PAGE_PROT_MASK        7
 
 #define LEVEL1_SIZE      1024
 #define LEVEL1_SHIFT       22
@@ -110,6 +113,7 @@ ssize_t read_all (int fd, byte *buf, size_t count);
 word_32 copy_file_to_mem (interpreter_t *intp, int fd, word_32 addr, word_32 len, word_32 offset, int reset);
 int prot_to_flags (int prot);
 void mprotect_pages (interpreter_t *intp, word_32 addr, word_32 len, int flags);
+void natively_mprotect_pages (interpreter_t *intp, word_32 addr, word_32 len, int flags);
 word_32 mmap_anonymous (interpreter_t *intp, word_32 len, int flags, int fixed, word_32 addr);
 word_32 mmap_file (interpreter_t *intp, word_32 len, int flags, int fixed, word_32 addr, int fd, word_32 offset);
 

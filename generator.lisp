@@ -831,11 +831,6 @@
 emit_load_integer_32(~A, ~A);~%"
 					      target foreign-target
 					      target (code-for-field "insn" begin end))))
-			  (integer ,#'(lambda (value)
-					(format nil "~A = ref_integer_reg_for_writing(~A);
-emit_load_integer_32(~A, ~A);~%"
-						target foreign-target
-						target value)))
 			  (string ,#'(lambda (value) (error "cannot generate compiler for string~%")))
 			  (pc ,#'(lambda () (format nil "~A = ref_integer_reg_for_writing(~A);
 emit_load_integer_32(~A, pc);~%"
@@ -1362,6 +1357,7 @@ emit(COMPOSE_LD~A(~A, SCRATCH_OFFSET, CONSTANT_AREA_REG));
 							   target foreign-target
 							   int-char target))))
 			  (nop ,#'(lambda () (format nil "/* nop */~%")))
+			  (ignore ,#'(lambda (value) (format nil "/* ignore */~%")))
 			  (system-call ,#'(lambda () (format nil "store_and_free_all_foreign_regs();
 emit_system_call();~%")))))
 	  (m-generators `((((= ("EQ" nil))
@@ -1479,10 +1475,12 @@ emit(COMPOSE_MOV(0, ~A));
 	  (progn
 	    (unless (eq (expr-type expr) 'integer)
 	      (error "can only load integers~%"))
-	    (format nil "~A = ref_integer_reg_for_writing(~A);
-emit_load_integer_32(~A, ~A);~%"
-		    target foreign-target
-		    target (generate-interpreter expr nil)))
+	    (let* ((width (expr-width expr))
+		   (load-width (if (<= width 32) 32 width)))
+	      (format nil "~A = ref_integer_reg_for_writing(~A);
+emit_load_integer_~A(~A, ~A);~%"
+		      target foreign-target
+		      load-width target (generate-interpreter expr nil))))
 	  (let ((s-generator (cadr (assoc (expr-kind expr) s-generators))))
 	    (if (null s-generator)
 		(let ((m-generator (dolist (p m-generators)

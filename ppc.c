@@ -109,6 +109,13 @@ int ppc_errnos[] = { 0,
 
 #define LAST_PPC_ERRNO 124
 
+#undef SYSCALL_OUTPUT
+#ifdef SYSCALL_OUTPUT
+#define ANNOUNCE_SYSCALL(n)         printf("%s\n", (n))
+#else
+#define ANNOUNCE_SYSCALL(n)
+#endif
+
 int debug = 0;
 
 word_32
@@ -323,7 +330,7 @@ handle_system_call (interpreter_t *intp)
 	    break;
 
 	case 3 :
-	    printf("read\n");
+	    ANNOUNCE_SYSCALL("read");
 	    {
 		byte *mem = (byte*)malloc(intp->regs_GPR[5]);
 
@@ -344,7 +351,7 @@ handle_system_call (interpreter_t *intp)
 	    break;
 
 	case 4 :
-	    /* printf("write\n"); */
+	    ANNOUNCE_SYSCALL("write");
 	    {
 		byte *mem = (byte*)malloc(intp->regs_GPR[5]);
 		word_32 i;
@@ -360,7 +367,7 @@ handle_system_call (interpreter_t *intp)
 	    break;
 
 	case 5 :
-	    printf("open\n");
+	    ANNOUNCE_SYSCALL("open");
 	    {
 		char *real_name = strdup_from_user(intp, intp->regs_GPR[3]);
 		char *name = translate_filename(real_name);
@@ -405,28 +412,28 @@ handle_system_call (interpreter_t *intp)
 	    break;
 
 	case 6 :
-	    printf("close\n");
+	    ANNOUNCE_SYSCALL("close");
 	    result = close(intp->regs_GPR[3]);
 	    break;
 
 	case 13 :
-	    printf("time\n");
+	    ANNOUNCE_SYSCALL("time");
 	    assert(intp->regs_GPR[3] == 0);
 	    result = (int)time(0);
 	    break;
 
 	case 20 :
-	    printf("getpid\n");
+	    ANNOUNCE_SYSCALL("getpid");
 	    result = getpid();
 	    break;
 
 	case 24 :
-	    printf("getuid\n");
+	    ANNOUNCE_SYSCALL("getuid");
 	    result = getuid();
 	    break;
 
 	case 33 :
-	    printf("access\n");
+	    ANNOUNCE_SYSCALL("access");
 	    {
 		char *real_name = strdup_from_user(intp, intp->regs_GPR[3]);
 		char *name = translate_filename(real_name);
@@ -438,7 +445,7 @@ handle_system_call (interpreter_t *intp)
 	    break;
 
 	case 45 :
-	    printf("brk\n");
+	    ANNOUNCE_SYSCALL("brk");
 	    if (intp->regs_GPR[3] == 0)
 		result = (int)intp->data_segment_top;
 	    else
@@ -447,29 +454,31 @@ handle_system_call (interpreter_t *intp)
 
 		assert(new_top > intp->data_segment_top);
 
-		mprotect_pages(intp, intp->data_segment_top, new_top - intp->data_segment_top, PAGE_READABLE | PAGE_WRITEABLE);
+		mmap_anonymous(intp, new_top - intp->data_segment_top, PAGE_READABLE | PAGE_WRITEABLE, 1, intp->data_segment_top);
+
+		intp->data_segment_top = new_top;
 
 		result = (int)new_top;
 	    }
 	    break;
 
 	case 47 :
-	    printf("getgid\n");
+	    ANNOUNCE_SYSCALL("getgid");
 	    result = getgid();
 	    break;
 
 	case 49 :
-	    printf("geteuid\n");
+	    ANNOUNCE_SYSCALL("geteuid");
 	    result = geteuid();
 	    break;
 
 	case 50 :
-	    printf("getegid\n");
+	    ANNOUNCE_SYSCALL("getegid");
 	    result = getegid();
 	    break;
 
 	case 54 :
-	    printf("ioctl\n");
+	    ANNOUNCE_SYSCALL("ioctl");
 	    {
 		switch (intp->regs_GPR[4])
 		{
@@ -502,7 +511,7 @@ handle_system_call (interpreter_t *intp)
 	    break;
 
 	case 55 :
-	    printf("fcntl\n");
+	    ANNOUNCE_SYSCALL("fcntl");
 	    switch (intp->regs_GPR[4])
 	    {
 		case PPC_F_GETFD :
@@ -556,7 +565,7 @@ handle_system_call (interpreter_t *intp)
 	    break;
 
 	case 78 :
-	    printf("gettimeofday\n");
+	    ANNOUNCE_SYSCALL("gettimeofday");
 	    {
 		struct timeval tv;
 		struct timezone tz;
@@ -583,7 +592,7 @@ handle_system_call (interpreter_t *intp)
 	    break;
 
 	case 90 :
-	    printf("mmap\n");
+	    ANNOUNCE_SYSCALL("mmap");
 	    {
 		word_32 len = PPC_PAGE_ALIGN(intp->regs_GPR[4]);
 		word_32 addr;
@@ -613,9 +622,11 @@ handle_system_call (interpreter_t *intp)
 	    break;
 
 	case 91 :
-	    printf("munmap\n");
+	    ANNOUNCE_SYSCALL("munmap");
 	    {
 		word_32 mem_len;
+
+		assert(0);
 
 		assert((intp->regs_GPR[3] & PPC_PAGE_MASK) == 0);
 
@@ -635,7 +646,7 @@ handle_system_call (interpreter_t *intp)
 		    {
 			int type;
 
-			printf("socket\n");
+			ANNOUNCE_SYSCALL("socket");
 
 			switch (ARG(1))
 			{
@@ -671,7 +682,7 @@ handle_system_call (interpreter_t *intp)
 		    {
 			sa_family_t family = mem_get_16(intp, ARG(1));
 
-			printf("connect\n");
+			ANNOUNCE_SYSCALL("connect");
 
 			switch (family)
 			{
@@ -723,7 +734,7 @@ handle_system_call (interpreter_t *intp)
 			byte buffer[1024];
 			socklen_t len = 1024;
 
-			printf("getsockname\n");
+			ANNOUNCE_SYSCALL("getsockname");
 
 			result = getsockname(ARG(0), (struct sockaddr*)buffer, &len);
 
@@ -743,7 +754,7 @@ handle_system_call (interpreter_t *intp)
 			byte buffer[1024];
 			socklen_t len = 1024;
 
-			printf("getpeername\n");
+			ANNOUNCE_SYSCALL("getpeername");
 
 			result = getpeername(ARG(0), (struct sockaddr*)buffer, &len);
 
@@ -759,7 +770,7 @@ handle_system_call (interpreter_t *intp)
 		    break;
 
 		case SYS_SHUTDOWN :
-		    printf("shutdown\n");
+		    ANNOUNCE_SYSCALL("shutdown");
 		    result = shutdown(ARG(0), ARG(1));
 		    break;
 
@@ -767,7 +778,7 @@ handle_system_call (interpreter_t *intp)
 		    {
 			byte *optval;
 
-			printf("setsockopt\n");
+			ANNOUNCE_SYSCALL("setsockopt");
 
 			optval = (byte*)malloc(ARG(4));
 			assert(optval != 0);
@@ -787,7 +798,7 @@ handle_system_call (interpreter_t *intp)
 	    break;
 
 	case 108 :
-	    printf("fstat\n");
+	    ANNOUNCE_SYSCALL("fstat");
 	    {
 		struct stat buf;
 
@@ -812,7 +823,7 @@ handle_system_call (interpreter_t *intp)
 	    break;
 
 	case 122 :
-	    printf("uname\n");
+	    ANNOUNCE_SYSCALL("uname");
 	    assert(SYS_NMLN == 65);
 	    {
 		struct utsname un;
@@ -832,9 +843,11 @@ handle_system_call (interpreter_t *intp)
 	    break;
 
 	case 125 :
-	    printf("mprotect\n");
+	    ANNOUNCE_SYSCALL("mprotect");
 	    {
 		word_32 mem_len;
+
+		assert(0);
 
 		assert((intp->regs_GPR[3] & PPC_PAGE_MASK) == 0);
 
@@ -847,13 +860,13 @@ handle_system_call (interpreter_t *intp)
 	    break;
 
 	case 136 :
-	    printf("personality\n");
+	    ANNOUNCE_SYSCALL("personality");
 	    assert(intp->regs_GPR[3] == 0);
 	    result = 0;
 	    break;
 
 	case 142 :
-	    printf("select\n");
+	    ANNOUNCE_SYSCALL("select");
 	    {
 		struct timeval tv;
 		struct timeval *tvp;
@@ -915,7 +928,7 @@ handle_system_call (interpreter_t *intp)
 	    break;
 
 	case 145 :
-	    printf("readv\n");
+	    ANNOUNCE_SYSCALL("readv");
 	    {
 		word_32 i;
 		word_32 out_len = 0;
@@ -949,7 +962,7 @@ handle_system_call (interpreter_t *intp)
 	    break;
 
 	case 146 :
-	    printf("writev\n");
+	    ANNOUNCE_SYSCALL("writev");
 	    {
 		word_32 i;
 		word_32 in_len = 0;
@@ -984,7 +997,9 @@ handle_system_call (interpreter_t *intp)
 	    intp->halt = 1;
     }
 
+#ifdef SYSCALL_OUTPUT
     printf("  %08x\n", (word_32)result);
+#endif
 
     if (result == -1)
     {
@@ -1309,13 +1324,13 @@ show_segments (interpreter_t *intp)
 	    if (intp->pagetable[l1] == 0)
 		page_flags = 0;
 	    else
-		page_flags = intp->pagetable[l1][l2].flags;
+		page_flags = intp->pagetable[l1][l2].flags & PAGE_PROT_MASK;
 
 	    if (page_flags != flags)
 	    {
 		if (flags != 0)
 		{
-		    char flags_str[5] = "    ";
+		    char flags_str[4] = "   ";
 
 		    if (flags & PAGE_READABLE)
 			flags_str[0] = 'r';
@@ -1323,8 +1338,6 @@ show_segments (interpreter_t *intp)
 			flags_str[1] = 'w';
 		    if (flags & PAGE_EXECUTABLE)
 			flags_str[2] = 'x';
-		    if (flags & PAGE_MMAPPED)
-			flags_str[3] = 'm';
 
 		    printf("%08x  %08x  %8u  %s\n", start, addr, addr - start, flags_str);
 		}
@@ -1501,7 +1514,11 @@ main (int argc, char *argv[])
 #endif
 
 #ifdef NEED_INTERPRETER
+#ifdef NEED_COMPILER
     init_interpreter_struct(&interpreter, 0, 0);
+#else
+    init_interpreter_struct(&interpreter, 1, 0);
+#endif
 #endif
 #ifdef NEED_COMPILER
     init_interpreter_struct(&compiler, 1, 1);
@@ -1569,17 +1586,21 @@ main (int argc, char *argv[])
 	mem_len = PPC_PAGE_ALIGN(phdrs[i].p_vaddr + phdrs[i].p_memsz) - mem_start;
 
 #ifdef NEED_INTERPRETER
-	mprotect_pages(&interpreter, mem_start, mem_len, flags);
+	mprotect_pages(&interpreter, mem_start, mem_len, flags | PAGE_MMAPPED);
+	natively_mprotect_pages(&interpreter, mem_start, mem_len, PAGE_WRITEABLE);
 	read_len = copy_file_to_mem(&interpreter, exec_fd, phdrs[i].p_vaddr, phdrs[i].p_filesz, phdrs[i].p_offset, 0);
 	assert(read_len == phdrs[i].p_filesz);
+	natively_mprotect_pages(&interpreter, mem_start, mem_len, flags);
 
 	if (phdrs[i].p_type == PT_LOAD && phdrs[i].p_flags == (PF_W | PF_R))
 	    interpreter.data_segment_top = mem_start + mem_len;
 #endif
 #ifdef NEED_COMPILER
-	mprotect_pages(&compiler, mem_start, mem_len, flags);
+	mprotect_pages(&compiler, mem_start, mem_len, flags | PAGE_MMAPPED);
+	natively_mprotect_pages(&compiler, mem_start, mem_len, PAGE_WRITEABLE);
 	read_len = copy_file_to_mem(&compiler, exec_fd, phdrs[i].p_vaddr, phdrs[i].p_filesz, phdrs[i].p_offset, 0);
 	assert(read_len == phdrs[i].p_filesz);
+	natively_mprotect_pages(&compiler, mem_start, mem_len, flags);
 
 	if (phdrs[i].p_type == PT_LOAD && phdrs[i].p_flags == (PF_W | PF_R))
 	    compiler.data_segment_top = mem_start + mem_len;
@@ -1589,7 +1610,8 @@ main (int argc, char *argv[])
     close(exec_fd);
 
 #ifdef NEED_INTERPRETER
-    mprotect_pages(&interpreter, STACK_TOP - STACK_SIZE * PPC_PAGE_SIZE, STACK_SIZE * PPC_PAGE_SIZE, PAGE_READABLE | PAGE_WRITEABLE);
+    mprotect_pages(&interpreter, STACK_TOP - STACK_SIZE * PPC_PAGE_SIZE, STACK_SIZE * PPC_PAGE_SIZE, PAGE_READABLE | PAGE_WRITEABLE | PAGE_MMAPPED);
+    natively_mprotect_pages(&interpreter, STACK_TOP - STACK_SIZE * PPC_PAGE_SIZE, STACK_SIZE * PPC_PAGE_SIZE, PAGE_READABLE | PAGE_WRITEABLE);
 
     assert(interpreter.data_segment_top != 0);
 
@@ -1600,7 +1622,8 @@ main (int argc, char *argv[])
     interpreter.pc = ehdr.e_entry;
 #endif
 #ifdef NEED_COMPILER
-    mprotect_pages(&interpreter, STACK_TOP - STACK_SIZE * PPC_PAGE_SIZE, STACK_SIZE * PPC_PAGE_SIZE, PAGE_READABLE | PAGE_WRITEABLE);
+    mprotect_pages(&compiler, STACK_TOP - STACK_SIZE * PPC_PAGE_SIZE, STACK_SIZE * PPC_PAGE_SIZE, PAGE_READABLE | PAGE_WRITEABLE | PAGE_MMAPPED);
+    natively_mprotect_pages(&compiler, STACK_TOP - STACK_SIZE * PPC_PAGE_SIZE, STACK_SIZE * PPC_PAGE_SIZE, PAGE_READABLE | PAGE_WRITEABLE);
 
     assert(compiler.data_segment_top != 0);
 

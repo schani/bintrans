@@ -15,72 +15,59 @@ extern int debug;
 #define MIN(a,b)    ((a)<(b)?(a):(b))
 #endif
 
-/*
-void
-align_segment (word_32 addr, word_32 len, word_32 *real_addr, word_32 *real_len)
+#define NATIVE_PAGE_SIZE      8192
+#define NATIVE_PAGE_SHIFT       13
+#define NATIVE_PAGE_MASK    0x1fff
+
+int
+prot_to_flags (int prot)
 {
-    word_32 aligned_addr = addr & ~(EXEC_PAGESIZE - 1);
-    word_32 min_len = len + (addr - aligned_addr);
-    word_32 aligned_len;
+    int flags = 0;
 
-    if ((min_len & (EXEC_PAGESIZE - 1)) == 0)
-	aligned_len = min_len;
-    else
-	aligned_len = (min_len | (EXEC_PAGESIZE - 1)) + 1;
+    if (prot & PROT_READ)
+	flags |= PAGE_READABLE;
+    if (prot & PROT_WRITE)
+	flags |= PAGE_WRITEABLE;
+    if (prot & PROT_EXEC)
+	flags |= PAGE_EXECUTABLE;
 
-    *real_addr = aligned_addr;
-    *real_len = aligned_len;
-
-    assert((aligned_addr & (EXEC_PAGESIZE - 1)) == 0);
-    assert((aligned_len & (EXEC_PAGESIZE - 1)) == 0);
+    return flags;
 }
 
-segment_t*
-setup_segment (interpreter_t *intp, word_32 addr, word_32 len, int flags)
-{
-    segment_t *segment = &intp->segments[intp->num_segments];
-
-    assert(intp->num_segments < MAX_SEGMENTS);
-
-    segment->addr = addr;
-    segment->len = len;
-    segment->flags = flags;
-    if (intp->direct_memory)
-    {
-	align_segment(addr, len, &segment->real_addr, &segment->real_len);
-	segment->real_mem = (byte*)mmap((void*)REAL_ADDR(segment->real_addr),
-					segment->real_len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-	assert((addr_t)segment->real_mem == REAL_ADDR(segment->real_addr));
-	segment->mem = segment->real_mem + (addr - segment->real_addr);
-    }
-    else
-    {
-	segment->mem = (byte*)malloc(len);
-	assert(segment->mem != 0);
-    }
-
-    ++intp->num_segments;
-
-    return segment;
-}
-
-void
-protect_segment (interpreter_t *intp, segment_t *segment)
+int
+flags_to_prot (int flags)
 {
     int prot = 0;
-    int result;
 
-    assert(intp->direct_memory);
-
-    if (segment->flags & SEGMENT_READABLE)
+    if (flags & PAGE_READABLE)
 	prot |= PROT_READ;
-    if (segment->flags & SEGMENT_WRITEABLE)
+    if (flags & PAGE_WRITEABLE)
 	prot |= PROT_WRITE;
+    if (flags & PAGE_EXECUTABLE)
+	prot |= PROT_EXEC;
 
-    result = mprotect((void*)REAL_ADDR(segment->real_addr), segment->real_len, prot);
-    assert(result == 0);
+    return prot;
 }
-*/
+
+page_t*
+get_page (interpreter_t *intp, word_32 addr)
+{
+    page_t *l2 = intp->pagetable[LEVEL1_INDEX(addr)];
+
+    if (l2 == 0)
+	return 0;
+    return &l2[LEVEL2_INDEX(addr)];
+}
+
+int
+get_page_flags (interpreter_t *intp, word_32 addr)
+{
+    page_t *page = get_page(intp, addr);
+
+    if (page == 0)
+	return 0;
+    return page->flags;
+}
 
 void
 mprotect_pages (interpreter_t *intp, word_32 addr, word_32 len, int flags)
@@ -94,6 +81,8 @@ mprotect_pages (interpreter_t *intp, word_32 addr, word_32 len, int flags)
     assert((len & PPC_PAGE_MASK) == 0);
 
     num_pages = len >> PPC_PAGE_SHIFT;
+
+    assert(num_pages > 0);
 
     l1 = LEVEL1_INDEX(addr);
     l2 = LEVEL2_INDEX(addr);
@@ -123,7 +112,7 @@ mprotect_pages (interpreter_t *intp, word_32 addr, word_32 len, int flags)
 
 	level1[l2].flags = flags;
 	if (intp->direct_memory)
-	    assert(0);
+	    level1[l2].mem = (byte*)REAL_ADDR((l1 << LEVEL1_SHIFT) | (l2 << LEVEL2_SHIFT));
 	else
 	{
 	    if (flags == 0 && level1[l2].mem != 0)
@@ -133,8 +122,20 @@ mprotect_pages (interpreter_t *intp, word_32 addr, word_32 len, int flags)
 	    }
 	    else if (flags != 0 && level1[l2].mem == 0)
 	    {
+		assert(flags & PAGE_MMAPPED);
+
 		level1[l2].mem = (byte*)malloc(PPC_PAGE_SIZE);
-		memset(level1[l2].mem, 0, PPC_PAGE_SIZE);
+	    }
+
+	    if (flags & PAGE_MMAPPED)
+	    {
+		if (intp->direct_memory)
+		{
+		    if (get_page_flags(intp, ((l1 << LEVEL1_SHIFT) | (l2 << LEVEL2_SHIFT)) & ~NATIVE_PAGE_MASK) & PAGE_NATIVE_MMAPPED)
+			memset(level1[l2].mem, 0, PPC_PAGE_SIZE);
+		}
+		else
+		    memset(level1[l2].mem, 0, PPC_PAGE_SIZE);
 	    }
 	}
 
@@ -149,14 +150,105 @@ mprotect_pages (interpreter_t *intp, word_32 addr, word_32 len, int flags)
     }
 }
 
-page_t*
-get_page (interpreter_t *intp, word_32 addr)
+void
+natively_mprotect_pages (interpreter_t *intp, word_32 addr, word_32 len, int flags)
 {
-    page_t *l2 = intp->pagetable[LEVEL1_INDEX(addr)];
+    if (intp->direct_memory)
+    {
+	word_32 first_page_addr, last_page_addr;
+	word_32 start, end;
 
-    if (l2 == 0)
-	return 0;
-    return &l2[LEVEL2_INDEX(addr)];
+	first_page_addr = addr & ~NATIVE_PAGE_MASK;
+	last_page_addr = (addr + len - 1) & ~NATIVE_PAGE_MASK;
+
+	start = first_page_addr;
+	for (;;)
+	{
+	    do
+	    {
+		if ((flags != 0 && !(get_page_flags(intp, start) & PAGE_NATIVE_MMAPPED))
+		    || (flags == 0 && (get_page_flags(intp, start) & PAGE_NATIVE_MMAPPED)))
+		    break;
+		start += NATIVE_PAGE_SIZE;
+	    } while (start <= last_page_addr);
+
+	    if (start > last_page_addr)
+		break;
+
+	    end = start;
+	    while (end <= last_page_addr)
+	    {
+		if (flags != 0 && (get_page_flags(intp, end) & PAGE_NATIVE_MMAPPED))
+		    break;
+		else
+		    get_page(intp, end)->flags &= ~PAGE_NATIVE_MMAPPED;
+
+		if (flags == 0 && !(get_page_flags(intp, end) & PAGE_NATIVE_MMAPPED))
+		    break;
+		else
+		    get_page(intp, end)->flags |= PAGE_NATIVE_MMAPPED;
+
+		end += NATIVE_PAGE_SIZE;
+	    }
+
+	    if (flags == 0)
+	    {
+		int result;
+
+		result = munmap((void*)REAL_ADDR(start), end - start);
+		assert(result == 0);
+	    }
+	    else
+	    {
+		void *result;
+
+		result = mmap((void*)REAL_ADDR(start), end - start, flags_to_prot(flags), MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		assert(result != 0);
+	    }
+
+	    start = end + NATIVE_PAGE_SIZE;
+	}
+
+	if (NATIVE_PAGE_SIZE <= PPC_PAGE_SIZE)
+	{
+	    int result;
+
+	    result = mprotect((void*)REAL_ADDR(addr), len, flags_to_prot(flags));
+	    assert(result == 0);
+	}
+	else
+	{
+	    int first_page_flags = flags, last_page_flags = flags;
+	    word_32 a;
+	    int result;
+
+	    for (a = first_page_addr; a < first_page_addr + NATIVE_PAGE_SIZE; a += PPC_PAGE_SIZE)
+		first_page_flags |= get_page_flags(intp, a);
+
+	    if (first_page_addr != last_page_addr)
+		for (a = last_page_addr; a < last_page_addr + NATIVE_PAGE_SIZE; a += PPC_PAGE_SIZE)
+		    last_page_flags |= get_page_flags(intp, a);
+
+	    /* first page */
+	    result = mprotect((void*)REAL_ADDR(first_page_addr), NATIVE_PAGE_SIZE, flags_to_prot(first_page_flags));
+	    assert(result == 0);
+
+	    /* the bulk */
+	    if (first_page_addr + NATIVE_PAGE_SIZE < last_page_addr)
+	    {
+		result = mprotect((void*)REAL_ADDR(first_page_addr + NATIVE_PAGE_SIZE), last_page_addr - first_page_addr - NATIVE_PAGE_SIZE,
+				  flags_to_prot(flags));
+		assert(result == 0);
+	    }
+
+	    /* last page */
+	    if (first_page_addr != last_page_addr)
+	    {
+		result = mprotect((void*)REAL_ADDR(last_page_addr), NATIVE_PAGE_SIZE, flags_to_prot(last_page_flags));
+		assert(result == 0);
+	    }
+	}
+    }
 }
 
 void
@@ -383,21 +475,6 @@ first_fit_addr (interpreter_t *intp, word_32 start, word_32 len)
     return 0;
 }
 
-int
-prot_to_flags (int prot)
-{
-    int flags = 0;
-
-    if (prot & PROT_READ)
-	flags |= PAGE_READABLE;
-    if (prot & PROT_WRITE)
-	flags |= PAGE_WRITEABLE;
-    if (prot & PROT_EXEC)
-	flags |= PAGE_EXECUTABLE;
-
-    return flags;
-}
-
 word_32
 mmap_segment (interpreter_t *intp, word_32 len, int flags, int fixed, word_32 addr)
 {
@@ -416,9 +493,13 @@ mmap_segment (interpreter_t *intp, word_32 len, int flags, int fixed, word_32 ad
 }
 
 word_32
-mmap_anonymous (interpreter_t *intp, word_32 len, int prot, int fixed, word_32 addr)
+mmap_anonymous (interpreter_t *intp, word_32 len, int flags, int fixed, word_32 addr)
 {
-    return mmap_segment(intp, len, prot, fixed, addr);
+    addr = mmap_segment(intp, len, flags | PAGE_MMAPPED, fixed, addr);
+
+    if (addr != 0)
+	natively_mprotect_pages(intp, addr, len, flags);
+    return addr;
 }
 
 void
@@ -473,8 +554,6 @@ copy_file_to_mem (interpreter_t *intp, int fd, word_32 addr, word_32 len, word_3
 	page_t *page = get_page(intp, addr + num_read);
 	int result;
 
-	assert(!intp->direct_memory);
-
 	result = read_all(fd, page->mem + ((addr + num_read) & PPC_PAGE_MASK),
 			  MIN(MIN(PPC_PAGE_SIZE, len - num_read), PPC_PAGE_SIZE - ((addr + num_read) & PPC_PAGE_MASK)));
 	assert(result != -1);
@@ -504,7 +583,11 @@ mmap_file (interpreter_t *intp, word_32 len, int flags, int fixed, word_32 addr,
     if (addr == 0)
 	return 0;
 
+    natively_mprotect_pages(intp, addr, len, PAGE_WRITEABLE);
+
     copy_file_to_mem(intp, fd, addr, len, offset, 1);
+
+    natively_mprotect_pages(intp, addr, len, flags);
 
     return addr;
 }
