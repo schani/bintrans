@@ -253,8 +253,12 @@ int num_reg_fields;
 label_info_t label_infos[MAX_LABELS];
 int num_labels;
 
+#ifdef SYNC_BLOCKS
 fragment_unresolved_jump_t fragment_unresolved_jumps[MAX_FRAGMENT_UNRESOLVED_JUMPS];
 int num_fragment_unresolved_jumps;
+
+unresolved_jump_t unresolved_jumps[MAX_UNRESOLVED_JUMPS];
+#endif
 
 word_32 code_area[MAX_CODE_INSNS + MAX_ALT_CODE_INSNS];
 word_32 *emit_loc;
@@ -267,8 +271,6 @@ int num_constants = NUM_EMU_REGISTERS * 2 + 2;
 int old_num_constants;
 int num_constants_init;
 word_32 constant_area[NUM_EMU_REGISTERS * 2 + 2 + MAX_CONSTANTS] __attribute__ ((aligned (8)));
-
-unresolved_jump_t unresolved_jumps[MAX_UNRESOLVED_JUMPS];
 
 tmp_register_t tmp_integer_regs[NUM_TMP_INTEGER_REGS];
 tmp_register_t tmp_float_regs[NUM_TMP_FLOAT_REGS];
@@ -517,8 +519,10 @@ reinit_compiler (void)
     alt_emit_loc = code_area + MAX_CODE_INSNS;
 #endif
 
+#ifdef SYNC_BLOCKS
     for (i = 0; i < MAX_UNRESOLVED_JUMPS; ++i)
 	unresolved_jumps[i].addr = 0;
+#endif
 
     init_fragment_hash();
 }
@@ -981,13 +985,16 @@ emit_direct_jump (word_32 target)
 
     emit(COMPOSE_LDQ(PROCEDURE_VALUE_REG, DIRECT_DISPATCHER_CONST * 4, CONSTANT_AREA_REG));
     emit(COMPOSE_JMP(RETURN_ADDR_REG, PROCEDURE_VALUE_REG));
+    emit(target);
 
+#ifdef SYNC_BLOCKS
     assert(num_fragment_unresolved_jumps < MAX_FRAGMENT_UNRESOLVED_JUMPS);
 
     fragment_unresolved_jumps[num_fragment_unresolved_jumps].insn_num = num_fragment_insns;
     fragment_unresolved_jumps[num_fragment_unresolved_jumps].target = target;
 
     ++num_fragment_unresolved_jumps;
+#endif
 
     for (i = 0; i < NUM_AFTER_JUMP_INSN_SLOTS; ++i)
 	emit(0);
@@ -1035,7 +1042,9 @@ start_fragment (void)
     num_reg_locks = 0;
     num_reg_fields = 0;
     num_labels = 0;
+#ifdef SYNC_BLOCKS
     num_fragment_unresolved_jumps = 0;
+#endif
     old_num_constants = num_constants;
 
     all_regs_must_be_saved = 0;
@@ -1453,12 +1462,11 @@ finish_fragment (unsigned char *preferred_alloced_integer_regs)
 		    /* the insn is replaced by its code_area index */
 		    fragment_insns[j] = first_insn - code_area;
 
+#ifdef SYNC_BLOCKS
 		    if (jumps_index < num_fragment_unresolved_jumps && j + 1 == fragment_unresolved_jumps[jumps_index].insn_num)
 		    {
 			int k;
-#ifdef SYNC_BLOCKS
 			int l;
-#endif
 
 			for (k = 0; k < MAX_UNRESOLVED_JUMPS; ++k)
 			    if (unresolved_jumps[k].addr == 0)
@@ -1468,7 +1476,6 @@ finish_fragment (unsigned char *preferred_alloced_integer_regs)
 
 			unresolved_jumps[k].addr = (word_64)EMIT_LOC;
 			unresolved_jumps[k].target = fragment_unresolved_jumps[jumps_index].target;
-#ifdef SYNC_BLOCKS
 			unresolved_jumps[k].start = direct_jump_start;
 			for (l = 0; l < NUM_FREE_INTEGER_REGS; ++l)
 			{
@@ -1506,10 +1513,10 @@ finish_fragment (unsigned char *preferred_alloced_integer_regs)
 				    unresolved_jumps[k].alloced_float_regs[l] = reg | (emu_regs[reg].dirty ? ALLOCED_REG_DIRTY : 0);
 			    }
 			}
-#endif
 
 			++jumps_index;
 		    }
+#endif
 		}
 		break;
 	}
@@ -1911,8 +1918,10 @@ init_compiler (interpreter_t *intp, interpreter_t *dbg_intp)
 	    emu_regs[i].preferred_native_reg = native_integer_regs[j++ % NUM_FREE_INTEGER_REGS];
 	}
 
+#ifdef SYNC_BLOCKS
     for (i = 0; i < MAX_UNRESOLVED_JUMPS; ++i)
 	unresolved_jumps[i].addr = 0;
+#endif
 
     emit_loc = code_area;
 #ifdef DYNAMO_TRACES
@@ -2693,6 +2702,7 @@ provide_fragment_and_patch (word_64 jump_addr)
     ++num_direct_jumps;
 #endif
 
+#ifdef SYNC_BLOCKS
     for (i = 0; i < MAX_UNRESOLVED_JUMPS; ++i)
 	if (unresolved_jumps[i].addr == jump_addr)
 	    break;
@@ -2700,6 +2710,9 @@ provide_fragment_and_patch (word_64 jump_addr)
     assert(i < MAX_UNRESOLVED_JUMPS);
 
     foreign_addr = unresolved_jumps[i].target;
+#else
+    foreign_addr = *(word_32*)jump_addr;
+#endif
 
 #if defined(COMPILER_THRESHOLD) || defined(DYNAMO_TRACES)
     native_addr = lookup_fragment(foreign_addr);
@@ -2868,7 +2881,9 @@ provide_fragment_and_patch (word_64 jump_addr)
 
 	*(word_32*)jump_addr = compose_branch(jump_addr, native_addr);
 
+#ifdef SYNC_BLOCKS
 	unresolved_jumps[i].addr = 0;
+#endif
 
 	flush_icache();
 #endif
