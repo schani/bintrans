@@ -2116,13 +2116,14 @@ handle_fsubs_insn (word_32 insn, word_32 pc)
 static void
 handle_icbi_insn (word_32 insn, word_32 pc)
 {
-    assert(0);
 }
 
 static void
 handle_isync_insn (word_32 insn, word_32 pc)
 {
-    assert(0);
+    store_all_foreign_regs();
+    emit_load_integer_32(16, pc + 4);
+    emit_isync();
 }
 
 static void
@@ -4558,7 +4559,7 @@ handle_subfic_insn (word_32 insn, word_32 pc)
 static void
 handle_sync_insn (word_32 insn, word_32 pc)
 {
-    assert(0);
+    printf("sync compiled!!!!!!!!!!!\n");
 }
 
 static void

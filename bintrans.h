@@ -53,14 +53,20 @@ void direct_dispatcher (void);
 void indirect_dispatcher (void);
 void system_call_entry (void);
 void c_stub (void);
+void isync_entry (void);
 
 #define PAGE_READABLE         1
 #define PAGE_WRITEABLE        2
 #define PAGE_EXECUTABLE       4
 #define PAGE_MMAPPED          8
-#define PAGE_NATIVE_MMAPPED  16
 
 #define PAGE_PROT_MASK        7
+
+#define PAGE_EMU_FLAGS(f)          ((f) & 15)
+#define PAGE_NATIVE_FLAGS(f)       (((f) >> 4) & 15)
+
+#define PAGE_SET_EMU_FLAGS(f,n)    (((f) & ~15) | (n))
+#define PAGE_SET_NATIVE_FLAGS(f,n) (((f) & ~(15 << 4)) | ((n) << 4))
 
 #define LEVEL1_SIZE      1024
 #define LEVEL1_SHIFT       22
@@ -189,8 +195,9 @@ ssize_t read_all_at (int fd, byte *buf, size_t count, off_t offset);
 
 word_32 copy_file_to_mem (interpreter_t *intp, int fd, word_32 addr, word_32 len, word_32 offset, int reset);
 int prot_to_flags (int prot);
-void mprotect_pages (interpreter_t *intp, word_32 addr, word_32 len, int flags, int add);
-void natively_mprotect_pages (interpreter_t *intp, word_32 addr, word_32 len, int flags);
+void mprotect_pages (interpreter_t *intp, word_32 addr, word_32 len, int flags, int add, int zero);
+void natively_mprotect_pages (interpreter_t *intp, word_32 addr, word_32 len);
+void natively_mprotect_pages_with_flags (interpreter_t *intp, word_32 addr, word_32 len, int flags);
 word_32 mmap_anonymous (interpreter_t *intp, word_32 len, int flags, int fixed, word_32 addr);
 word_32 mmap_file (interpreter_t *intp, word_32 len, int flags, int fixed, word_32 addr, int fd, word_32 offset);
 int is_mapped (interpreter_t *intp, word_32 addr, word_32 len, int *flags);
@@ -212,8 +219,9 @@ void init_compiler (interpreter_t *intp, interpreter_t *dbg_intp);
 void start_compiler (word_32 addr);
 void print_compiler_stats (void);
 
-/* liveness.c */
+extern char *insn_names[];
 
+/* liveness.c */
 #ifdef EMU_I386
 typedef struct
 {

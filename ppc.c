@@ -550,6 +550,7 @@ addoverflow_8 (word_8 op1, word_8 op2)
 #ifdef EMU_PPC
 #include "ppc_interpreter.c"
 #include "ppc_disassembler.c"
+#include "ppc_jump_analyzer.c"
 #endif
 
 #define MAX_FILENAME_LEN      1023
@@ -1165,6 +1166,9 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 	case SYSCALL_MMAP :
 	    ANNOUNCE_SYSCALL("mmap");
+#ifdef SYSCALL_OUTPUT
+	    printf("start: 0x%08x  length: 0x%x\n", arg1, arg2);
+#endif
 	    {
 		word_32 len = PPC_PAGE_ALIGN(arg2);
 		word_32 addr;
@@ -1201,6 +1205,9 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 	case SYSCALL_MUNMAP :
 	    ANNOUNCE_SYSCALL("munmap");
+#ifdef SYSCALL_OUTPUT
+	    printf("start: 0x%08x  length: 0x%x\n", arg1, arg2);
+#endif
 	    {
 		word_32 mem_len;
 
@@ -1208,8 +1215,8 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 		mem_len = PPC_PAGE_ALIGN(arg2);
 
-		mprotect_pages(intp, arg1, mem_len, 0, 0);
-		natively_mprotect_pages(intp, arg1, mem_len, 0);
+		mprotect_pages(intp, arg1, mem_len, 0, 0, 0);
+		natively_mprotect_pages(intp, arg1, mem_len);
 
 		result = 0;
 	    }
@@ -1482,8 +1489,8 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 		assert(is_mapped(intp, arg1, mem_len, 0));
 
-		mprotect_pages(intp, arg1, mem_len, flags | PAGE_MMAPPED, 0);
-		natively_mprotect_pages(intp, arg1, mem_len, flags);
+		mprotect_pages(intp, arg1, mem_len, flags | PAGE_MMAPPED, 0, 0);
+		natively_mprotect_pages(intp, arg1, mem_len);
 
 		result = 0;
 	    }
@@ -1659,6 +1666,9 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 	case SYSCALL_MREMAP :
 	    ANNOUNCE_SYSCALL("mremap");
+#ifdef SYSCALL_OUTPUT
+	    printf("old addr: 0x%08x  old size: 0x%x  new_size 0x%x\n", arg1, arg2, arg3);
+#endif
 	    {
 		word_32 old_len, new_len;
 		int flags;
@@ -1690,8 +1700,8 @@ process_system_call (interpreter_t *intp, word_32 number,
 		    }
 		    else if (old_len > new_len)
 		    {
-			mprotect_pages(intp, arg1 + new_len, old_len - new_len, 0, 0);
-			natively_mprotect_pages(intp, arg1 + new_len, old_len - new_len, 0);
+			mprotect_pages(intp, arg1 + new_len, old_len - new_len, 0, 0, 0);
+			natively_mprotect_pages(intp, arg1 + new_len, old_len - new_len);
 
 			result = arg1;
 		    }
@@ -2266,7 +2276,7 @@ show_segments (interpreter_t *intp)
 	    if (intp->pagetable[l1] == 0)
 		page_flags = 0;
 	    else
-		page_flags = intp->pagetable[l1][l2].flags & PAGE_PROT_MASK;
+		page_flags = PAGE_EMU_FLAGS(intp->pagetable[l1][l2].flags) & PAGE_PROT_MASK;
 
 	    if (page_flags != flags)
 	    {
@@ -2645,12 +2655,11 @@ read_elf_segment (interpreter_t *intp, int fd, Elf32_Phdr *phdr, word_32 bias)
     mem_start = PPC_PAGE_ALIGN_DOWN(phdr->p_vaddr + bias);
     mem_len = PPC_PAGE_ALIGN(phdr->p_vaddr + bias + phdr->p_memsz) - mem_start;
 
-    mprotect_pages(intp, mem_start, mem_len, flags | PAGE_MMAPPED, 1);
-    natively_mprotect_pages(intp, mem_start, mem_len, PAGE_WRITEABLE);
+    mprotect_pages(intp, mem_start, mem_len, flags | PAGE_MMAPPED, 1, 1);
+    natively_mprotect_pages_with_flags(intp, mem_start, mem_len, PAGE_WRITEABLE | PAGE_MMAPPED);
     read_len = copy_file_to_mem(intp, fd, phdr->p_vaddr + bias, phdr->p_filesz, phdr->p_offset, 0);
     assert(read_len == phdr->p_filesz);
-    natively_mprotect_pages(intp, mem_start, mem_len, mem_flags_union(intp, mem_start, mem_len));
-				/* FIXME: this is not correct.  we may end up with pages with too many access rights */
+    natively_mprotect_pages(intp, mem_start, mem_len);
 
     if (phdr->p_type == PT_LOAD && (phdr->p_flags & (PF_W | PF_R)) == (PF_W | PF_R) && bias == 0)
 	intp->data_segment_top = phdr->p_vaddr + phdr->p_memsz;
@@ -2766,8 +2775,9 @@ main (int argc, char *argv[])
 	entry = ehdr.e_entry;
 
 #ifdef NEED_INTERPRETER
-    mprotect_pages(&interpreter, STACK_TOP - STACK_SIZE * PPC_PAGE_SIZE, STACK_SIZE * PPC_PAGE_SIZE, PAGE_READABLE | PAGE_WRITEABLE | PAGE_MMAPPED, 0);
-    natively_mprotect_pages(&interpreter, STACK_TOP - STACK_SIZE * PPC_PAGE_SIZE, STACK_SIZE * PPC_PAGE_SIZE, PAGE_READABLE | PAGE_WRITEABLE);
+    mprotect_pages(&interpreter, STACK_TOP - STACK_SIZE * PPC_PAGE_SIZE, STACK_SIZE * PPC_PAGE_SIZE,
+		   PAGE_READABLE | PAGE_WRITEABLE | PAGE_MMAPPED, 0, 1);
+    natively_mprotect_pages(&interpreter, STACK_TOP - STACK_SIZE * PPC_PAGE_SIZE, STACK_SIZE * PPC_PAGE_SIZE);
 
     assert(interpreter.data_segment_top != 0);
 
@@ -2778,12 +2788,13 @@ main (int argc, char *argv[])
     interpreter.pc = entry;
 #endif
 #ifdef NEED_COMPILER
-    mprotect_pages(&compiler, STACK_TOP - STACK_SIZE * PPC_PAGE_SIZE, STACK_SIZE * PPC_PAGE_SIZE, PAGE_READABLE | PAGE_WRITEABLE | PAGE_MMAPPED, 0);
-    natively_mprotect_pages(&compiler, STACK_TOP - STACK_SIZE * PPC_PAGE_SIZE, STACK_SIZE * PPC_PAGE_SIZE, PAGE_READABLE | PAGE_WRITEABLE);
+    mprotect_pages(&compiler, STACK_TOP - STACK_SIZE * PPC_PAGE_SIZE, STACK_SIZE * PPC_PAGE_SIZE,
+		   PAGE_READABLE | PAGE_WRITEABLE | PAGE_MMAPPED, 0, 1);
+    natively_mprotect_pages(&compiler, STACK_TOP - STACK_SIZE * PPC_PAGE_SIZE, STACK_SIZE * PPC_PAGE_SIZE);
 
     assert(compiler.data_segment_top != 0);
 
-    stack_bottom = setup_stack(&compiler, STACK_TOP, ppc_argv, elf_interpreter != 0 ? &ehdr : 0);
+    stack_bottom = setup_stack(&compiler, STACK_TOP, ppc_argv, elf_interpreter != 0 ? &ehdr : 0, load_addr);
     assert((stack_bottom & 15) == 0);
 
     setup_registers(&compiler, stack_bottom);

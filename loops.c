@@ -130,14 +130,19 @@ compile_block_or_trace (fragment_hash_entry_t *entry)
 	    }
 	}
 
-    if (best_length <= 0)
+    if (best_length < 0)
     {
-	/* printf("compiling basic block at %08x\n", entry->foreign_addr); */
-	return entry->native_addr = compile_basic_block(entry->foreign_addr);
+	printf("compiling basic block at %08x\n", entry->foreign_addr);
+	return entry->native_addr = compile_basic_block(entry->foreign_addr, 0);
+    }
+    else if (best_length == 0)
+    {
+	printf("compiling trace at %08x with length 0\n", entry->foreign_addr);
+	return entry->native_addr = compile_basic_block(entry->foreign_addr, 1);
     }
     else
     {
-	/* printf("compiling trace at %08x with length %d, bits %x\n", entry->foreign_addr, best_length, best_bits); */
+	printf("compiling trace at %08x with length %d, bits %x\n", entry->foreign_addr, best_length, best_bits);
 	return entry->native_addr = compile_trace(entry->foreign_addr, best_length, best_bits);
     }
 }
@@ -161,7 +166,7 @@ loop_profiler (interpreter_t *intp)
     word_32 target;
     int can_jump_indirectly, can_fall_through;
 
-#ifdef COLLECT_STATS
+#if defined(COLLECT_STATS) && defined(NEED_COMPILER)
     ++num_loop_profiler_calls;
 #endif
 

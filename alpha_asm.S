@@ -146,6 +146,7 @@
 	.globl	leading_zeros
 	.globl	handle_compiler_system_call
 	.globl	fragment_hash_table
+	.globl	isync_handler
 
 	
 .text
@@ -301,6 +302,41 @@ start_execution:
 
 	jmp	$31,(a0)
 	.end	start_execution
+
+
+	# we enter here from the generated machine code.
+	# a0 holds the address of the emulated instruction
+	# directly following the isync instruction.  we simply
+	# call the c isync handler.  it returns the native
+	# address where we must resume execution.
+	.align	4
+	.globl	isync_entry
+	.ent	isync_entry
+isync_entry:
+	ldgp	gp,0(pv)
+
+#ifdef EMU_I386
+	lda	a1,constant_area
+	STORE_NATIVE_HOST_REGISTERS(a1)
+#else
+#ifdef FAST_PPC_FPR
+	lda	a1,constant_area
+	STORE_NATIVE_PPC_FPRS(a1)
+#endif
+#endif
+
+	jsr	ra,isync_handler
+	ldgp	gp,0(ra)
+	# v0 now holds the next native address
+
+	lda	pv,constant_area
+
+	LOAD_NATIVE_HOST_REGISTERS
+	LOAD_NATIVE_PPC_FPRS
+
+	jmp	$31,(v0)
+	.end	isync_handler
+
 
 	# this calls a c function.  the address of the c function is
 	# passed in $0.  arguments to the c function are passed in the

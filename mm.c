@@ -97,13 +97,28 @@ get_page_flags (interpreter_t *intp, word_32 addr)
     return page->flags;
 }
 
+int
+get_emu_page_flags (interpreter_t *intp, word_32 addr)
+{
+    int flags = 0;
+    word_32 a;
+
+    for (a = addr; a < addr + NATIVE_PAGE_SIZE; a += PPC_PAGE_SIZE)
+	flags |= get_page_flags(intp, a);
+
+    return flags;
+}
+
 void
-mprotect_pages (interpreter_t *intp, word_32 addr, word_32 len, int flags, int add)
+mprotect_pages (interpreter_t *intp, word_32 addr, word_32 len, int flags, int add, int zero)
 {
     word_32 num_pages;
     word_32 l1, l2;
     word_32 i;
     page_t *level1;
+
+    if (zero)
+	assert(flags & PAGE_MMAPPED);
 
     assert((addr & PPC_PAGE_MASK) == 0);
     assert((len & PPC_PAGE_MASK) == 0);
@@ -120,7 +135,8 @@ mprotect_pages (interpreter_t *intp, word_32 addr, word_32 len, int flags, int a
     i = 0;
     while (i < num_pages)
     {
-	int newflags;
+	int old_flags, new_flags;
+	word_32 native_page_addr;
 
 	if (level1 == 0)
 	{
@@ -140,37 +156,40 @@ mprotect_pages (interpreter_t *intp, word_32 addr, word_32 len, int flags, int a
 	    }
 	}
 
+	native_page_addr = ((l1 << LEVEL1_SHIFT) | (l2 << LEVEL2_SHIFT)) & ~NATIVE_PAGE_MASK;
+	old_flags = get_page_flags(intp, native_page_addr);
+
 	if (add)
-	    newflags = level1[l2].flags |= flags;
+	    new_flags = level1[l2].flags |= flags;
 	else
-	    newflags = level1[l2].flags = flags;
+	    new_flags = level1[l2].flags = PAGE_SET_EMU_FLAGS(level1[l2].flags, flags);
 
 	if (intp->direct_memory)
+	{
 	    level1[l2].mem = (byte*)REAL_ADDR((l1 << LEVEL1_SHIFT) | (l2 << LEVEL2_SHIFT));
+	    if ((PAGE_NATIVE_FLAGS(old_flags) & PAGE_MMAPPED) && zero)
+	    {
+		if (!(PAGE_NATIVE_FLAGS(old_flags) & PAGE_WRITEABLE))
+		    natively_mprotect_pages_with_flags(intp, native_page_addr, NATIVE_PAGE_SIZE, PAGE_WRITEABLE | PAGE_MMAPPED);
+		memset(level1[l2].mem, 0, PPC_PAGE_SIZE);
+	    }
+	}
 	else
 	{
-	    if (newflags == 0 && level1[l2].mem != 0)
+	    if (new_flags == 0 && level1[l2].mem != 0)
 	    {
 		free(level1[l2].mem);
 		level1[l2].mem = 0;
 	    }
-	    else if (newflags != 0 && level1[l2].mem == 0)
+	    else if (new_flags != 0 && level1[l2].mem == 0)
 	    {
-		assert(newflags & PAGE_MMAPPED);
+		assert(new_flags & PAGE_MMAPPED);
 
 		level1[l2].mem = (byte*)malloc(PPC_PAGE_SIZE);
 	    }
 
-	    if (newflags & PAGE_MMAPPED)
-	    {
-		if (intp->direct_memory)
-		{
-		    if (get_page_flags(intp, ((l1 << LEVEL1_SHIFT) | (l2 << LEVEL2_SHIFT)) & ~NATIVE_PAGE_MASK) & PAGE_NATIVE_MMAPPED)
-			memset(level1[l2].mem, 0, PPC_PAGE_SIZE);
-		}
-		else
-		    memset(level1[l2].mem, 0, PPC_PAGE_SIZE);
-	    }
+	    if (zero)
+		memset(level1[l2].mem, 0, PPC_PAGE_SIZE);
 	}
 
 	++i;
@@ -185,7 +204,50 @@ mprotect_pages (interpreter_t *intp, word_32 addr, word_32 len, int flags, int a
 }
 
 void
-natively_mprotect_pages (interpreter_t *intp, word_32 addr, word_32 len, int flags)
+natively_mmap_pages (interpreter_t *intp, word_32 addr, word_32 len)
+{
+    word_32 first_page_addr, last_page_addr;
+    word_32 start, end;
+
+    first_page_addr = addr & ~NATIVE_PAGE_MASK;
+    last_page_addr = (addr + len - 1) & ~NATIVE_PAGE_MASK;
+
+    start = first_page_addr;
+    for (;;)
+    {
+	void *result;
+
+	do
+	{
+	    if (!(PAGE_NATIVE_FLAGS(get_page_flags(intp, start)) & PAGE_MMAPPED))
+		break;
+
+	    start += NATIVE_PAGE_SIZE;
+	} while (start <= last_page_addr);
+
+	if (start > last_page_addr)
+	    break;
+
+	for (end = start + NATIVE_PAGE_SIZE; end <= last_page_addr; end += NATIVE_PAGE_SIZE)
+	    if (PAGE_NATIVE_FLAGS(get_page_flags(intp, end)) & PAGE_MMAPPED)
+		break;
+
+	result = mmap((void*)REAL_ADDR(start), end - start, 0, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	assert(result != 0);
+
+	for (; start < end; start += NATIVE_PAGE_SIZE)
+	{
+	    int old_flags = get_page_flags(intp, start);
+
+	    get_page(intp, start)->flags = PAGE_SET_NATIVE_FLAGS(old_flags, PAGE_MMAPPED);
+	}
+
+	assert(start == end);
+    }
+}
+
+void
+natively_mprotect_pages (interpreter_t *intp, word_32 addr, word_32 len)
 {
     if (intp->direct_memory)
     {
@@ -198,95 +260,92 @@ natively_mprotect_pages (interpreter_t *intp, word_32 addr, word_32 len, int fla
 	start = first_page_addr;
 	for (;;)
 	{
+	    int flags;
+
 	    do
 	    {
-		if ((flags != 0 && !(get_page_flags(intp, start) & PAGE_NATIVE_MMAPPED))
-		    || (flags == 0 && (get_page_flags(intp, start) & PAGE_NATIVE_MMAPPED)))
+		flags = get_emu_page_flags(intp, start);
+
+		if (PAGE_EMU_FLAGS(flags) != PAGE_NATIVE_FLAGS(flags))
 		    break;
+
 		start += NATIVE_PAGE_SIZE;
 	    } while (start <= last_page_addr);
 
 	    if (start > last_page_addr)
 		break;
 
-	    end = start;
-	    while (end <= last_page_addr)
+	    for (end = start + NATIVE_PAGE_SIZE; end <= last_page_addr; end += NATIVE_PAGE_SIZE)
 	    {
-		if (flags != 0 && (get_page_flags(intp, end) & PAGE_NATIVE_MMAPPED))
-		    break;
-		else
-		    get_page(intp, end)->flags &= ~PAGE_NATIVE_MMAPPED;
+		int this_page_emu_flags = get_emu_page_flags(intp, end);
 
-		if (flags == 0 && !(get_page_flags(intp, end) & PAGE_NATIVE_MMAPPED))
+		if (PAGE_EMU_FLAGS(this_page_emu_flags) != PAGE_EMU_FLAGS(flags)
+		    || (PAGE_NATIVE_FLAGS(this_page_emu_flags) & PAGE_MMAPPED) != (PAGE_NATIVE_FLAGS(flags) & PAGE_MMAPPED))
 		    break;
-		else
-		    get_page(intp, end)->flags |= PAGE_NATIVE_MMAPPED;
-
-		end += NATIVE_PAGE_SIZE;
 	    }
 
-	    if (flags == 0)
+	    if ((PAGE_EMU_FLAGS(flags) & PAGE_MMAPPED) && !(PAGE_NATIVE_FLAGS(flags) & PAGE_MMAPPED))
+	    {
+		void *result;
+
+		result = mmap((void*)REAL_ADDR(start), end - start, flags_to_prot(PAGE_EMU_FLAGS(flags)),
+			      MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		assert(result != 0);
+	    }
+	    else if (!(PAGE_EMU_FLAGS(flags) & PAGE_MMAPPED) && (PAGE_NATIVE_FLAGS(flags) & PAGE_MMAPPED))
 	    {
 		int result;
 
 		result = munmap((void*)REAL_ADDR(start), end - start);
 		assert(result == 0);
 	    }
-	    else
-	    {
-		void *result;
 
-		result = mmap((void*)REAL_ADDR(start), end - start, flags_to_prot(flags), MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-		assert(result != 0);
-	    }
-
-	    start = end + NATIVE_PAGE_SIZE;
-	}
-
-	if (flags != 0)
-	{
-	    if (NATIVE_PAGE_SIZE <= PPC_PAGE_SIZE)
+	    if (PAGE_EMU_FLAGS(flags) & PAGE_MMAPPED)
 	    {
 		int result;
 
-		result = mprotect((void*)REAL_ADDR(addr), len, flags_to_prot(flags));
+		result = mprotect((void*)REAL_ADDR(start), end - start, flags_to_prot(PAGE_EMU_FLAGS(flags)));
 		assert(result == 0);
 	    }
-	    else
+
+	    for (; start < end; start += NATIVE_PAGE_SIZE)
 	    {
-		int first_page_flags = flags, last_page_flags = flags;
-		word_32 a;
-		int result;
+		int old_flags = get_page_flags(intp, start);
 
-		for (a = first_page_addr; a < first_page_addr + NATIVE_PAGE_SIZE; a += PPC_PAGE_SIZE)
-		    first_page_flags |= get_page_flags(intp, a);
-
-		if (first_page_addr != last_page_addr)
-		    for (a = last_page_addr; a < last_page_addr + NATIVE_PAGE_SIZE; a += PPC_PAGE_SIZE)
-			last_page_flags |= get_page_flags(intp, a);
-
-		/* first page */
-		result = mprotect((void*)REAL_ADDR(first_page_addr), NATIVE_PAGE_SIZE, flags_to_prot(first_page_flags));
-		assert(result == 0);
-
-		/* the bulk */
-		if (first_page_addr + NATIVE_PAGE_SIZE < last_page_addr)
-		{
-		    result = mprotect((void*)REAL_ADDR(first_page_addr + NATIVE_PAGE_SIZE), last_page_addr - first_page_addr - NATIVE_PAGE_SIZE,
-				      flags_to_prot(flags));
-		    assert(result == 0);
-		}
-
-		/* last page */
-		if (first_page_addr != last_page_addr)
-		{
-		    result = mprotect((void*)REAL_ADDR(last_page_addr), NATIVE_PAGE_SIZE, flags_to_prot(last_page_flags));
-		    assert(result == 0);
-		}
+		get_page(intp, start)->flags = PAGE_SET_NATIVE_FLAGS(old_flags, PAGE_EMU_FLAGS(flags));
 	    }
+
+	    assert(start == end);
 	}
     }
 }
+
+void
+natively_mprotect_pages_with_flags (interpreter_t *intp, word_32 addr, word_32 len, int flags)
+{
+    if (intp->direct_memory)
+    {
+	word_32 first_page_addr, last_page_addr;
+	word_32 a;
+	int result;
+
+	natively_mmap_pages(intp, addr, len);
+
+	first_page_addr = addr & ~NATIVE_PAGE_MASK;
+	last_page_addr = (addr + len - 1) & ~NATIVE_PAGE_MASK;
+
+	for (a = first_page_addr; a <= last_page_addr; a += NATIVE_PAGE_SIZE)
+	{
+	    int old_flags = get_page_flags(intp, a);
+
+	    get_page(intp, a)->flags = PAGE_SET_NATIVE_FLAGS(old_flags, flags);
+	}
+
+	result = mprotect((void*)REAL_ADDR(first_page_addr), last_page_addr + NATIVE_PAGE_SIZE - first_page_addr, flags_to_prot(flags));
+	assert(result == 0);
+    }
+}
+
 
 void
 segfault (interpreter_t *intp, word_32 addr)
@@ -628,7 +687,7 @@ first_fit_addr (interpreter_t *intp, word_32 start, word_32 len)
 }
 
 word_32
-mmap_segment (interpreter_t *intp, word_32 len, int flags, int fixed, word_32 addr)
+mmap_segment (interpreter_t *intp, word_32 len, int flags, int fixed, word_32 addr, int zero)
 {
     word_32 used_addr;
 
@@ -642,7 +701,7 @@ mmap_segment (interpreter_t *intp, word_32 len, int flags, int fixed, word_32 ad
 
     assert(used_addr != 0);
 
-    mprotect_pages(intp, used_addr, len, flags | PAGE_MMAPPED, 0);
+    mprotect_pages(intp, used_addr, len, flags | PAGE_MMAPPED, 0, zero);
 
     return used_addr;
 }
@@ -650,10 +709,10 @@ mmap_segment (interpreter_t *intp, word_32 len, int flags, int fixed, word_32 ad
 word_32
 mmap_anonymous (interpreter_t *intp, word_32 len, int flags, int fixed, word_32 addr)
 {
-    addr = mmap_segment(intp, len, flags | PAGE_MMAPPED, fixed, addr);
+    addr = mmap_segment(intp, len, flags | PAGE_MMAPPED, fixed, addr, 1);
 
     if (addr != (word_32)-1)
-	natively_mprotect_pages(intp, addr, len, flags);
+	natively_mprotect_pages(intp, addr, len);
     return addr;
 }
 
@@ -748,16 +807,16 @@ copy_file_to_mem (interpreter_t *intp, int fd, word_32 addr, word_32 len, word_3
 word_32
 mmap_file (interpreter_t *intp, word_32 len, int flags, int fixed, word_32 addr, int fd, word_32 offset)
 {
-    addr = mmap_segment(intp, len, flags, fixed, addr);
+    addr = mmap_segment(intp, len, flags, fixed, addr, 0);
 
     if (addr == (word_32)-1)
 	return addr;
 
-    natively_mprotect_pages(intp, addr, len, PAGE_WRITEABLE);
+    natively_mprotect_pages_with_flags(intp, addr, len, PAGE_WRITEABLE | PAGE_MMAPPED);
 
     copy_file_to_mem(intp, fd, addr, len, offset, 1);
 
-    natively_mprotect_pages(intp, addr, len, flags);
+    natively_mprotect_pages(intp, addr, len);
 
     return addr;
 }

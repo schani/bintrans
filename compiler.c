@@ -53,31 +53,32 @@
 #define DIRECT_DISPATCHER_CONST    (NUM_REG_CONSTANTS + 0)
 #define INDIRECT_DISPATCHER_CONST  (NUM_REG_CONSTANTS + 2)
 #define SYSTEM_CALL_CONST          (NUM_REG_CONSTANTS + 4)
-#define C_STUB_CONST               (NUM_REG_CONSTANTS + 6)
-#define LEADING_ZEROS_CONST        (NUM_REG_CONSTANTS + 8)
-#define DIV_UNSIGNED_64_CONST      (NUM_REG_CONSTANTS + 10)
-#define DIV_SIGNED_64_CONST        (NUM_REG_CONSTANTS + 12)
-#define MOD_UNSIGNED_64_CONST      (NUM_REG_CONSTANTS + 14)
-#define MOD_SIGNED_64_CONST        (NUM_REG_CONSTANTS + 16)
-#define DIV_UNSIGNED_32_CONST      (NUM_REG_CONSTANTS + 18)
-#define DIV_SIGNED_32_CONST        (NUM_REG_CONSTANTS + 20)
-#define MOD_UNSIGNED_32_CONST      (NUM_REG_CONSTANTS + 22)
-#define MOD_SIGNED_32_CONST        (NUM_REG_CONSTANTS + 24)
-#define DIV_UNSIGNED_16_CONST      (NUM_REG_CONSTANTS + 26)
-#define DIV_SIGNED_16_CONST        (NUM_REG_CONSTANTS + 28)
-#define MOD_UNSIGNED_16_CONST      (NUM_REG_CONSTANTS + 30)
-#define MOD_SIGNED_16_CONST        (NUM_REG_CONSTANTS + 32)
-#define DIV_UNSIGNED_8_CONST       (NUM_REG_CONSTANTS + 34)
-#define DIV_SIGNED_8_CONST         (NUM_REG_CONSTANTS + 36)
-#define MOD_UNSIGNED_8_CONST       (NUM_REG_CONSTANTS + 38)
-#define MOD_SIGNED_8_CONST         (NUM_REG_CONSTANTS + 40)
+#define ISYNC_CONST                (NUM_REG_CONSTANTS + 6)
+#define C_STUB_CONST               (NUM_REG_CONSTANTS + 8)
+#define LEADING_ZEROS_CONST        (NUM_REG_CONSTANTS + 10)
+#define DIV_UNSIGNED_64_CONST      (NUM_REG_CONSTANTS + 12)
+#define DIV_SIGNED_64_CONST        (NUM_REG_CONSTANTS + 14)
+#define MOD_UNSIGNED_64_CONST      (NUM_REG_CONSTANTS + 16)
+#define MOD_SIGNED_64_CONST        (NUM_REG_CONSTANTS + 18)
+#define DIV_UNSIGNED_32_CONST      (NUM_REG_CONSTANTS + 20)
+#define DIV_SIGNED_32_CONST        (NUM_REG_CONSTANTS + 22)
+#define MOD_UNSIGNED_32_CONST      (NUM_REG_CONSTANTS + 24)
+#define MOD_SIGNED_32_CONST        (NUM_REG_CONSTANTS + 26)
+#define DIV_UNSIGNED_16_CONST      (NUM_REG_CONSTANTS + 28)
+#define DIV_SIGNED_16_CONST        (NUM_REG_CONSTANTS + 30)
+#define MOD_UNSIGNED_16_CONST      (NUM_REG_CONSTANTS + 32)
+#define MOD_SIGNED_16_CONST        (NUM_REG_CONSTANTS + 34)
+#define DIV_UNSIGNED_8_CONST       (NUM_REG_CONSTANTS + 36)
+#define DIV_SIGNED_8_CONST         (NUM_REG_CONSTANTS + 38)
+#define MOD_UNSIGNED_8_CONST       (NUM_REG_CONSTANTS + 40)
+#define MOD_SIGNED_8_CONST         (NUM_REG_CONSTANTS + 42)
 #ifdef COUNT_INSNS
-#define EMULATED_INSNS_CONST       (NUM_REG_CONSTANTS + 42)
-#define NATIVE_INSNS_CONST         (NUM_REG_CONSTANTS + 44)
-#define FRAGMENTS_CONST            (NUM_REG_CONSTANTS + 46)
-#define PREMATURE_EXITS_CONST      (NUM_REG_CONSTANTS + 48)
-#define END_EXITS_CONST            (NUM_REG_CONSTANTS + 50)
-#define EMULATED_TRACE_INSNS_CONST (NUM_REG_CONSTANTS + 52)
+#define EMULATED_INSNS_CONST       (NUM_REG_CONSTANTS + 44)
+#define NATIVE_INSNS_CONST         (NUM_REG_CONSTANTS + 46)
+#define FRAGMENTS_CONST            (NUM_REG_CONSTANTS + 48)
+#define PREMATURE_EXITS_CONST      (NUM_REG_CONSTANTS + 50)
+#define END_EXITS_CONST            (NUM_REG_CONSTANTS + 52)
+#define EMULATED_TRACE_INSNS_CONST (NUM_REG_CONSTANTS + 54)
 #endif
 
 typedef struct
@@ -151,6 +152,7 @@ word_32 *emit_loc;
 word_64 fragment_start;
 
 int num_constants = NUM_EMU_REGISTERS * 2 + 2;
+int num_constants_init;
 word_32 constant_area[NUM_EMU_REGISTERS * 2 + 2 + MAX_CONSTANTS];
 
 word_64 unresolved_jump_addrs[MAX_UNRESOLVED_JUMPS];
@@ -733,6 +735,15 @@ emit_indirect_jump (void)
 }
 
 void
+emit_isync (void)
+{
+    emit(COMPOSE_LDQ(PROCEDURE_VALUE_REG, ISYNC_CONST * 4, CONSTANT_AREA_REG));
+    emit(COMPOSE_JMP(31, PROCEDURE_VALUE_REG));
+
+    have_jumped = 1;
+}
+
+void
 emit_system_call (void)
 {
     emit(COMPOSE_LDQ(PROCEDURE_VALUE_REG, SYSTEM_CALL_CONST * 4, CONSTANT_AREA_REG));
@@ -865,7 +876,6 @@ emit_load_mem_64 (reg_t value_reg, reg_t addr_reg)
 #else
 #include "ppc_to_alpha_compiler.c"
 #endif
-#include "ppc_jump_analyzer.c"
 #elif defined(EMU_I386)
 #include "i386.h"
 #include "i386_compiler.c"
@@ -1122,6 +1132,7 @@ init_compiler (interpreter_t *intp, interpreter_t *dbg_intp)
     add_const_64((word_64)direct_dispatcher);
     add_const_64((word_64)indirect_dispatcher);
     add_const_64((word_64)system_call_entry);
+    add_const_64((word_64)isync_entry);
     add_const_64((word_64)c_stub);
     add_const_64((word_64)count_leading_zeros);
     add_const_64((word_64)div_unsigned_64);
@@ -1156,6 +1167,8 @@ init_compiler (interpreter_t *intp, interpreter_t *dbg_intp)
 	insn_infos[i].num_generated_consts = 0;
     }
 #endif
+
+    num_constants_init = num_constants;
 }
 
 void
@@ -1301,12 +1314,12 @@ patch_mem_disp (word_32 insn, word_16 val)
     return (insn & 0xffff0000) | val;
 }
 
-#ifdef COUNT_INSNS
+#if defined(COLLECT_STATS) || defined(COUNT_INSNS)
 unsigned long old_num_translated_insns;
 #endif
 
 word_64
-compile_basic_block (word_32 addr)
+compile_basic_block (word_32 addr, int as_trace)
 {
     word_64 native_addr;
 #ifdef DUMP_CODE
@@ -1328,7 +1341,13 @@ compile_basic_block (word_32 addr)
 
 #ifdef COUNT_INSNS
     emit_const_add(FRAGMENTS_CONST, 1, 0);
-    emit_const_add(EMULATED_INSNS_CONST, 0, &emulated_lda_insn);
+    if (as_trace)
+    {
+	emit_const_add(END_EXITS_CONST, 1, 0);
+	emit_const_add(EMULATED_TRACE_INSNS_CONST, 0, &emulated_lda_insn);
+    }
+    else
+	emit_const_add(EMULATED_INSNS_CONST, 0, &emulated_lda_insn);
     emit_const_add(NATIVE_INSNS_CONST, 0, &native_lda_insn);
 
     old_emit_loc = emit_loc;
@@ -1358,7 +1377,10 @@ compile_basic_block (word_32 addr)
 #endif
 
 #ifdef COLLECT_STATS
-    ++num_translated_blocks;
+    if (as_trace)
+	++num_translated_traces;
+    else
+	++num_translated_blocks;
 #endif
 
 #ifdef COUNT_INSNS
@@ -1397,7 +1419,7 @@ compile_trace (word_32 addr, int length, int bits)
     word_64 dump_start;
 #endif
 
-#ifdef COUNT_INSNS
+#ifdef COLLECT_STATS
     old_num_translated_insns = num_translated_insns;
 #endif
 
@@ -1547,7 +1569,7 @@ interpret_until_threshold (word_32 addr)
 	    ++entry->times_executed;
 	    if (entry->times_executed > COMPILER_THRESHOLD)
 	    {
-		entry->native_addr = compile_basic_block(compiler_intp->pc);
+		entry->native_addr = compile_basic_block(compiler_intp->pc, 0);
 		move_regs_interpreter_to_compiler(compiler_intp);
 		return entry->native_addr;
 	    }
@@ -1598,7 +1620,7 @@ provide_fragment (word_32 addr)
     return interpret_until_threshold(addr);
 #endif
 #else
-    native_addr = compile_basic_block(addr);
+    native_addr = compile_basic_block(addr, 0);
     enter_fragment(addr, native_addr);
 
     return native_addr;
@@ -1666,25 +1688,49 @@ provide_fragment_and_patch (word_64 jump_addr)
     }
 }
 
-void
-start_compiler (word_32 addr)
+word_64
+compile_and_return_first_native_addr (word_32 addr, int regs_in_compiler)
 {
     word_64 native_addr;
 
+    if (!regs_in_compiler)
+	move_regs_interpreter_to_compiler(compiler_intp);
+
 #ifdef COMPILER_THRESHOLD
 #ifdef PROFILE_LOOPS
-    move_regs_interpreter_to_compiler(compiler_intp);
     native_addr = loop_profiler(compiler_intp, addr);
 #else
-    move_regs_interpreter_to_compiler(compiler_intp);
     native_addr = interpret_until_threshold(addr);
 #endif
 #else
-    native_addr = compile_basic_block(addr);
-    move_regs_interpreter_to_compiler(compiler_intp);
+    native_addr = compile_basic_block(addr, 0);
 #endif
 
-    start_execution(native_addr); /* this call never returns */
+    return native_addr;
+}
+
+void
+start_compiler (word_32 addr)
+{
+    start_execution(compile_and_return_first_native_addr(addr, 0)); /* this call never returns */
+}
+
+word_64
+isync_handler (word_32 addr)
+{
+    int i;
+
+    printf("isync!!!!!!!!!!!!!!!!\n");
+
+    num_constants = num_constants_init;
+    emit_loc = code_area;
+
+    for (i = 0; i < MAX_UNRESOLVED_JUMPS; ++i)
+	unresolved_jump_addrs[i] = 0;
+
+    init_fragment_hash();
+
+    return compile_and_return_first_native_addr(addr, 1);
 }
 
 void
