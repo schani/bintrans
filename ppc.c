@@ -382,7 +382,7 @@ handle_system_call (void)
 	    break;
 
 	case 4 :
-	    printf("write\n");
+	    /* printf("write\n"); */
 	    {
 		byte *mem = (byte*)malloc(regs_GPR[5]);
 		word i;
