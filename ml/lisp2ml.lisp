@@ -238,6 +238,12 @@
 		(format nil "Assign (GuestRegister (~A, Int), ~A)"
 			(convert-int-const reg)
 			(convert value)))
+	       ((store ?byte-order ?width ?addr ?value)
+		(format nil "Store (~A, ~A, ~A, ~A)"
+			(convert-byte-order byte-order)
+			(convert-width width)
+			(convert addr)
+			(convert value)))
 	       ((let (?name ?width ?rhs) ?stmt)
 		(format nil "Let (\"~A\", ~A, ~A, ~A)"
 			(dcs name) width (convert rhs)
@@ -401,6 +407,15 @@
 					(dcs reg-name) value-string)
 				(cons (list reg-name 'reg) bindings))))
 		    (error "expr ~A is not an lhs" reg)))
+	       ((store ?byte-order ?width ?addr ?value)
+		(let-bindings bindings ((byte-order-string (convert-byte-order byte-order))
+					(width-string (convert-width width))
+					(addr-string (convert addr))
+					(value-string (convert value)))
+		  (values (format nil "StorePattern (~A, ~A, ~A, ~A)"
+				  byte-order-string width-string
+				  addr-string value-string)
+			  bindings)))
 	       ((?op . ?args)
 		(multiple-value-bind (ml-name kind-ml-name num-args need-width)
 		    (lookup-operator op)

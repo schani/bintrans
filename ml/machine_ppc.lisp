@@ -23,7 +23,7 @@
 (setq *insns* '())
 (setq *machine-macros* '())
 
-(deffields ((rs 5) (rd 5) (ra 5) (rb 5) (sh 5) (mb 5) (me 5) (simm 16) (uimm 16) (d 16)))
+(deffields ((rs 5) (rd 5) (ra 5) (rb 5) (srs 5) (sh 5) (mb 5) (me 5) (simm 16) (uimm 16) (d 16)))
 
 ;;;; machine macros
 
@@ -259,9 +259,101 @@
 		   (ppc-mask mb me))))
 
 ;; sc
-;; slw
+
+(definsn slw ()
+  (set ra (shiftl (register rs) (bit-and (register rb) #x3f))))
+
 ;; sraw
 ;; srawi
 
 (definsn srw ()
   (set ra (lshiftr 4 (register rs) (bit-and (register rb) #x1f))))
+
+(definsn stb ((ra 0 32) (d (0)))
+  (store big-endian 1 (if (int-zero-p 8 ra)
+			  (sex 2 d)
+			  (+i (register ra) (sex 2 d)))
+	 (register srs)))
+
+(definsn stbu ((d (0)))
+  (seq
+   (store big-endian 1 (+i (register ra) (sex 2 d)) (register srs))
+   (set ra (+i (register ra) (sex 2 d)))))
+
+;; stbux
+
+(definsn stbx ((ra 0 32))
+  (store big-endian 1 (if (int-zero-p 8 ra)
+			  (register rb)
+			  (+i (register ra) (register rb)))
+	 (register srs)))
+
+(definsn sth ((ra 0 32) (d (0)))
+  (store big-endian 2 (if (int-zero-p 8 ra)
+			  (sex 2 d)
+			  (+i (register ra) (sex 2 d)))
+	 (register srs)))
+
+;; sthbrx
+
+(definsn sthu ((d (0)))
+  (seq
+   (store big-endian 2 (+i (register ra) (sex 2 d)) (register srs))
+   (set ra (+i (register ra) (sex 2 d)))))
+
+;; sthux
+
+(definsn sthx ((ra 0 32))
+  (store big-endian 2 (if (int-zero-p 8 ra)
+			  (register rb)
+			  (+i (register ra) (register rb)))
+	 (register srs)))
+
+(definsn stw ((ra 0 32) (d (0)))
+  (store big-endian 4 (if (int-zero-p 8 ra)
+			  (sex 2 d)
+			  (+i (register ra) (sex 2 d)))
+	 (register srs)))
+
+;; stwbrx
+
+(definsn stwu ((d (0)))
+  (seq
+   (store big-endian 4 (+i (register ra) (sex 2 d)) (register srs))
+   (set ra (+i (register ra) (sex 2 d)))))
+
+(definsn stwux ()
+  (seq
+   (store big-endian 4 (+i (register ra) (register rb)) (register srs))
+   (set ra (+i (register ra) (register rb)))))
+
+(definsn stwx ((ra 0 32))
+  (store big-endian 4 (if (int-zero-p 8 ra)
+			  (register rb)
+			  (+i (register ra) (register rb)))
+	 (register srs)))
+
+(definsn subf ()
+  (set rd (-i (register rb) (register ra))))
+
+;; subfo
+;; subfc
+;; subfco
+;; subfe
+;; subfeo
+;; subfic
+;; subfme
+;; subfmeo
+;; subfze
+;; subfzeo
+
+;; sync
+
+(definsn xor ()
+  (set ra (bit-xor (register rs) (register rb))))
+
+(definsn xori ()
+  (set ra (bit-xor (register rs) (zex 2 uimm))))
+
+(definsn xoris ()
+  (set ra (bit-xor (register rs) (shiftl (zex 2 uimm) 16))))

@@ -50,6 +50,20 @@
        (,(format nil "~~A = ~A;" (format nil c-format "~A + ~A")) ra disp rb)
        (,(format nil "emit(COMPOSE_~A(~~A, ~~A & 0xffff, ~~A));" mnemonic) ra disp rb))))
 
+(defmacro defstmatcher (name width mnemonic)
+  `(progn
+    (defmatcher ,name
+      (store little-endian ,width (register ?ra) (register ?rb))
+      2
+      (,(format nil "mem_store_~A(~~A, ~~A);" (* width 8)) ra rb)
+      (,(format nil "emit(COMPOSE_~A(~~A, 0, ~~A));" mnemonic) rb ra))
+    (defmatcher ,(intern (string-concat (string name) "-DISP"))
+      (store little-endian ,width (+i (register ?ra) (any-int ?disp)) (register ?rb))
+      (when (zero-or-full-p 8 (ashiftr 8 disp 16))
+	2)
+      (,(format nil "mem_store_~A(~~A + ~~A, ~~A);" (* width 8)) ra disp rb)
+      (,(format nil "emit(COMPOSE_~A(~~A, ~~A & 0xffff, ~~A));" mnemonic) rb disp ra))))
+
 ; we don't add the immediate version of addq because it performs a subset of
 ; the functionality of lda
 (defmatcher addq
@@ -218,36 +232,6 @@
   ("~A = (~A >> 16) & 0xffff;" rs ra)
   ("emit(COMPOSE_EXTWL_IMM(~A, 2, ~A));" ra rs))
 
-(defldmatcher ldbu
-  (load-byte ea)
-  "mem_load_8(~A)"
-  "LDBU")
-
-(defldmatcher ldbu-zex
-  (zex 1 (load-byte ea))
-  "mem_load_8(~A)"
-  "LDBU")
-
-(defldmatcher ldwu
-  (load little-endian 2 ea)
-  "mem_load_16(~A)"
-  "LDWU")
-
-(defldmatcher ldwu-zex
-  (zex 2 (load little-endian 2 ea))
-  "mem_load_16(~A)"
-  "LDWU")
-
-(defldmatcher ldl
-  (load little-endian 4 ea)
-  "mem_load_32(~A)"
-  "LDL")
-
-(defldmatcher ldl-sex
-  (sex 4 (load little-endian 4 ea))
-  "sex_32(mem_load_32(~A))"
-  "LDL")
-
 (defmatcher sextb
   (set ?rs (sex 1 (register ?rb)))
   1
@@ -358,3 +342,42 @@
       free_tmp_integer_reg(tmp); }"
    ra s l				;sll
    l rs))				;srl
+
+;;; loads
+
+(defldmatcher ldbu
+  (load-byte ea)
+  "mem_load_8(~A)"
+  "LDBU")
+
+(defldmatcher ldbu-zex
+  (zex 1 (load-byte ea))
+  "mem_load_8(~A)"
+  "LDBU")
+
+(defldmatcher ldwu
+  (load little-endian 2 ea)
+  "mem_load_16(~A)"
+  "LDWU")
+
+(defldmatcher ldwu-zex
+  (zex 2 (load little-endian 2 ea))
+  "mem_load_16(~A)"
+  "LDWU")
+
+(defldmatcher ldl
+  (load little-endian 4 ea)
+  "mem_load_32(~A)"
+  "LDL")
+
+(defldmatcher ldl-sex
+  (sex 4 (load little-endian 4 ea))
+  "sex_32(mem_load_32(~A))"
+  "LDL")
+
+;;; stores
+
+(defstmatcher stb 1 "STB")
+(defstmatcher stw 2 "STW")
+(defstmatcher stl 4 "STL")
+(defstmatcher stq 8 "STQ")
