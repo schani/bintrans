@@ -396,19 +396,19 @@
   ((set-rc (logand (shiftr (op ra) (* (logand (op-b) 7) 8)) (mask 0 7)))))
 
 (define-operate-insn extlh #x12 #x6a
-  ((set-rc (logand (shiftl (op ra) (* (logand (op-b) 7) 8)) (mask 0 31)))))
+  ((set-rc (logand (shiftl (op ra) (- 64 (* (logand (op-b) 7) 8))) (mask 0 31)))))
 
 (define-operate-insn extll #x12 #x26
   ((set-rc (logand (shiftr (op ra) (* (logand (op-b) 7) 8)) (mask 0 31)))))
 
 (define-operate-insn extqh #x12 #x7a
-  ((set-rc (shiftl (op ra) (* (logand (op-b) 7) 8)))))
+  ((set-rc (shiftl (op ra) (- 64 (* (logand (op-b) 7) 8))))))
 
 (define-operate-insn extql #x12 #x36
-  ((set-rc (logand (shiftr (op ra) (* (logand (op-b) 7) 8)) (mask 0 31)))))
+  ((set-rc (shiftr (op ra) (* (logand (op-b) 7) 8)))))
 
 (define-operate-insn extwh #x12 #x5a
-  ((set-rc (logand (shiftl (op ra) (* (logand (op-b) 7) 8)) (mask 0 15)))))
+  ((set-rc (logand (shiftl (op ra) (- 64 (* (logand (op-b) 7) 8))) (mask 0 15)))))
 
 (define-operate-insn extwl #x12 #x16
   ((set-rc (logand (shiftr (op ra) (* (logand (op-b) 7) 8)) (mask 0 15)))))

@@ -44,6 +44,12 @@
 #define AT_PLATFORM 15  /* string identifying CPU for optimizations */
 #define AT_HWCAP  16    /* arch dependent hints at CPU capabilities */
 
+#if defined(EMU_I386)
+#define EMU_HWCAPS 0x0080f9ff
+#elif defined(EMU_PPC)
+#define EMU_HWCAPS 0x10
+#endif
+
 #if defined(EMU_PPC)
 #define STACK_TOP  0x80000000
 #elif defined(EMU_I386)
@@ -233,18 +239,33 @@ int emu_errnos[] = { 0,
 #define SYSCALL_UNAME            122
 #define SYSCALL_MPROTECT         125
 #define SYSCALL_PERSONALITY      136
+#define SYSCALL_LLSEEK           140
 #define SYSCALL_SELECT           142
 #define SYSCALL_READV            145
 #define SYSCALL_WRITEV           146
 #define SYSCALL_RT_SIGACTION     173
 #endif
 
-#undef SYSCALL_OUTPUT
+#define SYSCALL_OUTPUT
 #ifdef SYSCALL_OUTPUT
 #define ANNOUNCE_SYSCALL(n)         printf("%s\n", (n))
 #else
 #define ANNOUNCE_SYSCALL(n)
 #endif
+
+#define FAKE_PID            0x4851
+
+#define FAKE_FSTAT_DEV      0
+#define FAKE_FSTAT_INO      0x3242bf
+#define FAKE_FSTAT_NLINK    1
+#define FAKE_FSTAT_MODE     0x1180
+#define FAKE_FSTAT_RDEV     0x3db
+#define FAKE_FSTAT_SIZE     0
+#define FAKE_FSTAT_BLOCKS   4
+#define FAKE_FSTAT_BLKSIZE  0x1000
+#define FAKE_FSTAT_ATIME    0x3b4cdcac
+#define FAKE_FSTAT_MTIME    0x3b4cdcac
+#define FAKE_FSTAT_CTIME    0x3b4cdcac
 
 int debug = 0;
 
@@ -667,6 +688,32 @@ convert_native_timeval_to_ppc (interpreter_t *intp, word_32 addr, struct timeval
     mem_set_32(intp, addr + 4, tv->tv_usec);
 }
 
+#if defined(EMU_PPC)
+void
+convert_native_termios_to_emu (interpreter_t *intp, word_32 addr, struct termios *tio)
+{
+    mem_set_32(intp, addr + 0, tio->c_iflag);
+    mem_set_32(intp, addr + 4, tio->c_oflag);
+    mem_set_32(intp, addr + 8, tio->c_cflag);
+    mem_set_32(intp, addr + 12, tio->c_lflag);
+    mem_copy_to_user_8(intp, addr + 16, tio->c_cc, 19);
+    mem_set_8(intp, addr + 35, tio->c_line);
+    mem_set_32(intp, addr + 36, tio->c_ispeed);
+    mem_set_32(intp, addr + 40, tio->c_ospeed);
+}
+#elif defined(EMU_I386)
+void
+convert_native_termios_to_emu (interpreter_t *intp, word_32 addr, struct termios *tio)
+{
+    mem_set_32(intp, addr + 0, tio->c_iflag);
+    mem_set_32(intp, addr + 4, tio->c_oflag);
+    mem_set_32(intp, addr + 8, tio->c_cflag);
+    mem_set_32(intp, addr + 12, tio->c_lflag);
+    mem_set_8(intp, addr + 16, tio->c_line);
+    mem_copy_to_user_8(intp, addr + 17, tio->c_cc, 19);
+}
+#endif
+
 int
 process_system_call (interpreter_t *intp, word_32 number,
 		     word_32 arg1, word_32 arg2, word_32 arg3, word_32 arg4, word_32 arg5, word_32 arg6)
@@ -806,7 +853,11 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 	case SYSCALL_GETPID :
 	    ANNOUNCE_SYSCALL("getpid");
+#ifdef FAKE_PID
+	    result = FAKE_PID;
+#else
 	    result = getpid();
+#endif
 	    break;
 
 	case SYSCALL_GETUID :
@@ -832,11 +883,14 @@ process_system_call (interpreter_t *intp, word_32 number,
 		result = (int)intp->data_segment_top;
 	    else
 	    {
-		word_32 new_top = PPC_PAGE_ALIGN(arg1);
+		word_32 old_top_aligned = PPC_PAGE_ALIGN(intp->data_segment_top);
+		word_32 new_top = arg1;
+		word_32 new_top_aligned = PPC_PAGE_ALIGN(new_top);
 
 		assert(new_top > intp->data_segment_top);
 
-		mmap_anonymous(intp, new_top - intp->data_segment_top, PAGE_READABLE | PAGE_WRITEABLE, 1, intp->data_segment_top);
+		if (new_top_aligned > old_top_aligned)
+		    mmap_anonymous(intp, new_top_aligned - old_top_aligned, PAGE_READABLE | PAGE_WRITEABLE, 1, old_top_aligned);
 
 		intp->data_segment_top = new_top;
 
@@ -877,7 +931,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 			    result = ioctl(fd, TCGETS, &arg);
 			    if (result == 0)
-				mem_copy_to_user_32(intp, arg3, (byte*)&arg, sizeof(struct termios));
+				convert_native_termios_to_emu(intp, arg3, &arg);
 			    else
 				assert(0);
 			}
@@ -1257,6 +1311,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 		result = fstat(fd, &buf);
 		if (result == 0)
 		{
+#if defined(EMU_PPC)
 		    mem_set_32(intp, arg2 + 0, buf.st_dev);
 		    mem_set_32(intp, arg2 + 4, buf.st_ino);
 		    mem_set_32(intp, arg2 + 8, buf.st_mode);
@@ -1270,6 +1325,65 @@ process_system_call (interpreter_t *intp, word_32 number,
 		    mem_set_32(intp, arg2 + 40, buf.st_atime);
 		    mem_set_32(intp, arg2 + 48, buf.st_mtime);
 		    mem_set_32(intp, arg2 + 56, buf.st_ctime);
+#elif defined(EMU_I386)
+#ifdef FAKE_FSTAT_DEV
+		    mem_set_16(intp, arg2 + 0, FAKE_FSTAT_DEV);
+#else
+		    mem_set_16(intp, arg2 + 0, buf.st_dev);
+#endif
+#ifdef FAKE_FSTAT_INO
+		    mem_set_32(intp, arg2 + 4, FAKE_FSTAT_INO);
+#else
+		    mem_set_32(intp, arg2 + 4, buf.st_ino);
+#endif
+#ifdef FAKE_FSTAT_MODE
+		    mem_set_16(intp, arg2 + 8, FAKE_FSTAT_MODE);
+#else
+		    mem_set_16(intp, arg2 + 8, buf.st_mode);
+#endif
+#ifdef FAKE_FSTAT_NLINK
+		    mem_set_16(intp, arg2 + 10, FAKE_FSTAT_NLINK);
+#else
+		    mem_set_16(intp, arg2 + 10, buf.st_nlink);
+#endif
+		    mem_set_16(intp, arg2 + 12, buf.st_uid);
+		    mem_set_16(intp, arg2 + 14, buf.st_gid);
+#ifdef FAKE_FSTAT_RDEV
+		    mem_set_16(intp, arg2 + 16, FAKE_FSTAT_RDEV);
+#else
+		    mem_set_16(intp, arg2 + 16, buf.st_rdev);
+#endif
+#ifdef FAKE_FSTAT_SIZE
+		    mem_set_32(intp, arg2 + 20, FAKE_FSTAT_SIZE);
+#else
+		    mem_set_32(intp, arg2 + 20, buf.st_size);
+#endif
+#ifdef FAKE_FSTAT_BLKSIZE
+		    mem_set_32(intp, arg2 + 24, FAKE_FSTAT_BLKSIZE);
+#else
+		    mem_set_32(intp, arg2 + 24, buf.st_blksize);
+#endif
+#ifdef FAKE_FSTAT_BLOCKS
+		    mem_set_32(intp, arg2 + 28, FAKE_FSTAT_BLOCKS);
+#else
+		    mem_set_32(intp, arg2 + 28, buf.st_blocks);
+#endif
+#ifdef FAKE_FSTAT_ATIME
+		    mem_set_32(intp, arg2 + 32, FAKE_FSTAT_ATIME);
+#else
+		    mem_set_32(intp, arg2 + 32, buf.st_atime);
+#endif
+#ifdef FAKE_FSTAT_MTIME
+		    mem_set_32(intp, arg2 + 40, FAKE_FSTAT_MTIME);
+#else
+		    mem_set_32(intp, arg2 + 40, buf.st_mtime);
+#endif
+#ifdef FAKE_FSTAT_CTIME
+		    mem_set_32(intp, arg2 + 48, FAKE_FSTAT_CTIME);
+#else
+		    mem_set_32(intp, arg2 + 48, buf.st_ctime);
+#endif
+#endif
 		}
 	    }
 	    break;
@@ -1674,6 +1788,7 @@ setup_stack (interpreter_t *intp, word_32 p, char *argv[])
 			   0 };
     */
 
+#if defined(EMU_PPC)
     static char *env[] = { "PWD=/",
 			   "HOSTNAME=quinta.schani.net",
 			   "HISTFILESIZE=1000",
@@ -1691,6 +1806,18 @@ setup_stack (interpreter_t *intp, word_32 p, char *argv[])
 			   "TERM=xterm",
 			   "PATH=/bin",
 			   0 };
+#elif defined(EMU_I386)
+    static char *env[] = { "PWD=/mnt/homes/nethome/hansolo/schani/Work/unix/bintrans/i386-root/bin",
+			   "HOSTNAME=vader",
+			   "MACHTYPE=i686-pc-linux-gnu",
+			   "SHLVL=0",
+			   "SHELL=/bin/bash",
+			   "HOSTTYPE=i686",
+			   "OSTYPE=linux-gnu",
+			   "TERM=dumb",
+			   "PATH=/usr/local/bin:/bin:/usr/bin:/usr/X11R6/bin:.",
+			   0 };
+#endif
 
     int argc;
     int envc;
@@ -1699,6 +1826,8 @@ setup_stack (interpreter_t *intp, word_32 p, char *argv[])
     word_32 sp;
     word_32 csp;
     word_32 argvp, envp;
+    word_32 platform;
+    word_32 argtop;
 
     for (argc = 0; argv[argc] != 0; ++argc)
 	;
@@ -1710,12 +1839,19 @@ setup_stack (interpreter_t *intp, word_32 p, char *argv[])
     p = copy_string(intp, argv[0], p);
     exec = p;
     p = copy_strings(intp, envc, env, p);
-    p = copy_strings(intp, argc, argv, p);
+    argtop = p = copy_strings(intp, argc, argv, p);
+
+#ifdef EMU_I386
+    p = copy_string(intp, "i686", p);
+    platform = p;
+#else
+    platform = 0;
+#endif
 
     sp = (~15 & p) - 16;
 
     csp = sp;
-    csp -= 4 * 4;		/* no interpreter, no ELF_PLATFORM */
+    csp -= 4 * 4 + (platform != 0 ? 2 * 4 : 0);	/* no interpreter */
     csp -= (envc + 1) * 4;
     csp -= (argc + 1) * 4;
     csp -= 1 * 4;		/* ibcs */
@@ -1729,8 +1865,13 @@ setup_stack (interpreter_t *intp, word_32 p, char *argv[])
     sp -= 2 * 4;
     NEW_AUX_ENT(0, AT_NULL, 0);
 
+#ifdef EMU_I386
     sp -= 2 * 4;
-    NEW_AUX_ENT(0, AT_HWCAP, 0x10);
+    NEW_AUX_ENT(0, AT_PLATFORM, platform);
+#endif
+
+    sp -= 2 * 4;
+    NEW_AUX_ENT(0, AT_HWCAP, EMU_HWCAPS);
 
     sp -= (envc + 1) * 4;
     envp = sp;
@@ -1747,6 +1888,8 @@ setup_stack (interpreter_t *intp, word_32 p, char *argv[])
 
     sp -= 4;
     mem_set_32(intp, sp, argc);
+
+    p = argtop;
 
     while (argc-- > 0) {
 	mem_set_32(intp, argvp, p);
@@ -1780,13 +1923,24 @@ run_debugged (interpreter_t *intp)
     {
 	if (intp->trace)
 	{
-#ifdef EMU_PPC
+#if defined(EMU_PPC)
 	    printf("%08x:  ", intp->pc);
 	    disassemble_ppc_insn(mem_get_32(intp, intp->pc), intp->pc);
 	    printf("   %08x", intp->regs_SPR[2]);
 	    printf("\n");
-#else
-	    printf("%08x\n", intp->pc);
+#elif defined(EMU_I386)
+	    word_32 pc = intp->pc;
+
+	    printf("%08x:  ", pc);
+	    disassemble_i386_insn(intp);
+	    intp->pc = pc;
+	    printf("\n");
+
+	    /*
+	    printf("%08x 0x%x 0x%x 0x%x 0x%x 0x%x 0x%x 0x%x 0x%x\n", intp->pc,
+		   intp->regs_GPR[0], intp->regs_GPR[1], intp->regs_GPR[2], intp->regs_GPR[3],
+		   intp->regs_GPR[4], intp->regs_GPR[5], intp->regs_GPR[6], intp->regs_GPR[7]);
+	    */
 #endif
 	}
 	interpret_insn(intp);
@@ -2208,7 +2362,11 @@ main (int argc, char *argv[])
 	fd_map[i].free = 1;
 
     ppc_argv = (char**)malloc(sizeof(char*) * argc);
+#if defined(EMU_PPC)
     ppc_argv[0] = "/bigben/home/schani/./a.out";
+#elif defined(EMU_I386)
+    ppc_argv[0] = "/mnt/homes/nethome/hansolo/schani/Work/unix/bintrans/i386-root/bin/go";
+#endif
     for (i = 2; i < argc; ++i)
 	ppc_argv[i - 1] = argv[i];
     ppc_argv[argc - 1] = 0;
@@ -2292,7 +2450,7 @@ main (int argc, char *argv[])
 	natively_mprotect_pages(&interpreter, mem_start, mem_len, flags);
 
 	if (phdrs[i].p_type == PT_LOAD && phdrs[i].p_flags == (PF_W | PF_R))
-	    interpreter.data_segment_top = mem_start + mem_len;
+	    interpreter.data_segment_top = phdrs[i].p_vaddr + phdrs[i].p_memsz;
 #endif
 #ifdef NEED_COMPILER
 	mprotect_pages(&compiler, mem_start, mem_len, flags | PAGE_MMAPPED);
@@ -2302,7 +2460,7 @@ main (int argc, char *argv[])
 	natively_mprotect_pages(&compiler, mem_start, mem_len, flags);
 
 	if (phdrs[i].p_type == PT_LOAD && phdrs[i].p_flags == (PF_W | PF_R))
-	    compiler.data_segment_top = mem_start + mem_len;
+	    compiler.data_segment_top = phdrs[i].p_vaddr + phdrs[i].p_memsz;
 #endif
     }
 

@@ -106,7 +106,7 @@
 	 (5 disp32)))
     (1 (case rm
 	 ((0 1 2 3 5 6 7) (+ (reg rm gpr) (sex disp8)))
-	 (4 (+ (zex disp8) (sib-address)))))
+	 (4 (+ (sex disp8) (sib-address)))))
     (2 (case rm
 	 ((0 1 2 3 5 6 7) (+ (reg rm gpr) disp32))
 	 (4 (+ disp32 (sib-address)))))
@@ -117,7 +117,7 @@
     ((0 1 2) (width 8 (mem (ea))))
     (3 (case rm
 	 ((0 1 2 3) (subreg 0 7 rm gpr))
-	 ((4 5 6 7) (subreg 8 15 (- reg (width 3 4)) gpr))))
+	 ((4 5 6 7) (subreg 8 15 (- rm (width 3 4)) gpr))))
     :cse t))
 
 (define-insn-macro rm16 ()
@@ -244,7 +244,7 @@
 (defun generate-intel-insn-recognizer (machine action)
   (labels ((decode-immediate-if-necessary (insn)
 	     (case (intel-insn-mode insn)
-	       ((al-imm8 rm8-imm8 rm16-imm8 rm32-imm8 rm32-simm8 +r8-imm8 imm8 simm8)
+	       ((al-imm8 rm8-imm8 rm16-imm8 rm32-imm8 rm16-simm8 rm32-simm8 +r8-imm8 imm8 simm8)
 		(format t "imm8 = i386_decode_imm8(intp);~%"))
 	       ((imm16 ax-imm16 rm16-imm16 +r16-imm16)
 		(format t "imm16 = i386_decode_imm16(intp);~%"))
@@ -301,7 +301,7 @@
     (dolist (opcode (remove-duplicates (mapcar #'(lambda (x) (first (intel-insn-opcode x))) (machine-insns machine))))
       (format t "case ~A :~%" opcode)
       (let ((insns (remove-if-not #'(lambda (x) (= opcode (first (intel-insn-opcode x)))) (machine-insns machine))))
-	(if (member opcode '(#x0f))
+	(if (member opcode '(#x0f #xf2 #xf3))
 	    (progn
 	      (format t "switch (opcode2) {~%")
 	      (dolist (opcode2 (remove-duplicates (mapcar #'(lambda (x) (second (intel-insn-opcode x))) insns)))
@@ -344,6 +344,60 @@ static word_32 disp32, imm32;~%")
 						   (princ (generate-compiler nil expr nil)))
 						 (format t "generated_insn_index = ~A;~%" (position insn (machine-insns *i386*)))))
       (format t "~%#ifdef COLLECT_STATS~%++num_translated_insns;~%#endif~%}~%"))))
+
+(defun generate-intel-disassembler ()
+  (labels ((op-disasm (op)
+	     (cadr (assoc op '((1 "fputs(\"1\", stdout);")
+			       ((r8) "i386_disassemble_r8(stdout, reg);")
+			       (al "fputs(\"al\", stdout);")
+			       (cl "fputs(\"cl\", stdout);")
+			       ((r16) "i386_disassemble_r16(stdout, reg);")
+			       (ax "fputs(\"ax\", stdout);")
+			       ((r32) "i386_disassemble_r32(stdout, reg);")
+			       ((reg eax) "fputs(\"eax\", stdout);")
+			       ((rm8) "i386_disassemble_rm8(stdout, mod, rm, scale, index, base, disp8, disp32);")
+			       ((rm16) "i386_disassemble_rm16(stdout, mod, rm, scale, index, base, disp8, disp32);")
+			       ((rm32) "i386_disassemble_rm32(stdout, mod, rm, scale, index, base, disp8, disp32);")
+			       ((subreg 0 7 opcode-reg gpr) "i386_disassemble_r8(stdout, opcode_reg);")
+			       ((subreg 0 15 opcode-reg gpr) "i386_disassemble_r16(stdout, opcode_reg);")
+			       ((reg opcode-reg gpr) "i386_disassemble_r32(stdout, opcode_reg);")
+			       (imm8 "printf(\"$0x%x\", imm8);")
+			       ((width 16 (sex imm8)) "printf(\"$0x%x\", imm8 & 0x80 ? 0xff00 | imm8 : imm8);")
+			       ((width 32 (sex imm8)) "printf(\"$0x%x\", imm8 & 0x80 ? 0xffffff00 | imm8 : imm8);")
+			       (simm8 "printf(\"$0x%x\", imm8 & 0x80 ? 0xffffff00 | imm8 : imm8);")
+			       (imm16 "printf(\"$0x%x\", imm16);")
+			       (imm32 "printf(\"$0x%x\", imm32);")
+			       ((mem imm32) "printf(\"0x%x\", imm32);")
+			       ((width 16 (mem imm32)) "printf(\"0x%x\", imm32);"))
+			  :test #'equal))))
+    (with-open-file (out (format nil "i386_disassembler.c") :direction :output :if-exists :supersede)
+      (let ((*standard-output* out)
+	    (*insn-field-accessor* #'(lambda (name begin end) (dcs name))))
+	(format t "void disassemble_i386_insn (interpreter_t *intp) {
+word_8 opcode, opcode2;
+word_32 pc, next_pc;
+int prefix_flags;
+word_8 mod, reg, rm, scale, index, base, disp8, opcode_reg, imm8;
+word_16 imm16;
+word_32 disp32, imm32;~%")
+	(generate-intel-insn-recognizer *i386* #'(lambda (insn)
+						   (let ((name (intel-insn-name insn))
+							 (mode (intel-insn-mode insn)))
+						     (if (eq mode 'no-args)
+							 (format t "fputs(\"~A\n\", stdout);~%" (dcs name))
+							 (destructuring-bind (op1 op2 width size-prefix)
+							     (insn-mode-params mode)
+							   (let ((op1-disasm (op-disasm op1))
+								 (op2-disasm (op-disasm op2)))
+							     (if (null op2)
+								 (progn
+								   (assert (not (null op1-disasm)))
+								   (format t "fputs(\"~A \", stdout);~%~A~%" (dcs name) op1-disasm))
+								 (progn
+								   (assert (and (not (null op1-disasm)) (not (null op2-disasm))))
+								   (format t "fputs(\"~A \", stdout);~%~A~%fputs(\",\", stdout);~%~A~%"
+									   (dcs name) op1-disasm op2-disasm)))))))))
+	(format t "intp->pc = next_pc;~%}~%")))))
 
 (define-std-binary-insn add
     ((al-imm8 (#x04))
@@ -698,13 +752,13 @@ static word_32 disp32, imm32;~%")
      (+r32 (#x50))
      (simm8 (#x6a))
      (imm32 (#x68)))
-  ((set (reg esp) (- (reg esp) 4))
-   (set (mem (reg esp)) dst)))
+  ((set (mem (- (reg esp) 4)) dst)
+   (set (reg esp) (- (reg esp) 4))))
 
 (define-std-simple-insn repne_scasb (#xf2 #xae)	;FIXME: flags!
   ((if (= (reg ecx) 0)
        (nop)
-       (dowhile (logand (= zf (width 1 1)) (not (= (reg ecx) 0)))
+       (dowhile (logand (= zf (width 1 0)) (not (= (reg ecx) 0)))
 		(let ((temp (width 8 (- al (mem (reg edi))))))
 		  (set cf (-carry al (width 8 (mem (reg edi)))))
 		  (set zf (if (= temp (width 8 0)) 1 0))
@@ -757,6 +811,18 @@ static word_32 disp32, imm32;~%")
     ((rm8 (#x0f #x94)))
   ((set dst (zex zf))))
 
+(define-std-unary-insn setg
+    ((rm8 (#x0f #x9f)))
+  ((set dst (if (logand (= zf (width 1 0)) (= sf of)) 1 0))))
+
+(define-std-unary-insn setl
+    ((rm8 (#x0f #x9c)))
+  ((set dst (if (= sf of) 0 1))))
+
+(define-std-unary-insn setle
+    ((rm8 (#x0f #x9e)))
+  ((set dst (if (logor (= zf (width 1 1)) (not (= sf of))) 1 0))))
+
 (define-std-unary-insn setne
     ((rm8 (#x0f #x95)))
   ((set dst (logxor (zex zf) 1))))
@@ -789,7 +855,7 @@ static word_32 disp32, imm32;~%")
    (set-sf dst op-width)
    (set-zf dst op-width)))
 
-(define-std-binary-insn subl
+(define-std-binary-insn sub
     ((al-imm8 (#x2c))
      (ax-imm16 (#x2d))
      (eax-imm32 (#x2d))
@@ -804,11 +870,11 @@ static word_32 disp32, imm32;~%")
      (r8-rm8 (#x2a))
      (r16-rm16 (#x2b))
      (r32-rm32 (#x2b)))
-  ((set dst (- dst src))
-   (set cf (-carry dst (width op-width src)))
-   (set zf (if (= dst (width op-width 0)) 1 0))
-   (set sf (if (bit-set-p dst (- op-width 1)) 1 0))
-   (set of (+overflow (width op-width dst) (width op-width (+ (bitneg src) 1))))))
+  ((set cf (-carry dst (width op-width src)))
+   (set of (+overflow (width op-width dst) (width op-width (+ (bitneg src) 1))))
+   (set dst (- dst src))
+   (set-sf dst op-width)
+   (set-zf dst op-width)))
 
 (define-std-binary-insn test
     ((al-imm8 (#xa8))

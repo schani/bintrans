@@ -439,10 +439,17 @@ emulated_mem_get_32 (interpreter_t *intp, word_32 addr)
     {
 	printf("unaligned read 32 access at 0x%08x (pc=0x%08x)\n", addr, intp->pc);
 
+#ifdef EMU_BIG_ENDIAN
 	return ((word_32)emulated_mem_get_8(intp, addr) << 24)
 	    | ((word_32)emulated_mem_get_8(intp, addr + 1) << 16)
 	    | ((word_32)emulated_mem_get_8(intp, addr + 2) << 8)
 	    | (word_32)emulated_mem_get_8(intp, addr + 3);
+#else
+	return ((word_32)emulated_mem_get_8(intp, addr + 3) << 24)
+	    | ((word_32)emulated_mem_get_8(intp, addr + 2) << 16)
+	    | ((word_32)emulated_mem_get_8(intp, addr + 1) << 8)
+	    | (word_32)emulated_mem_get_8(intp, addr);
+#endif
     }
 }
 

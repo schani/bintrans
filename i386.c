@@ -95,11 +95,14 @@ i386_decode_modrm (interpreter_t *intp, word_8 *_mod, word_8 *_reg, word_8 *_rm,
 	*_index = sib >> 3 & 7;
 	base = *_base = sib & 7;
 
-	if (base == 5)
+	if (base == 5 && mod == 0)
 	{
 	    assert(!need_disp32);
 	    need_disp32 = 1;
 	}
+
+	if (base == 5)
+	    assert(need_disp32 || need_disp8);
     }
 
     if (need_disp8)
@@ -138,10 +141,127 @@ i386_decode_imm32 (interpreter_t *intp)
 }
 
 void
+i386_disassemble_r8 (FILE *out, word_8 reg)
+{
+    static char *names[] = { "al", "cl", "dl", "bl", "ah", "ch", "dh", "bh" };
+
+    assert(reg < 8);
+    fputs(names[reg], out);
+}
+
+void
+i386_disassemble_r16 (FILE *out, word_8 reg)
+{
+    static char *names[] = { "ax", "cx", "dx", "bx", "sp", "bp", "si", "di" };
+
+    assert(reg < 8);
+    fputs(names[reg], out);
+}
+
+void
+i386_disassemble_r32 (FILE *out, word_8 reg)
+{
+    static char *names[] = { "eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi" };
+
+    assert(reg < 8);
+    fputs(names[reg], out);
+}
+
+void
+i386_disassemble_sib (FILE *out, word_8 mod, word_8 scale, word_8 index, word_8 base, word_32 disp32)
+{
+    if (base == 5 && mod == 0)
+	fprintf(out, "0x%x", disp32);
+
+    fputs("(", out);
+
+    if (!(base == 5 && mod == 0))
+	i386_disassemble_r32(out, base);
+
+    if (index != 4)
+    {
+	fputs(",", out);
+	i386_disassemble_r32(out, index);
+	fprintf(out, ",%d", 1 << scale);
+    }
+
+    fputs(")", out);
+}
+
+void
+i386_disassemble_ea (FILE *out, word_8 mod, word_8 rm, word_8 scale, word_8 index, word_8 base, word_8 disp8, word_32 disp32)
+{
+    int have_disp;
+    word_32 disp;
+
+    if ((mod == 0 && rm == 5) || mod == 2)
+    {
+	have_disp = 1;
+	disp = disp32;
+    }
+    else if (mod == 1)
+    {
+	have_disp = 1;
+	disp = disp8 | (disp8 & 0x80 ? 0xffffff00 : 0);
+    }
+    else
+	have_disp = 0;
+
+    if (have_disp)
+	fprintf(out, "0x%x", disp);
+
+    if (!(mod == 0 && rm == 5))
+    {
+	if (rm != 4)
+	{
+	    fputs("(", out);
+	    i386_disassemble_r32(out, rm);
+	    fputs(")", out);
+	}
+	else
+	    i386_disassemble_sib(out, mod, scale, index, base, disp32);
+    }
+}
+
+void
+i386_disassemble_rm8 (FILE *out, word_8 mod, word_8 rm, word_8 scale, word_8 index, word_8 base, word_8 disp8, word_32 disp32)
+{
+    assert(mod < 4);
+
+    if (mod == 0 || mod == 1 || mod == 2)
+	i386_disassemble_ea(out, mod, rm, scale, index, base, disp8, disp32);
+    else
+	i386_disassemble_r8(out, rm);
+}
+
+void
+i386_disassemble_rm16 (FILE *out, word_8 mod, word_8 rm, word_8 scale, word_8 index, word_8 base, word_8 disp8, word_32 disp32)
+{
+    assert(mod < 4);
+
+    if (mod == 0 || mod == 1 || mod == 2)
+	i386_disassemble_ea(out, mod, rm, scale, index, base, disp8, disp32);
+    else
+	i386_disassemble_r16(out, rm);
+}
+
+void
+i386_disassemble_rm32 (FILE *out, word_8 mod, word_8 rm, word_8 scale, word_8 index, word_8 base, word_8 disp8, word_32 disp32)
+{
+    assert(mod < 4);
+
+    if (mod == 0 || mod == 1 || mod == 2)
+	i386_disassemble_ea(out, mod, rm, scale, index, base, disp8, disp32);
+    else
+	i386_disassemble_r32(out, rm);
+}
+
+void
 setup_i386_registers (interpreter_t *intp, word_32 stack_bottom)
 {
     intp->regs_GPR[4] = stack_bottom;
 }
 
 #include "i386_interpreter.c"
+#include "i386_disassembler.c"
 #endif

@@ -169,6 +169,7 @@ void disassemble_ppc_insn (word_32 insn, word_32 addr);
 
 /* from i386.c */
 void interpret_i386_insn (interpreter_t *intp);
+void disassemble_i386_insn (interpreter_t *intp);
 void dump_i386_registers (interpreter_t *intp);
 void setup_i386_registers (interpreter_t *intp, word_32 stack_bottom);
 

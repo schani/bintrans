@@ -1,5 +1,5 @@
-#EMU = I386
-EMU = PPC
+EMU = I386
+#EMU = PPC
 #LOCATION = -DCOMPLANG
 
 ARCH = -DARCH_ALPHA
@@ -11,11 +11,15 @@ COMPILER_OBJS = compiler.o
 #DEFINES = -DCROSSDEBUGGER -DCOLLECT_STATS -DDUMP_CODE
 #DEFINES = -DCOMPILER -DCOLLECT_STATS -DDUMP_CODE
 #DEFINES = -DCOMPILER -DCOLLECT_STATS -DPERIODIC_STAT_DUMP
-#DEFINES = -DDEBUGGER -DEMULATED_MEM
+DEFINES = -DDEBUGGER -DEMULATED_MEM
 #DEFINES = -DCOMPILER -DDUMP_CODE
 #DEFINES = -DCOMPILER -DCOLLECT_STATS
-DEFINES = -O -DCOMPILER -DMEASURE_TIME
+#DEFINES = -O -DCOMPILER
 # -DCOLLECT_STATS
+#-DMEASURE_TIME
+#
+# 
+# 
 
 ifeq ($(EMU),PPC)
 EMU_DEFS = -DEMU_PPC -DEMU_BIG_ENDIAN -DDIFFERENT_BYTEORDER
@@ -34,7 +38,7 @@ bintrans : ppc.o mm.o $(EMU_OBJS) $(COMPILER_OBJS) $(ASM_OBJS)
 ppc.o : ppc.c ppc_interpreter.c ppc_disassembler.c alpha_types.h bintrans.h
 	gcc $(CFLAGS) -Wall -g -c ppc.c
 
-i386.o : i386.c i386_interpreter.c bintrans.h
+i386.o : i386.c i386_interpreter.c i386_disassembler.c bintrans.h
 	gcc $(CFLAGS) -Wall -g -c i386.c
 
 compiler.o : compiler.c alpha_composer.h ppc_compiler.c alpha_disassembler.c alpha_types.h bintrans.h
