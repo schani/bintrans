@@ -8,3 +8,10 @@
 
 (defirmacro rotl (width x a)
   (bit-or (shiftl x a) (lshiftr width x (-i (*i width 8) a))))
+
+(defirmacro full-mask-p (width x)
+  (=i width x -1))
+
+(defirmacro zero-or-full-p (width x)
+  (or (int-zero-p width x)
+      (full-mask-p width x)))

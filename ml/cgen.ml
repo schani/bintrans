@@ -1,0 +1,105 @@
+open Int64
+open List
+
+open Expr
+open Matcher
+
+exception Register_not_bound
+
+type allocation = (expr * int) list
+
+type printer = (string * ((input_name * int64) list -> allocation -> binding list -> string))
+
+(*** allocation of intermediate registers ***)
+
+let map_int f l start =
+  let rec map l i =
+    match l with
+	[] -> []
+      | x :: rest ->
+	  (f x i) :: (map rest (i + 1))
+  in map l start
+
+let make_allocation best_matches_alist match_data =
+  let rec make_for_match_data match_data =
+    make match_data.bindings
+  and make_for_binding binding so_far =
+    match binding with
+	RegisterBinding (_, IntermediateRegister expr) ->
+	  if mem expr so_far then
+	    so_far
+	  else
+	    make_for_match_data (assoc expr best_matches_alist).expr_match_data (expr :: so_far)
+      | ExprBinding (_, expr) ->
+	  if mem expr so_far then
+	    so_far
+	  else
+	    make_for_match_data (assoc expr best_matches_alist).expr_match_data so_far
+      | _ -> so_far
+  and make bindings so_far =
+    match bindings with
+	[] -> so_far
+      | binding :: rest ->
+	  let so_far = make_for_binding binding so_far
+	  in make rest so_far
+  in map_int (fun x i -> (x, i)) (make_for_match_data match_data []) 1
+
+let lookup_intermediate_reg allocation expr =
+  try
+    assoc expr allocation
+  with
+      Not_found -> raise Register_not_bound
+
+(*** generating code for exprs ***)
+
+let int_const_to_c int_const =
+  match int_const with
+      IntLiteral const -> (to_string const) ^ "LL"
+    | IntField input_name -> "field_" ^ input_name
+
+let register_to_c allocation reg =
+  match reg with
+      GuestRegister (num, _) -> "guest_reg_" ^ (string_of_int num)
+    | HostRegister (num, _) -> "host_reg_" ^ (string_of_int num)
+    | IntermediateRegister expr -> "interm_reg_" ^ (string_of_int (lookup_intermediate_reg allocation expr))
+
+let expr_to_c allocation expr =
+  let unary_to_c op arg =
+    "unary_" ^ (unary_op_name op) ^ "(" ^ arg ^ ")"
+  and unary_width_to_c op width arg =
+    "unary_" ^ (unary_width_op_name op) ^ "_" ^ (string_of_int width) ^ "(" ^ arg ^ ")"
+  and binary_to_c op arg1 arg2 =
+    "binary_" ^ (binary_op_name op) ^ "(" ^ arg1 ^ "," ^ arg2 ^ ")"
+  and binary_width_to_c op width arg1 arg2 =
+    "binary_" ^ (binary_width_op_name op) ^ "_" ^ (string_of_int width) ^ "(" ^ arg1 ^ "," ^ arg2 ^ ")"
+  and ternary_width_to_c op width arg1 arg2 arg3 =
+    "ternary_" ^ (ternary_width_op_name op) ^ "_" ^ (string_of_int width) ^ "(" ^ arg1 ^ "," ^ arg2 ^ "," ^ arg3 ^ ")"
+  in let rec expr_to_c expr =
+      match expr with
+	  IntConst int_const -> int_const_to_c int_const
+	| FloatConst const -> string_of_float const
+	| ConditionConst false -> "0"
+	| ConditionConst true -> "1"
+	| Register reg -> register_to_c allocation reg
+	| LoadBO (byte_order, width, addr) ->
+	    "load_" ^ (byte_order_string byte_order) ^ (string_of_int width) ^ "(" ^ (expr_to_c addr) ^ ")"
+	| Unary (op, arg) -> unary_to_c op (expr_to_c arg)
+	| UnaryWidth (op, width, arg) -> unary_width_to_c op width (expr_to_c arg)
+	| Binary (op, arg1, arg2) -> binary_to_c op (expr_to_c arg1) (expr_to_c arg2)
+	| BinaryWidth (op, width, arg1, arg2) -> binary_width_to_c op width (expr_to_c arg1) (expr_to_c arg2)
+	| TernaryWidth (op, width, arg1, arg2, arg3) -> ternary_width_to_c op width (expr_to_c arg1) (expr_to_c arg2) (expr_to_c arg3)
+	| Extract (expr, start, length) ->
+	    "extract(" ^ (expr_to_c expr) ^ "," ^ (int_const_to_c start) ^ "," ^ (int_const_to_c length) ^ ")"
+	| Insert (arg1, arg2, start, length) ->
+	    "insert(" ^ (expr_to_c arg1) ^ "," ^ (expr_to_c arg2) ^ "," ^ (int_const_to_c start) ^ "," ^ (int_const_to_c length) ^ ")"
+	| If (condition, cons, alt) ->
+	    "(" ^ (expr_to_c condition) ^ "?" ^ (expr_to_c cons) ^ ":" ^ (expr_to_c alt) ^ ")"
+  in expr_to_c expr
+
+let stmt_to_c allocation stmt =
+  match stmt with
+      Store (byte_order, width, addr, value) ->
+	"store_" ^ (byte_order_string byte_order) ^ "_" ^ (string_of_int width) ^ "("
+	^ (expr_to_c allocation addr) ^ "," ^ (expr_to_c allocation value) ^ ");"
+    | Assign (reg, src) ->
+	(register_to_c allocation reg) ^ "=" ^ (expr_to_c allocation src) ^ ";"

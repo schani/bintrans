@@ -5,3 +5,6 @@
 
 (load "simplify.lisp")
 (make-simplifies)
+
+(load "target_alpha.lisp")
+(make-matchers "target_alpha.ml" "alpha_matchers" "alpha_printers")

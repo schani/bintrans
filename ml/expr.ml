@@ -21,8 +21,6 @@ type value_type =
   | Float
   | Condition
 
-type register = int * value_type
-
 type width = int
 
 type precision =
@@ -154,7 +152,11 @@ type int_const =
     IntLiteral of int64
   | IntField of input_name
 
-type expr =
+type register =
+    GuestRegister of int * value_type
+  | HostRegister of int * value_type
+  | IntermediateRegister of expr
+and expr =
     IntConst of int_const
   | FloatConst of float
   | ConditionConst of bool
@@ -175,12 +177,17 @@ type stmt =
 
 (* inspecting *)
 
-let rec expr_value_type expr =
+let rec register_value_type reg =
+  match reg with
+      GuestRegister (_, value_type) -> value_type
+    | HostRegister (_, value_type) -> value_type
+    | IntermediateRegister expr -> expr_value_type expr
+and expr_value_type expr =
   match expr with
     IntConst _ -> Int
   | FloatConst _ -> Float
   | ConditionConst _ -> Condition
-  | Register (_, value_type) -> value_type
+  | Register reg -> register_value_type reg
   | LoadBO _ -> Int
   | Unary (op, _) -> unary_op_value_type op
   | UnaryWidth (op, _, _) -> unary_width_op_value_type op
@@ -217,6 +224,9 @@ let is_const expr =
   match expr with
       IntConst (IntLiteral _) | FloatConst _ | ConditionConst _ -> true
     | _ -> false
+
+let rec expr_size expr =
+  1 + (fold_left ( + ) 0 (map expr_size (expr_sub_exprs expr)))
 
 (* constructing *)
 
@@ -539,6 +549,17 @@ let cfold_stmt fields =
 
 (* printing *)
 
+let value_type_string value_type =
+  match value_type with
+      Int -> "I"
+    | Float -> "F"
+    | Condition -> "C"
+
+let byte_order_string byte_order =
+  match byte_order with
+    BigEndian -> "BE"
+  | LittleEndian -> "LE"
+
 let print_width width =
   print_int width
 
@@ -548,19 +569,16 @@ let print_precision precision =
   | Double -> print_string "D"
 
 let print_byte_order byte_order =
-  match byte_order with
-    BigEndian -> print_string "BE"
-  | LittleEndian -> print_string "LE"
+  print_string (byte_order_string byte_order)
 
 let print_value_type value_type =
-  match value_type with
-    Int -> print_string "I"
-  | Float -> print_string "F"
-  | Condition -> print_string "C"
+  print_string (value_type_string value_type)
 
 let print_register register =
   match register with
-    (num, value_type) -> print_value_type value_type ; print_int num
+      GuestRegister (num, value_type) -> print_string "G" ; print_value_type value_type ; print_int num
+    | HostRegister (num, value_type) -> print_string "H" ; print_value_type value_type ; print_int num
+    | IntermediateRegister expr -> print_string "*IR*"
 
 let print_input_name input_name =
   print_string "?" ; print_string input_name

@@ -38,9 +38,9 @@
     (bit-or "BitOr" binary)
     (bit-xor "BitXor" binary)
     (shiftl "ShiftL" binary)
-    (condition-and "ConditionAnd" binary)
-    (condition-or "ConditionOr" binary)
-    (condition-xor "ConditionXor" binary)
+    (and "ConditionAnd" binary)
+    (or "ConditionOr" binary)
+    (xor "ConditionXor" binary)
     (+f "FloatAdd" binary)
     (-f "FloatSub" binary)
     (*f "FloatMul" binary)
@@ -78,7 +78,14 @@
 (defmacro defsimplify (pattern expr)
   `(push (list ',pattern ',expr) *simplifies*))
 
+;; a matcher is a list (name pattern cost-expr format)
+(defvar *matchers* '())
+
+(defmacro defmatcher (name pattern cost-expr format)
+  `(push (list ',name ',pattern ',cost-expr ',format) *matchers*))
+
 ;; returns ml-name, kind-ml-name, num-args, and need-width
+;; kind-ml-name is nil of the operator is a macro
 (defun lookup-operator (name)
   (let ((op-entry (cdr (assoc name *operators*))))
     (if op-entry
@@ -87,7 +94,12 @@
 	  (destructuring-bind (kind-ml-name num-args need-width)
 	      (cdr (assoc kind *operator-kinds*))
 	    (values ml-name kind-ml-name num-args need-width)))
-      nil)))
+      (let ((macro (cdr (assoc name *ir-macros*))))
+	(if macro
+	    (destructuring-bind (args needs-width body)
+		macro
+	      (values (dcs name) nil (length args) needs-width))
+	  nil)))))
 
 (defun convert-byte-order (byte-order)
   (case byte-order
@@ -116,9 +128,11 @@
 		       (expr
 			ml-name)
 		       (int
-			(format nil "IntConst (IntLiteral ~A)" ml-name))
+			(format nil "int_literal_expr ~A" ml-name))
+		       (int-const
+			ml-name)
 		       (t
-			(error "variable ~A is of wrong type (should be int, but is ~A)" name type))))
+			(error "variable ~A is of wrong type (~A)" name type))))
 		 (error "unbound symbol ~A" name))))
 	   (convert-int-const (int-const)
 	     (case-match expr
@@ -169,14 +183,18 @@
 			    (args (if need-width (cdr args) args)))
 			(if (and (or (not need-width) width-string)
 				 (= num-args (length args)))
-			    (format nil "~A (~A, ~A~{~A~^, ~})"
-				    kind-ml-name ml-name (if need-width (format nil "~A, " width-string) "")
-				    (mapcar #'convert args))
+			    (if kind-ml-name
+				(format nil "~A (~A, ~A~{~A~^, ~})"
+					kind-ml-name ml-name (if need-width (format nil "~A, " width-string) "")
+					(mapcar #'convert args))
+			      (format nil "make_~A ~A~{(~A)~^ ~}"
+				      ml-name (if need-width (format nil "~A " width-string) "")
+				      (mapcar #'convert args)))
 			  (error "illegal expression ~A" expr)))
 		    (error "unknown operator ~A" op))))
 	       (?expr
 		(cond ((integerp expr)
-		       (format nil "IntConst (IntLiteral (~AL))" expr))
+		       (format nil "int_literal_expr (~AL)" expr))
 		      ((floatp expr)
 		       (format nil "FloatConst ~A" expr))
 		      ((eql expr 't)
@@ -206,13 +224,13 @@
 (defun convert-pattern (pattern)
   (labels ((convert-int-const (int-const)
 	     (cond ((integerp int-const)
-		    (format nil "TheInt ~AL" int-const))
+		    (format nil "TheInt (~AL)" int-const))
 		   ((dont-care-symbol-p int-const)
 		    "AnyInt \"__dummy__\"")
 		   ((var-symbol-p int-const)
 		    (let ((name (symbol-for-var-symbol int-const)))
 		      (values (format nil "AnyInt \"~A\"" (dcs name))
-			      (list (list name 'int)))))
+			      (list (list name 'int-const)))))
 		   (t
 		    (error "illegal int const pattern ~A" int-const))))
 	   (convert-width (width)
@@ -230,11 +248,23 @@
 			(unless (var-symbol-p name)
 			  (error "~A is not a var symbol" name))
 			(let ((name (symbol-for-var-symbol name)))
-			  (value (format nil "([~{~A~^; ~}], \"~A\")" widths (dcs name))
-				 (list (list name 'int)))))
+			  (values (format nil "([~{~A~^; ~}], \"~A\")" widths (dcs name))
+				  (list (list name 'int)))))
 		      (error "illegal width pattern ~A" width)))))
 	   (convert (pattern)
 	     (case-match pattern
+	       ((any-int ?name)
+		(if (var-symbol-p name)
+		    (let ((name (symbol-for-var-symbol name)))
+		      (values (format nil "IntPattern (AnyInt \"~A\")" (dcs name))
+			      (list (list name 'int-const))))
+		    (error "~A is not a var symbol" name)))
+	       ((register ?name)
+		(if (var-symbol-p name)
+		    (let ((name (symbol-for-var-symbol name)))
+		      (values (format nil "RegisterPattern \"~A\"" (dcs name))
+			      (list (list name 'reg))))
+		    (error "~A is not a var symbol" name)))
 	       ((load ?byte-order ?width ?addr)
 		(let-bindings bindings ((byte-order-string (convert-byte-order byte-order))
 					(width-string (convert-width width))
@@ -264,6 +294,14 @@
 		  (values (format nil "IfPattern (~A, ~A, ~A)"
 				  condition-string consequent-string alternative-string)
 			  bindings)))
+	       ((set ?reg ?value)
+		(if (var-symbol-p reg)
+		    (let ((reg-name (symbol-for-var-symbol reg)))
+		      (let-bindings bindings ((value-string (convert value)))
+			(values (format nil "AssignPattern (\"~A\", ~A)"
+					(dcs reg-name) value-string)
+				(cons (list reg-name 'reg) bindings))))
+		    (error "expr ~A is not an lhs" reg)))
 	       ((?op . ?args)
 		(multiple-value-bind (ml-name kind-ml-name num-args need-width)
 		    (lookup-operator op)
@@ -288,9 +326,9 @@
 		    (error "unknown operator ~A" op))))
 	       (?pattern
 		(cond ((integerp pattern)
-		       (format nil "IntPattern (TheInt ~AL)" pattern))
+		       (format nil "IntPattern (TheInt (~AL))" pattern))
 		      ((floatp pattern)
-		       (format nil "FloatPattern (TheFloat ~AL)" pattern))
+		       (format nil "FloatPattern (TheFloat (~AL))" pattern))
 		      ((dont-care-symbol-p pattern)
 		       "ExprPattern \"__dummy__\"")
 		      ((var-symbol-p pattern)
@@ -304,6 +342,57 @@
 		      (t
 		       (error "illegal pattern ~A" pattern)))))))
     (convert pattern)))
+
+(defun convert-cost-expr (expr bindings)
+  (let ((convert-expr-bindings (mapcar #'(lambda (binding)
+					   (list (first binding) (dcs (first binding)) (second binding)))
+				       bindings)))
+    (labels ((convert (expr)
+	       (case-match expr
+	         ((when ?condition ?consequent)
+		  (format nil "cm_when fields (~A) (fun _ -> ~A)"
+			  (convert-expr condition convert-expr-bindings)
+			  (convert consequent)))
+		 (t
+		  (cond ((integerp expr)
+			 (format nil "cm_return ~A" expr))
+			(t
+			 (error "illegal cost expression ~A" expr)))))))
+      (convert expr))))
+
+(defun convert-format (format args bindings)
+  (labels ((convert-tilde (char args rest-format)
+	     (case char
+	       (#\~ (format nil "\"~~\" ^ ~A" (convert rest-format args)))
+	       (#\% (format nil "\"\\n\" ^ ~A" (convert rest-format args)))
+	       (#\A
+		(let* ((name (car args))
+		       (binding (assoc name bindings))
+		       (type (cadr binding)))
+		  (if (null binding)
+		      (error "unbound variable ~A" name)
+		    (case type
+		      (int
+		       (format nil "(string_of_int ~A) ^ ~A" (dcs name) (convert rest-format (cdr args))))
+		      (int-const
+		       (format nil "(expr_to_c alloc ~A) ^ ~A" (dcs name) (convert rest-format (cdr args))))
+		      (reg
+		       (format nil "(register_to_c alloc ~A) ^ ~A" (dcs name) (convert rest-format (cdr args))))
+		      (t
+		       (error "binding type ~A not allowed in format" type))))))
+	       (t
+		(error "illegal format directive #\~A" char))))
+	   (convert (format args)
+	     (let ((tilde-pos (position #\~ format)))
+	       (cond ((null tilde-pos)
+		      (format nil "\"~A\"" format))
+		     ((= tilde-pos 0)
+		      (convert-tilde (char format (1+ tilde-pos)) args (subseq format (+ tilde-pos 2))))
+		     (t
+		      (format nil "\"~A\" ^ ~A"
+			      (subseq format 0 tilde-pos)
+			      (convert-tilde (char format (1+ tilde-pos)) args (subseq format (+ tilde-pos 2)))))))))
+    (convert format args)))
 
 (defun make-ir-macros ()
   (with-open-file (out "irmacros.ml" :direction :output :if-exists :supersede)
@@ -329,14 +418,14 @@
 	  simplify
 	(multiple-value-bind (pattern-string bindings)
 	    (convert-pattern pattern)
-	  (format out "    { pattern = ~A ;~%      apply = fun e b ->~%        ~A } ;~%"
+	  (format out "    { pattern = ~A ;~%      apply = fun e bindings ->~%        ~A } ;~%"
 		  pattern-string
 		  (if (null bindings)
 		      (convert-expr expr '())
 		    (let* ((binding-names (mapcar #'first bindings))
 			   (binding-ml-names (mapcar #'dcs binding-names))
 			   (binding-types (mapcar #'second bindings)))
-		      (format nil (string-concat         "match (~{find_binding b \"~A\"~^, ~}) with~%"
+		      (format nil (string-concat         "match (~{find_binding bindings \"~A\"~^, ~}) with~%"
 					         "          (~{~ABinding (_, ~A)~^, ~}) ->~%"
 						 "            ~A~%"
 						 "        | _ -> raise Wrong_binding")
@@ -345,3 +434,46 @@
 				       binding-types binding-ml-names)
 			      (convert-expr expr (mapcar #'list binding-names binding-ml-names binding-types)))))))))
     (format out "  ]~%")))
+
+(defun make-matchers (filename matchers-name printers-name)
+  (with-open-file (out filename :direction :output :if-exists :supersede)
+    (format out "open Int64~%~%open Expr~%open Cond_monad~%open Matcher~%open Irmacros~%open Cgen~%~%")
+    (dolist (matcher (reverse *matchers*))
+      (destructuring-bind (name pattern cost-expr format)
+	  matcher
+	(multiple-value-bind (pattern-string bindings)
+	    (convert-pattern pattern)
+	  (let* ((binding-names (mapcar #'first bindings))
+		 (binding-ml-names (mapcar #'dcs binding-names))
+		 (binding-types (mapcar #'second bindings)))
+	    (format out (string-concat "let ~A_matcher =~%"
+				       "  { name = \"~A\" ;~%"
+				       "    pattern = ~A ;~%"
+				       "    matcher = (fun fields bindings ->~%"
+				       "                 let __dummy__ = []~{ and ~A = ~A~}~%"
+				       "                 in ~A) }~%"
+				       "and ~A_printer =~%"
+				       "  (\"~A\", (fun alloc bindings ->~%"
+				       "              let~{ ~A = ~A~^ and~}~%"
+				       "              in ~A))~%~%")
+		    (dcs name) (dcs name)
+		    pattern-string
+		    (mappend #'(lambda (type name)
+				 (case type
+				   (int (list name (format nil "get_width_binding bindings \"~A\"" name)))
+				   (int-const (list name (format nil "get_const_binding bindings \"~A\"" name)))
+				   (t '())))
+			     binding-types binding-ml-names)
+		    (convert-cost-expr cost-expr bindings)
+		    (dcs name) (dcs name)
+		    (mappend #'(lambda (type name)
+				 (list name
+				       (case type
+					 (int (format nil "get_width_binding bindings \"~A\"" name))
+					 (int-const (format nil "get_const_binding bindings \"~A\"" name))
+					 (reg (format nil "get_register_binding bindings alloc \"~A\"" name))
+					 (t (error "binding of type ~A is not allowed in matcher pattern" type)))))
+			     binding-types binding-ml-names)
+		    (convert-format (car format) (cdr format) bindings))))))
+    (format out "let ~A = [ ~{~A_matcher~^ ; ~} ]~%" matchers-name (mapcar #'dcs (mapcar #'first (reverse *matchers*))))
+    (format out "let ~A = [ ~{~A_printer~^ ; ~} ]~%" printers-name (mapcar #'dcs (mapcar #'first (reverse *matchers*))))))

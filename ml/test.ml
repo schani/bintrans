@@ -6,6 +6,8 @@ open Cond_monad
 open Target_alpha
 open Matcher
 open Explorer
+open Switcher
+open Cgen
 
 let make_mask begin_bit end_bit =
   If (BinaryWidth (LessU, 8, end_bit, begin_bit),
@@ -40,31 +42,23 @@ let rec repeat_until_fixpoint fn data =
     repeat_until_fixpoint fn ndata
 *)
 
-let rec print_target_insns best_matches_alist match_data =
-  
-  let bindings  = filter (fun b -> match b with
-			      ExprBinding _ -> true
-			    | _ -> false) match_data.bindings
-  in
-    print_string match_data.target_insn.name ;
-    match bindings with
-	[] -> ()
-      | _ :: _ ->
-	  print_string "(" ;
-	  iter (fun b ->
-		  match b with
-		      ExprBinding (name, expr) ->
-			print_string name ; print_string " = " ;
-			print_target_insns best_matches_alist (assoc expr best_matches_alist).expr_match_data ;
-			print_string " ; "
-		    | _ -> raise Wrong_binding)
-	    bindings ;
-	  print_string ")"
+let rec print_target_insns allocation best_matches_alist match_data =
+  let expr_bindings  = filter (fun b -> match b with
+				   ExprBinding _ -> true
+				 | _ -> false) match_data.bindings
+  and printer = assoc match_data.target_insn.name alpha_printers
+  in iter (fun b ->
+	     match b with
+		 ExprBinding (name, expr) ->
+		   print_target_insns allocation best_matches_alist (assoc expr best_matches_alist).expr_match_data ;
+	       | _ -> raise Wrong_binding)
+       expr_bindings;
+    print_string (printer allocation match_data.bindings) ; print_newline ()
 
 let test_expore () =
-  let r1 = (1, Int)
-  and r2 = (2, Int)
-  and r3 = (3, Int)
+  let r1 = GuestRegister (1, Int)
+  and r2 = GuestRegister (2, Int)
+  and r3 = GuestRegister (3, Int)
   in let stmt1 = make_ppc_andc r1 r2 r3
   and stmt2 = Assign (r1, Binary (BitAnd, Unary (BitNeg, Register r2), Register r3))
   and stmt3 = Assign (r1, (make_rotl4 (Register r2) (IntConst (IntLiteral 8L))))
@@ -77,25 +71,22 @@ let test_expore () =
   let (best_stmt_match, best_sub_matches_alist) = recursively_match_stmt fields stmt alpha_insns
   in print_whole_match best_stmt_match best_sub_matches_alist ;
 *)
-  in let stmt_forms = explore_all_fields stmt6 [("sh", 0L, 32L); ("mb", 0L, 32L); ("me", 0L, 32L)] alpha_insns
-  in iter (fun form ->
-	     print_stmt form.stmt ;
-	     iter (fun form_match ->
-		     print_string "  " ;
-		     print_target_insns form_match.best_sub_matches form_match.match_data ;
-		     print_newline () ;
-(*
-		     iter (fun c ->
-			     print_expr c ; print_newline ()) form_match.match_conditions
-*)
-   )
-	       form.matches ;
-	     print_newline ()) stmt_forms
+  in let stmt_forms = explore_all_fields stmt6 [("sh", 0L, 32L); ("mb", 0L, 32L); ("me", 0L, 32L)] alpha_matchers
+  in let switch = switch_cases (map (fun form -> (form.form_conditions, form)) stmt_forms)
+  in print_switch (fun form ->
+		     let switch = switch_cases (map (fun form_match -> (form_match.match_conditions, form_match)) form.matches)
+		     in print_switch (fun form_match ->
+					let allocation = make_allocation form_match.best_sub_matches form_match.match_data
+					in print_string "  " ;
+					  print_target_insns allocation form_match.best_sub_matches form_match.match_data ;
+					  print_newline ())
+			  switch)
+       switch
 
 let main () =
-  let r1 = (1, Int)
-  and r2 = (2, Int)
-  and r3 = (3, Int)
+  let r1 = GuestRegister (1, Int)
+  and r2 = GuestRegister (2, Int)
+  and r3 = GuestRegister (3, Int)
   in let stmt1 = Assign (r1, Binary (BitAnd, Binary (ShiftL, Register r2, IntConst (IntField "sh")),
 				     (make_mask (int_literal_expr 0L) (int_literal_expr 15L))))
      and stmt2 = make_ppc_rlwinm r1 (Register r2) (IntConst (IntField "sh")) (IntConst (IntField "mb")) (IntConst (IntField "me"))

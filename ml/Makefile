@@ -11,8 +11,10 @@ ENGINE_OBJS = monad.$(OEXT) memoize.$(OEXT) bitmath.$(OEXT) \
 	      expr.$(OEXT) cond_monad.$(OEXT) instruction.$(OEXT) matcher.$(OEXT) \
 	      simplifiers.$(OEXT) simplify.$(OEXT) \
 	      machine.$(OEXT) pruner.$(OEXT) \
-	      irmacros.$(OEXT) target_alpha.$(OEXT) \
-	      explorer.$(OEXT)
+	      irmacros.$(OEXT) \
+	      explorer.$(OEXT) \
+	      cgen.$(OEXT) switcher.$(OEXT) \
+	      target_alpha.$(OEXT)
 
 TEST_OBJS = test.$(OEXT)
 
@@ -27,8 +29,8 @@ engine : $(ENGINE_OBJS)
 %.$(OEXT) : %.ml
 	$(OC) -c $<
 
-simplifiers.ml irmacros.ml : simplify.lisp irmacros.lisp lisp2ml.lisp
+simplifiers.ml irmacros.ml target_alpha.ml : simplify.lisp irmacros.lisp target_alpha.lisp lisp2ml.lisp
 	clisp build.lisp
 
 clean :
-	rm -f *.cmo *.cmx *.o *.cmi simplifiers.ml irmacros.ml test engine *~
+	rm -f *.cmo *.cmx *.o *.cmi simplifiers.ml irmacros.ml target_alpha.ml test engine *~

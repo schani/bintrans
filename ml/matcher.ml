@@ -26,9 +26,30 @@ let binding_input_name binding =
 let find_binding bindings name =
   find (fun b -> (binding_input_name b) = name) bindings
 
-let get_const_binding fields bindings name =
+let get_register_binding bindings alloc name =
   match find_binding bindings name with
-      ConstBinding (name, expr) -> expr
+      RegisterBinding (_, register) -> register
+    | ExprBinding (_, expr) ->
+	(try
+	   assoc expr alloc ;
+	   IntermediateRegister expr
+	 with
+	     Not_found -> raise Wrong_binding)
+    | _ -> raise Wrong_binding
+
+let get_const_binding bindings name =
+  match find_binding bindings name with
+      ConstBinding (_, expr) -> expr
+    | _ -> raise Wrong_binding
+
+let get_int_const_binding fields bindings name =
+  match cfold_expr fields (get_const_binding bindings name) with
+      IntConst (IntLiteral const) -> const
+    | _ -> raise Expression_not_const
+
+let get_width_binding bindings name =
+  match find_binding bindings name with
+      WidthBinding (_, width) -> width
     | _ -> raise Wrong_binding
 
 (*** target insns ***)
@@ -38,7 +59,7 @@ type cost = int
 type target_insn =
     { name : string ;
       pattern : stmt_pattern ;
-      matcher : (input_name * int64) list -> stmt -> binding list -> cost condition_monad }
+      matcher : (input_name * int64) list -> binding list -> cost condition_monad }
 
 (*** matches ***)
 
@@ -198,7 +219,7 @@ let try_stmt_match fields stmt insn =
 	       (cm_return [ WidthBinding (width_input_name, width) ])
 	       (combine_bindings (match_expr fields addr addr_pattern) (match_expr fields value value_pattern)))
 	    (fun bindings ->
-	       cm_bind (insn.matcher fields stmt bindings)
+	       cm_bind (insn.matcher fields bindings)
 	       (fun cost ->
 		  cm_return (bindings, cost)))
     | (Assign (register, expr),
@@ -208,7 +229,7 @@ let try_stmt_match fields stmt insn =
 	      (cm_return [ RegisterBinding (input_name, register) ])
 	      (match_expr fields expr pattern))
 	   (fun bindings ->
-	      cm_bind (insn.matcher fields stmt bindings)
+	      cm_bind (insn.matcher fields bindings)
 	      (fun cost ->
 		 cm_return (bindings, cost)))
     | _ -> cm_fail
@@ -254,9 +275,17 @@ let find_stmt_matches stmt =
 					bindings = bindings }})
     stmt
 
+(*
+let rec next_tmp_reg_no = ref 100
+and make_tmp_reg_no =
+  let reg_no = !next_tmp_reg_no
+  in incr next_tmp_reg_no ;
+    reg_no
+*)
+
 let find_expr_matches expr =
   (* print_string "matching " ; print_expr expr ; print_string " with " ; print_matches_alist best_matches_alist ; *)
-  let stmt = Assign ((-1, expr_value_type expr), expr)
+  let stmt = Assign (IntermediateRegister expr, expr)
   in find_matches (fun insn cost cumulative_cost bindings ->
 		     { matched_expr = expr ;
 		       expr_match_data = { target_insn = insn ;
