@@ -52,6 +52,8 @@
 #define MAX_REG_LOCKS                  2048
 #define MAX_FRAGMENT_UNRESOLVED_JUMPS    64
 
+#define NUM_AFTER_JUMP_INSN_SLOTS         0
+
 #define JUMP_TARGET_REG        16
 #define RETURN_ADDR_REG        26
 #define CONSTANT_AREA_REG      27
@@ -972,6 +974,8 @@ emit_end_alt (void)
 void
 emit_direct_jump (word_32 target)
 {
+    int i;
+
     if (branch_profile_func != 0)
 	branch_profile_func();
 
@@ -984,6 +988,9 @@ emit_direct_jump (word_32 target)
     fragment_unresolved_jumps[num_fragment_unresolved_jumps].target = target;
 
     ++num_fragment_unresolved_jumps;
+
+    for (i = 0; i < NUM_AFTER_JUMP_INSN_SLOTS; ++i)
+	emit(0);
 
     have_jumped = 1;
 }
@@ -2739,7 +2746,7 @@ provide_fragment_and_patch (word_64 jump_addr)
 	    }
 	    */
 
-	    if (sync == SYNC_BLOCK_CUSTOM && emit_loc - sync_block_start + 1 <= num_epilogue_insns)
+	    if (sync == SYNC_BLOCK_CUSTOM && emit_loc - sync_block_start + 1 <= num_epilogue_insns + NUM_AFTER_JUMP_INSN_SLOTS)
 	    {
 		word_32 *branch_loc = (word_32*)unresolved_jumps[i].start + (emit_loc - sync_block_start);
 
