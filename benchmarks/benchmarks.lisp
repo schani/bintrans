@@ -158,10 +158,8 @@
    "vortex.inputs/ref/input/persons.1k"
    "vortex.inputs/ref/input/vortex.in"))
 (defbenchmark ijpeg_specmun "../bintrans /bin/ijpeg -image_file ../ijpeg.inputs/ref/input/specmun.ppm -compression.quality 90 -compression.optimize_coding 0 -compression.smoothing_factor 90 -difference.image 1 -difference.x_stride 10 -difference.y_stride 10 -verbose 1 -GO.findoptcomp")
-
-;;ijpeg vigo
-;;ijpeg penguin
-
+(defbenchmark ijpeg_vigo "../bintrans /bin/ijpeg -image_file ../ijpeg.inputs/ref/input/vigo.ppm -compression.quality 90 -compression.optimize_coding 0 -compression.smoothing_factor 90 -difference.image 1 -difference.x_stride 10 -difference.y_stride 10 -verbose 1 -GO.findoptcomp")
+(defbenchmark ijpeg_penguin "../bintrans /bin/ijpeg -image_file ../ijpeg.inputs/ref/input/penguin.ppm -compression.quality 90 -compression.optimize_coding 0 -compression.smoothing_factor 90 -difference.image 1 -difference.x_stride 10 -difference.y_stride 10 -verbose 1 -GO.findoptcomp")
 (defbenchmark perl_primes "../bintrans /bin/perl ../perl.inputs/ref/input/primes.pl <../perl.inputs/ref/input/primes.in")
 (defbenchmark perl_scrabbl "../bintrans /bin/perl ../perl.inputs/ref/input/scrabbl.pl <../perl.inputs/ref/input/scrabbl.in"
   ("perl.inputs/ref/input/dictionary"))
