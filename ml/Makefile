@@ -4,8 +4,9 @@ OEXT = cmo
 #OEXT = cmx
 AEXT = cma
 
-ENGINE_OBJS = bitmath.$(OEXT) expr.$(OEXT) instruction.$(OEXT) matcher.$(OEXT) simplifiers.$(OEXT) simplify.$(OEXT) \
-	    machine.$(OEXT) pruner.$(OEXT) irmacros.$(OEXT) target_alpha.$(OEXT)
+ENGINE_OBJS = monad.$(OEXT) bitmath.$(OEXT) expr.$(OEXT) cond_monad.$(OEXT) instruction.$(OEXT) matcher.$(OEXT) \
+	      simplifiers.$(OEXT) simplify.$(OEXT) \
+	      machine.$(OEXT) pruner.$(OEXT) irmacros.$(OEXT) target_alpha.$(OEXT)
 
 TEST_OBJS = test.$(OEXT)
 

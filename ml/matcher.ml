@@ -1,7 +1,9 @@
 open List
 open Int64
 
+open Monad
 open Expr
+open Cond_monad
 
 exception No_match
 exception Wrong_binding
@@ -95,18 +97,14 @@ let print_matches_alist alist =
 
 (*** bindings ***)
 
-let combine bindings maybe_bindings actor =
-  match maybe_bindings with
-    Some other_bindings -> actor (bindings @ other_bindings)
-  | None -> None
-
 let combine_maybe combinator m1 m2 =
   match (m1, m2) with
     (Some v1, Some v2) -> Some (combinator v1 v2)
   | _ -> None
 
-let combine_maybe_bindings =
-  combine_maybe ( @ )
+let combine_bindings cm1 cm2 =
+  (make_bind2 cm_bind) cm1 cm2
+    (fun b1 b2 -> cm_return (b1 @ b2))
 
 (*** matching ***)
 
@@ -114,74 +112,79 @@ let make_some x = Some x
 
 let match_int_const int_const pattern =
   match (int_const, pattern) with
-    (IntLiteral const, AnyInt input_name) -> Some [ ConstBinding (input_name, IntConst int_const) ]
-  | (IntLiteral const1, TheInt const2) when const1 = const2 -> Some []
-  | _ -> None
+    (IntLiteral const, AnyInt input_name) -> cm_return [ ConstBinding (input_name, IntConst int_const) ]
+  | (IntLiteral const1, TheInt const2) when const1 = const2 -> cm_return []
+  | _ -> raise Expression_not_const
 
 let match_expr fields expr pattern =
-  let rec match_rec expr pattern =
+  let return = cm_return
+  and fail = cm_fail
+  and when_cfold = cm_when fields
+  in let rec match_rec expr pattern =
     match (cfold_expr fields expr, pattern) with
 	(IntConst (IntLiteral const), IntPattern (AnyInt input_name)) ->
-	  Some [ ConstBinding (input_name, expr) ]
-      | (IntConst (IntLiteral const1), IntPattern (TheInt const2)) when
-	  const1 = const2 -> Some []
+	  return [ ConstBinding (input_name, expr) ]
+      | (IntConst (IntLiteral const1), IntPattern (TheInt const2)) ->
+	  when_cfold (BinaryWidth (IntEqual, 8, expr, int_literal_expr const2))
+	    (fun _ -> (return []))
       | (FloatConst const, FloatPattern (AnyFloat input_name)) ->
-	  Some [ ConstBinding (input_name, expr) ]
-      | (FloatConst const1, FloatPattern (TheFloat const2)) when
-	  const1 = const2 -> Some []
+	  return [ ConstBinding (input_name, expr) ]
+      | (FloatConst const1, FloatPattern (TheFloat const2)) ->
+	  when_cfold (Binary (FloatEqual, expr, FloatConst const2))
+	    (fun _ -> (return []))
       | (ConditionConst const, ConditionPattern (AnyBool input_name)) ->
-	  Some [ ConstBinding (input_name, expr) ]
-      | (ConditionConst const1, ConditionPattern (TheBool const2)) when
-	  const1 = const2 -> Some []
+	  return [ ConstBinding (input_name, expr) ]
+      | (ConditionConst const1, ConditionPattern (TheBool const2)) ->
+	  when_cfold (Unary (ConditionNeg, Binary (ConditionXor, expr, ConditionConst const2)))
+	    (fun _ -> (return []))
       | _ ->
 	  match (expr, pattern) with
 	      (_, ExprPattern input_name) ->
-		Some [ ExprBinding (input_name, expr) ]
+		return [ ExprBinding (input_name, expr) ]
 	    | (Register register, RegisterPattern input_name) ->
-		Some [ RegisterBinding (input_name, register) ]
+		return [ RegisterBinding (input_name, register) ]
 	    | (_, RegisterPattern input_name) ->
-		Some [ ExprBinding (input_name, expr) ]
+		return [ ExprBinding (input_name, expr) ]
 	    | (LoadBO (byte_order1, width, addr),
 	       LoadBOPattern (byte_order2, (widths, width_input_name), addr_pattern)) when
 		byte_order1 = byte_order2 && (mem width widths) ->
-		combine [ WidthBinding (width_input_name, width) ]
-		  (match_rec addr addr_pattern)
-		  make_some
+		  combine_bindings
+		    (return [ WidthBinding (width_input_name, width) ])
+		    (match_rec addr addr_pattern)
 	    | (Unary (op1, arg), UnaryPattern (op2, arg_pattern)) when
 		op1 = op2 -> match_rec arg arg_pattern
 	    | (UnaryWidth (op1, width, arg),
 	       UnaryWidthPattern (op2, (widths, width_input_name), arg_pattern)) when
 		op1 = op2 && (mem width widths) ->
-		combine [ WidthBinding (width_input_name, width) ]
-		  (match_rec arg arg_pattern)
-		  make_some
+		  combine_bindings
+		    (return [ WidthBinding (width_input_name, width) ])
+		    (match_rec arg arg_pattern)
 	    | (Binary (op1, arg1, arg2),
 	       BinaryPattern (op2, arg_pattern1, arg_pattern2)) when
 		op1 == op2 ->
-		combine_maybe_bindings (match_rec arg1 arg_pattern1) (match_rec arg2 arg_pattern2)
+		combine_bindings (match_rec arg1 arg_pattern1) (match_rec arg2 arg_pattern2)
 	    | (BinaryWidth (op1, width, arg1, arg2),
 	       BinaryWidthPattern (op2, (widths, width_input_name), arg_pattern1, arg_pattern2)) when
 		op1 = op2 && (mem width widths) ->
-		combine [ WidthBinding (width_input_name, width) ]
-		  (combine_maybe_bindings (match_rec arg1 arg_pattern1) (match_rec arg2 arg_pattern2))
-		  make_some
+		  combine_bindings
+		    (return [ WidthBinding (width_input_name, width) ])
+		    (combine_bindings (match_rec arg1 arg_pattern1) (match_rec arg2 arg_pattern2))
 	    | (TernaryWidth (op1, width, arg1, arg2, arg3),
 	       TernaryWidthPattern (op2, (widths, width_input_name), arg_pattern1, arg_pattern2, arg_pattern3)) when
 		op1 = op2 && (mem width widths) ->
-		combine [ WidthBinding (width_input_name, width) ]
-		  (combine_maybe_bindings (match_rec arg1 arg_pattern1)
-		     (combine_maybe_bindings (match_rec arg2 arg_pattern2) (match_rec arg3 arg_pattern3)))
-		  make_some
+		  combine_bindings (return [ WidthBinding (width_input_name, width) ])
+		    (combine_bindings (match_rec arg1 arg_pattern1)
+		       (combine_bindings (match_rec arg2 arg_pattern2) (match_rec arg3 arg_pattern3)))
 	    | (Extract (arg, start, length),
 	       ExtractPattern (arg_pattern, start_pattern, length_pattern)) ->
-		combine_maybe_bindings (match_rec arg arg_pattern)
-		  (combine_maybe_bindings (match_int_const start start_pattern) (match_int_const length length_pattern))
+		combine_bindings (match_rec arg arg_pattern)
+		  (combine_bindings (match_int_const start start_pattern) (match_int_const length length_pattern))
 	    | (Insert (arg1, arg2, start, length),
 	       InsertPattern (arg_pattern1, arg_pattern2, start_pattern, length_pattern)) ->
-		combine_maybe_bindings
-		  (combine_maybe_bindings (match_rec arg1 arg_pattern1) (match_rec arg2 arg_pattern2))
-		  (combine_maybe_bindings (match_int_const start start_pattern) (match_int_const length length_pattern))
-	    | _ -> None
+		combine_bindings
+		  (combine_bindings (match_rec arg1 arg_pattern1) (match_rec arg2 arg_pattern2))
+		  (combine_bindings (match_int_const start start_pattern) (match_int_const length length_pattern))
+	    | _ -> fail
   in
     match_rec expr pattern
 
@@ -190,20 +193,25 @@ let try_stmt_match fields stmt insn =
       (Store (byte_order1, width, addr, value),
        StorePattern (byte_order2, (widths, width_input_name), addr_pattern, value_pattern)) when
 	byte_order1 = byte_order2 && (mem width widths) ->
-          combine [ WidthBinding (width_input_name, width) ]
-	  (combine_maybe_bindings (match_expr fields addr addr_pattern) (match_expr fields value value_pattern))
-	  (fun bindings ->
-	     match insn.matcher fields stmt bindings with
-		 Some cost -> Some (bindings, cost)
-	       | None -> None)
+	  cm_bind
+            (combine_bindings
+	       (cm_return [ WidthBinding (width_input_name, width) ])
+	       (combine_bindings (match_expr fields addr addr_pattern) (match_expr fields value value_pattern)))
+	    (fun bindings ->
+	      match insn.matcher fields stmt bindings with
+		Some cost -> cm_return (bindings, cost)
+	      | None -> cm_fail)
     | (Assign (register, expr),
        AssignPattern (input_name, pattern)) ->
-	combine [ RegisterBinding (input_name, register) ] (match_expr fields expr pattern)
-	  (fun bindings ->
+	 cm_bind
+	   (combine_bindings
+	      (cm_return [ RegisterBinding (input_name, register) ])
+	      (match_expr fields expr pattern))
+	   (fun bindings ->
 	     match insn.matcher fields stmt bindings with
-		 Some cost -> Some (bindings, cost)
-	       | None -> None)
-    | _ -> None
+	       Some cost -> cm_return (bindings, cost)
+	     | None -> cm_fail)
+    | _ -> cm_fail
 
 let calculate_sub_costs bindings best_matches_alist =
   fold_left ( combine_maybe ( + ) )
@@ -221,36 +229,42 @@ let calculate_sub_costs bindings best_matches_alist =
 
 let find_stmt_matches fields stmt insns best_matches_alist =
   concat (map (fun insn ->
-                 match try_stmt_match fields stmt insn with
-		   None -> []
-		 | Some (bindings, cost) ->
-		     let maybe_sub_costs = calculate_sub_costs bindings best_matches_alist
-		     in match maybe_sub_costs with
-		       Some sub_costs ->
-			 [ { matched_stmt = stmt ;
-			     stmt_match_data = { target_insn = insn ;
-						 cost = cost ;
-						 cumulative_cost = cost + sub_costs ;
-						 bindings = bindings }} ]
-		     | None -> [])
+                 let match_cm = try_stmt_match fields stmt insn
+		 in if cm_successful match_cm then
+		   (match cm_value match_cm with
+		     (bindings, cost) ->
+		       (let maybe_sub_costs = calculate_sub_costs bindings best_matches_alist
+		       in match maybe_sub_costs with
+			 Some sub_costs ->
+			   [ { matched_stmt = stmt ;
+			       stmt_match_data = { target_insn = insn ;
+						   cost = cost ;
+						   cumulative_cost = cost + sub_costs ;
+						   bindings = bindings }} ]
+		       | None -> []))
+		 else
+		   [])
 	    insns)
 
 let find_expr_matches fields expr insns best_matches_alist =
   (* print_string "matching " ; print_expr expr ; print_string " with " ; print_matches_alist best_matches_alist ; *)
   let stmt = Assign ((-1, expr_value_type expr), expr)
   in concat (map (fun insn ->
-                    match try_stmt_match fields stmt insn with
-		      None -> []
-		    | Some (bindings, cost) ->
-			let maybe_sub_costs = calculate_sub_costs bindings best_matches_alist
-			in match maybe_sub_costs with
-			  Some sub_costs ->
-			    [ { matched_expr = expr ;
-				expr_match_data = { target_insn = insn ;
-						    cost = cost ;
-						    cumulative_cost = cost + sub_costs ;
-						    bindings = bindings }} ]
-			| None -> [])
+                    let match_cm = try_stmt_match fields stmt insn
+		    in if cm_successful match_cm then
+                      (match cm_value match_cm with
+			(bindings, cost) ->
+			  (let maybe_sub_costs = calculate_sub_costs bindings best_matches_alist
+			  in match maybe_sub_costs with
+			    Some sub_costs ->
+			      [ { matched_expr = expr ;
+				  expr_match_data = { target_insn = insn ;
+						      cost = cost ;
+						      cumulative_cost = cost + sub_costs ;
+						      bindings = bindings }} ]
+			  | None -> []))
+		    else
+		      [])
 	       insns)
 
 let rec recursively_match_stmt fields stmt target_insns =

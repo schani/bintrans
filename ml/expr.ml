@@ -4,11 +4,13 @@ open Int64
 open List
 
 open Bitmath
+open Monad
 
 exception Wrong_type
 exception Illegal_arguments
 exception Unsupported_width
 exception Unsupported_operation
+exception Expression_not_const
 
 type byte_order =
     BigEndian
@@ -171,59 +173,6 @@ type stmt =
     Store of byte_order * width * expr * expr
   | Assign of register * expr
 
-(* constructing *)
-
-let int_literal_expr int =
-  IntConst (IntLiteral int)
-
-let bool_to_int_expr expr =
-  If (expr, int_literal_expr one, int_literal_expr zero)
-
-let extract_bit_expr value bit =
-  Binary (BitAnd, BinaryWidth(LShiftR, 8, value, bit), int_literal_expr one)
-
-let is_bit_set_expr value bit =
-  Unary (ConditionNeg, Unary (IntEven, extract_bit_expr value bit))
-
-let both_low_one_bits_expr a b =
-  Binary (BothLowOneBits, a, b)
-
-let low_mask_expr x =
-  Unary (LowMask, x)
-
-let high_mask_expr x =
-  Unary (HighMask, x)
-
-let bitand_expr a b =
-  Binary (BitAnd, a, b)
-
-let bitor_expr a b =
-  Binary (BitOr, a, b)
-
-let bitxor_expr a b =
-  Binary (BitXor, a, b)
-
-let bitneg_expr x =
-  Unary (BitNeg, x)
-
-let shiftl_expr a b =
-  Binary (ShiftL, a, b)
-
-let bitmask_expr a b =
-  Binary (BitMask, a, b)
-
-let bitsubset_expr sub super =
-  BinaryWidth (IntEqual, 8, bitand_expr sub super, sub)
-
-let add_expr a b =
-  Binary (IntAdd, a, b)
-
-let sub_expr a b =
-  Binary (IntSub, a, b)
-
-let mul_expr a b =
-  Binary (IntMul, a, b)
-
 (* inspecting *)
 
 let rec expr_value_type expr =
@@ -269,6 +218,62 @@ let is_const expr =
       IntConst (IntLiteral _) | FloatConst _ | ConditionConst _ -> true
     | _ -> false
 
+(* constructing *)
+
+let int_literal_expr int =
+  IntConst (IntLiteral int)
+
+let bool_to_int_expr expr =
+  If (expr, int_literal_expr one, int_literal_expr zero)
+
+let extract_bit_expr value bit =
+  Binary (BitAnd, BinaryWidth(LShiftR, 8, value, bit), int_literal_expr one)
+
+let is_bit_set_expr value bit =
+  Unary (ConditionNeg, Unary (IntEven, extract_bit_expr value bit))
+
+let both_low_one_bits_expr a b =
+  Binary (BothLowOneBits, a, b)
+
+let low_mask_expr x =
+  Unary (LowMask, x)
+
+let high_mask_expr x =
+  Unary (HighMask, x)
+
+let bitand_expr a b =
+  Binary (BitAnd, a, b)
+
+let bitor_expr a b =
+  Binary (BitOr, a, b)
+
+let bitxor_expr a b =
+  Binary (BitXor, a, b)
+
+let bitneg_expr x =
+  if expr_value_type x = Int then
+    Unary (BitNeg, x)
+  else
+    raise Wrong_type
+
+let shiftl_expr a b =
+  Binary (ShiftL, a, b)
+
+let bitmask_expr a b =
+  Binary (BitMask, a, b)
+
+let bitsubset_expr sub super =
+  BinaryWidth (IntEqual, 8, bitand_expr sub super, sub)
+
+let add_expr a b =
+  Binary (IntAdd, a, b)
+
+let sub_expr a b =
+  Binary (IntSub, a, b)
+
+let mul_expr a b =
+  Binary (IntMul, a, b)
+
 (* instantiation *)
 
 let instantiate_expr expr fields_alist =
@@ -304,28 +309,56 @@ let instantiate_expr expr fields_alist =
 
 (* applying a modifier to all subexpressions *)
 
-let apply_to_expr_subs modify expr =
-  match expr with
-    IntConst _ -> expr
-  | FloatConst _ -> expr
-  | ConditionConst _ -> expr
-  | Register _ -> expr
-  | LoadBO _ -> expr
-  | Unary (op, arg) -> Unary (op, modify arg)
-  | UnaryWidth (op, width, arg) -> UnaryWidth (op, width, modify arg)
-  | Binary (op, arg1, arg2) -> Binary (op, modify arg1, modify arg2)
-  | BinaryWidth (op, width, arg1, arg2) -> BinaryWidth (op, width, modify arg1, modify arg2)
-  | TernaryWidth (op, width, arg1, arg2, arg3) -> TernaryWidth (op, width, modify arg1, modify arg2, modify arg3)
-  | Extract (arg, start, length) -> Extract (modify arg, start, length)
-  | Insert (arg1, arg2, start, length) -> Insert (modify arg1, modify arg2, start, length)
-  | If (condition, cons, alt) -> If (modify condition, modify cons, modify alt)
+let apply_to_expr_subs_with_monad return bind modify expr =
+  let bind2 = make_bind2 bind
+  and bind3 = make_bind3 bind
+  in match expr with
+    IntConst _ -> return expr
+  | FloatConst _ -> return expr
+  | ConditionConst _ -> return expr
+  | Register _ -> return expr
+  | LoadBO _ -> return expr
+  | Unary (op, arg) ->
+      bind (modify arg)
+	(fun marg -> return (Unary (op, marg)))
+  | UnaryWidth (op, width, arg) ->
+      bind (modify arg)
+	(fun marg -> return (UnaryWidth (op, width, marg)))
+  | Binary (op, arg1, arg2) ->
+      bind2 (modify arg1) (modify arg2)
+	(fun marg1 marg2 -> return (Binary (op, marg1, marg2)))
+  | BinaryWidth (op, width, arg1, arg2) ->
+      bind2 (modify arg1) (modify arg2)
+	(fun marg1 marg2 -> return (BinaryWidth (op, width, marg1, marg2)))
+  | TernaryWidth (op, width, arg1, arg2, arg3) ->
+      bind3 (modify arg1) (modify arg2) (modify arg3)
+	(fun marg1 marg2 marg3 -> return (TernaryWidth (op, width, marg1, marg2, marg3)))
+  | Extract (arg, start, length) ->
+      bind (modify arg)
+	(fun marg -> return (Extract (marg, start, length)))
+  | Insert (arg1, arg2, start, length) ->
+      bind2 (modify arg1) (modify arg2)
+	(fun marg1 marg2 -> return (Insert (marg1, marg2, start, length)))
+  | If (condition, cons, alt) ->
+      bind3 (modify condition) (modify cons) (modify alt)
+	(fun mcondition mcons malt -> return (If (mcondition, mcons, malt)))
 
-let apply_to_stmt_subs modify stmt =
+let apply_to_expr_subs =
+  apply_to_expr_subs_with_monad (fun x -> x) (fun v f -> f v)
+
+let apply_to_stmt_subs_with_monad return bind modify stmt =
   match stmt with
     Store (byte_order, width, addr, value) ->
-      Store (byte_order, width, modify addr, modify value)
+      (make_bind2 bind) (modify addr) (modify value)
+	(fun maddr mvalue ->
+	  return (Store (byte_order, width, maddr, mvalue)))
   | Assign (register, expr) ->
-      Assign (register, modify expr)
+      bind (modify expr)
+	(fun mexpr ->
+	  return (Assign (register, mexpr)))
+
+let apply_to_stmt_subs =
+  apply_to_stmt_subs_with_monad (fun x -> x) (fun v f -> f v)
 
 (* constant folding *)
 
@@ -479,7 +512,7 @@ let cfold_expr fields expr =
 	(match condition with
 	  ConditionConst true -> cons
 	| ConditionConst false -> alt
-	| _ -> raise Illegal_arguments)
+	| _ -> fexpr)
   in
     cfold expr
 

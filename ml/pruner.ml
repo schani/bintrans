@@ -1,10 +1,10 @@
 open Int64
 
+open Monad
 open Bitmath
 open Expr
 open Machine
-
-exception Expression_not_const
+open Cond_monad
 
 let bool_to_int bool =
   if bool then one else zero
@@ -17,6 +17,8 @@ and empty_mask =
 let rec expr_known fields expr =
   let rec bits =
     expr_bits fields
+  and cfold =
+    cfold_expr fields
   and known_unary op arg =
     match op with
 	LoadByte -> empty_mask
@@ -28,7 +30,7 @@ let rec expr_known fields expr =
       | BitNeg -> known arg
       | ConditionNeg -> known arg
       | FloatSqrt | FloatNeg | FloatAbs -> empty_mask
-      | HighMask | LowMask | LowOneBits -> raise Expression_not_const
+      | HighMask | LowMask | LowOneBits -> empty_mask (* FIXME *)
   and known_unary_width op width arg =
     match op with
 	IntZero | IntParityEven ->
@@ -53,13 +55,13 @@ let rec expr_known fields expr =
 	    (bitor_expr (bits arg1) (bits arg2))
       | BitXor | ConditionXor -> bitand_expr (known arg1) (known arg2)
       | ShiftL ->
-	  (match arg2 with
+	  (match (cfold arg2) with
 	    IntConst (IntLiteral amount) ->
 	      bitor_expr (shiftl_expr (known arg1) arg2)
 		(bitmask_expr (int_literal_expr zero) arg2)
 	  | _ -> empty_mask)
       | FloatAdd | FloatSub | FloatMul | FloatDiv -> empty_mask
-      | BitMask | BothLowOneBits -> raise Expression_not_const
+      | BitMask | BothLowOneBits -> empty_mask
   and known_binary_width op width arg1 arg2 =
     let bit_width = int_literal_expr (of_int (width * 8))
     and mask = int_literal_expr (width_mask width)
@@ -76,13 +78,13 @@ let rec expr_known fields expr =
     | LessU | LessS | AddCarry | SubCarry | Overflow ->
 	bool_to_int_expr all_known
     | LShiftR ->
-	(match arg2 with
+	(match (cfold arg2) with
 	  IntConst (IntLiteral _) ->
 	    (bitor_expr (BinaryWidth (LShiftR, 8, known arg1, bitand_expr arg2 mask))
 	       (bitmask_expr (sub_expr bit_width arg2) (add_expr (sub_expr (int_literal_expr 64L) bit_width) arg2)))
 	| _ -> empty_mask)
     | AShiftR ->
-	(match arg2 with
+	(match (cfold arg2) with
 	  IntConst (IntLiteral _) ->
 	    (bitor_expr (bitand_expr (BinaryWidth (AShiftR, width, known arg1, arg2)) mask)
 	       (bitmask_expr bit_width (sub_expr (int_literal_expr 64L) bit_width)))
@@ -131,6 +133,8 @@ let rec expr_known fields expr =
 and expr_bits fields expr =
   let rec known =
     expr_known fields
+  and cfold =
+    cfold_expr fields
   and bits_unary op arg =
     match op with
       LoadByte -> empty_mask
@@ -146,7 +150,7 @@ and expr_bits fields expr =
     | BitNeg | ConditionNeg ->
 	bitand_expr (bitneg_expr (bits arg)) (known expr)
     | FloatSqrt | FloatNeg | FloatAbs -> empty_mask
-    | HighMask | LowMask | LowOneBits -> raise Expression_not_const
+    | HighMask | LowMask | LowOneBits -> empty_mask
   and bits_unary_width op width arg =
     let mask = int_literal_expr (width_mask width)
     in match op with
@@ -174,11 +178,11 @@ and expr_bits fields expr =
     | BitOr | ConditionOr -> bitor_expr (bits arg1) (bits arg2)
     | BitXor | ConditionXor -> bitxor_expr (bits arg1) (bits arg2)
     | ShiftL ->
-	(match arg2 with
+	(match (cfold arg2) with
 	  IntConst (IntLiteral _) -> shiftl_expr (bits arg1) arg2
 	| _ -> empty_mask)
     | FloatAdd | FloatSub | FloatMul | FloatDiv -> empty_mask
-    | BitMask | BothLowOneBits -> raise Expression_not_const
+    | BitMask | BothLowOneBits -> empty_mask
   and bits_binary_width op width arg1 arg2 =
     let mask = int_literal_expr (width_mask width)
     and bit_width = int_literal_expr (of_int (width * 8))
@@ -206,7 +210,7 @@ and expr_bits fields expr =
 		   empty_mask)),
 	    empty_mask)
     | LShiftR | AShiftR->
-	(match arg2 with
+	(match (cfold arg2) with
 	  IntConst (IntLiteral _) -> BinaryWidth (op, width, barg1, arg2)
 	| _ -> empty_mask)
     | IntMulHS | IntMulHU -> empty_mask
@@ -241,41 +245,19 @@ and expr_bits fields expr =
     | If (condition, cons, alt) ->
 	bitand_expr (bits cons) (bits alt)
   in if is_const (cfold_expr fields expr) then
-    expr
-  else
-    bits expr
-
-(*** prune monad ***)
-let preturn expr =
-  (expr, [])
-and plet1 value fn =
-  match value with
-    (value_expr, value_conds) ->
-      (match fn value_expr with
-	(result_expr, result_conds) -> (result_expr, result_conds @ value_conds))
-and plet2 value1 value2 fn =
-  match (value1, value2) with
-    ((value1_expr, value1_conds), (value2_expr, value2_conds)) ->
-      (match fn value1_expr value2_expr with
-	(result_expr, result_conds) -> (result_expr, result_conds @ value1_conds @ value2_conds))
+      match expr_value_type expr with
+	  Int -> expr
+	| Float -> empty_mask
+	| Condition -> bool_to_int_expr expr
+    else
+      bits expr
 
 let prune_expr fields expr needed =
-  let return = preturn
-  and let1 = plet1
-  and let2 = plet2
-  and if_prune condition consequent alternative =
-    let ccond = cfold_expr fields condition
-    in if is_const ccond then
-      match ccond with
-	ConditionConst true ->
-	  (match consequent with
-	    (expr, conds) -> (expr, condition :: conds))
-      | ConditionConst false ->
-	  (match alternative with
-	    (expr, conds) -> (expr, (Unary (ConditionNeg, condition)) :: conds))
-      | _ -> raise Wrong_type
-    else
-      raise Expression_not_const
+  let return = cm_return
+  and let1 = cm_bind
+  and let2 = (make_bind2 cm_bind)
+  and let3 = (make_bind3 cm_bind)
+  and if_prune = cm_if fields
   and bits expr =
     expr_bits fields expr
   and known expr =
@@ -289,18 +271,18 @@ let prune_expr fields expr needed =
 	      return (Unary (op, parg)))
       | ConditionToInt ->
 	  if_prune (Unary (IntEven, needed))
-	    (return (IntConst (IntLiteral zero)))
-	    (if_prune (Unary (ConditionNeg, Unary (IntEven, known arg)))
-	       (return (bitand_expr (bits arg) (int_literal_expr one)))
-	       (let1 (prune arg (int_literal_expr one))
-		  (fun parg ->
-		    return (Unary (ConditionToInt, parg)))))
+	    (fun _ -> (return (IntConst (IntLiteral zero))))
+	    (fun _ -> (if_prune (Unary (ConditionNeg, Unary (IntEven, known arg)))
+			 (fun _ -> (return (bitand_expr (bits arg) (int_literal_expr one))))
+			 (fun _ -> (let1 (prune arg (int_literal_expr one))
+				      (fun parg ->
+					 return (Unary (ConditionToInt, parg)))))))
       | IntEven ->
 	  if_prune (Unary (IntEven, known arg))
-	      (let1 (prune arg (int_literal_expr one))
-		 (fun parg ->
-		   return (Unary (IntEven, parg))))
-	      (return (Unary (IntEven, bits arg)))
+	    (fun _ -> (let1 (prune arg (int_literal_expr one))
+			 (fun parg ->
+			    return (Unary (IntEven, parg)))))
+	    (fun _ -> (return (Unary (IntEven, bits arg))))
       | IntNeg ->
 	  let1 (prune arg (low_mask_expr needed))
 	    (fun parg ->
@@ -309,7 +291,10 @@ let prune_expr fields expr needed =
 	  let1 (prune arg needed)
 	    (fun parg ->
 	      return (Unary (op, parg)))
-      | HighMask | LowMask | LowOneBits -> raise Expression_not_const
+      | HighMask | LowMask | LowOneBits ->
+	  let1 (prune arg full_mask)
+	    (fun parg ->
+	       return (Unary (op, parg)))
     and prune_unary_width op width arg =
       match op with
 	IntZero | IntParityEven | Sex | Zex ->
@@ -338,16 +323,16 @@ let prune_expr fields expr needed =
 	  in if_prune (Binary (ConditionAnd, (bitsubset_expr needed karg1),
 			       (bitsubset_expr (bitand_expr (bitneg_expr barg1) needed)
 				  (bitand_expr karg2 (bitneg_expr barg2)))))
-	      (prune arg2 needed)
-	      (if_prune (Binary (ConditionAnd, (bitsubset_expr needed karg2),
-				 (bitsubset_expr (bitand_expr (bitneg_expr barg2) needed)
-				    (bitand_expr karg1 (bitneg_expr barg1)))))
-		  (prune arg1 needed)
-		  (let2
-		     (prune arg1 (bitand_expr needed (bitneg_expr (bitand_expr karg2 (bitneg_expr barg2)))))
-		     (prune arg2 (bitand_expr needed (bitneg_expr (bitand_expr karg1 (bitneg_expr barg1)))))
-		     (fun parg1 parg2 ->
-		       (return (Binary (op, parg1, parg2))))))
+	       (fun _ -> (prune arg2 needed))
+	       (fun _ -> (if_prune (Binary (ConditionAnd, (bitsubset_expr needed karg2),
+					    (bitsubset_expr (bitand_expr (bitneg_expr barg2) needed)
+					       (bitand_expr karg1 (bitneg_expr barg1)))))
+			    (fun _ -> (prune arg1 needed))
+			    (fun _ -> (let2
+					 (prune arg1 (bitand_expr needed (bitneg_expr (bitand_expr karg2 (bitneg_expr barg2)))))
+					 (prune arg2 (bitand_expr needed (bitneg_expr (bitand_expr karg1 (bitneg_expr barg1)))))
+					 (fun parg1 parg2 ->
+					    (return (Binary (op, parg1, parg2))))))))
       | BitOr | ConditionOr ->
 	  let karg1 = known arg1
 	  and karg2 = known arg2
@@ -355,15 +340,15 @@ let prune_expr fields expr needed =
 	  and barg2 = bits arg2
 	  in if_prune (Binary (ConditionAnd, bitsubset_expr needed karg1,
 			       UnaryWidth (IntZero, 8, bitand_expr barg1 needed)))
-	      (prune arg2 needed)
-	      (if_prune (Binary (ConditionAnd, bitsubset_expr needed karg2,
-				 UnaryWidth (IntZero, 8, bitand_expr barg2 needed)))
-		  (prune arg1 needed)
-		  (let2
-		     (prune arg1 (bitand_expr needed (bitneg_expr (bitand_expr karg2 barg2))))
-		     (prune arg2 (bitand_expr needed (bitneg_expr (bitand_expr karg1 barg1))))
-		     (fun parg1 parg2 ->
-		       (return (Binary (BitOr, parg1, parg2))))))
+	       (fun _ -> (prune arg2 needed))
+	       (fun _ -> (if_prune (Binary (ConditionAnd, bitsubset_expr needed karg2,
+					    UnaryWidth (IntZero, 8, bitand_expr barg2 needed)))
+			    (fun _ -> (prune arg1 needed))
+			    (fun _ -> (let2
+					 (prune arg1 (bitand_expr needed (bitneg_expr (bitand_expr karg2 barg2))))
+					 (prune arg2 (bitand_expr needed (bitneg_expr (bitand_expr karg1 barg1))))
+					 (fun parg1 parg2 ->
+					    (return (Binary (BitOr, parg1, parg2))))))))
       | BitXor | ConditionXor->
 	  let karg1 = known arg1
 	  and karg2 = known arg2
@@ -371,87 +356,94 @@ let prune_expr fields expr needed =
 	  and barg2 = bits arg2
 	  in if_prune (Binary (ConditionAnd, bitsubset_expr needed karg1,
 			       UnaryWidth (IntZero, 8, bitand_expr barg1 needed)))
-	      (prune arg2 needed)
-	      (if_prune (Binary (ConditionAnd, bitsubset_expr needed karg2,
-				 UnaryWidth (IntZero, 8, bitand_expr barg2 needed)))
-		  (prune arg1 needed)
-		  (let2
-		     (prune arg1 needed)
-		     (prune arg2 needed)
-		     (fun parg1 parg2 ->
-		       (return (Binary (BitXor, parg1, parg2))))))
+	       (fun _ -> (prune arg2 needed))
+	       (fun _ -> (if_prune (Binary (ConditionAnd, bitsubset_expr needed karg2,
+					    UnaryWidth (IntZero, 8, bitand_expr barg2 needed)))
+			    (fun _ -> (prune arg1 needed))
+			    (fun _ -> (let2
+					 (prune arg1 needed)
+					 (prune arg2 needed)
+					 (fun parg1 parg2 ->
+					    (return (Binary (BitXor, parg1, parg2))))))))
       | ShiftL ->
 	  let karg2 = known arg2
 	  and barg2 = bits arg2
 	  and mask = (int_literal_expr 0x3fL)
 	  in if_prune (bitsubset_expr mask karg2)
-	      (if_prune (UnaryWidth (IntZero, 8, (bitand_expr barg2 mask)))
-		  (prune arg1 needed)
-		  (let2
-		     (prune arg1 (BinaryWidth (LShiftR, 8, needed, bitand_expr barg2 mask)))
-		     (prune arg2 mask)
-		     (fun parg1 parg2 ->
-		       (return (Binary (ShiftL, parg1, parg2))))))
-	      (let2
-		 (prune arg1 (low_mask_expr needed))
-		 (prune arg2 mask)
-		 (fun parg1 parg2 ->
-		   (return (Binary (ShiftL, parg1, parg2)))))
-      | BitMask | BothLowOneBits -> raise Expression_not_const
+	       (fun _ -> (if_prune (UnaryWidth (IntZero, 8, (bitand_expr barg2 mask)))
+			    (fun _ -> (prune arg1 needed))
+			    (fun _ -> (let2
+					 (prune arg1 (BinaryWidth (LShiftR, 8, needed, bitand_expr barg2 mask)))
+					 (prune arg2 mask)
+					 (fun parg1 parg2 ->
+					    (return (Binary (ShiftL, parg1, parg2))))))))
+	       (fun _ -> (let2
+			    (prune arg1 (low_mask_expr needed))
+			    (prune arg2 mask)
+			    (fun parg1 parg2 ->
+			       (return (Binary (ShiftL, parg1, parg2))))))
+      | BitMask | BothLowOneBits ->
+	  let2
+	    (prune arg1 full_mask)
+	    (prune arg2 full_mask)
+	    (fun parg1 parg2 ->
+	       return (Binary (op, parg1, parg2)))
     and prune_binary_width op width arg1 arg2 =
       let mask = int_literal_expr (width_mask width)
       and shift_mask = int_literal_expr (width_shift_mask width)
       in match op with
 	IntEqual | LessU | LessS | AddCarry | SubCarry | Overflow ->
 	  if_prune (Unary (IntEven, known expr))
-	      (let2
-		 (prune arg1 mask)
-		 (prune arg2 mask)
-		 (fun parg1 parg2 ->
-		   (return (BinaryWidth (op, width, parg1, parg2)))))
-	      (return (Unary (ConditionNeg, (Unary (IntEven, bits expr)))))
+	    (fun _ -> (let2
+			 (prune arg1 mask)
+			 (prune arg2 mask)
+			 (fun parg1 parg2 ->
+			    (return (BinaryWidth (op, width, parg1, parg2))))))
+	    (fun _ -> (return (Unary (ConditionNeg, (Unary (IntEven, bits expr))))))
       | LShiftR ->
 	  let barg2 = bits arg2
 	  in if_prune (bitsubset_expr shift_mask (known arg2))
-	      (if_prune (UnaryWidth (IntZero, 8, (bitand_expr barg2 shift_mask)))
-		  (prune arg1 (bitand_expr needed mask))
-		  (let2
-		     (prune arg1 (bitand_expr (shiftl_expr needed (bitand_expr barg2 shift_mask)) mask))
-		     (prune arg2 shift_mask)
-		     (fun parg1 parg2 ->
-		       (return (BinaryWidth (LShiftR, width, parg1, parg2))))))
-	      (let2
-		 (prune arg1 (bitand_expr (high_mask_expr needed) mask))
-		 (prune arg2 shift_mask)
-		 (fun parg1 parg2 ->
-		   (return (BinaryWidth (LShiftR, width, parg1, parg2)))))
+	       (fun _ -> (if_prune (UnaryWidth (IntZero, 8, (bitand_expr barg2 shift_mask)))
+			    (fun _ -> (prune arg1 (bitand_expr needed mask)))
+			    (fun _ -> (let2
+					 (prune arg1 (bitand_expr (shiftl_expr needed (bitand_expr barg2 shift_mask)) mask))
+					 (prune arg2 shift_mask)
+					 (fun parg1 parg2 ->
+					    (return (BinaryWidth (LShiftR, width, parg1, parg2))))))))
+	       (fun _ -> (let2
+			    (prune arg1 (bitand_expr (high_mask_expr needed) mask))
+			    (prune arg2 shift_mask)
+			    (fun parg1 parg2 ->
+			       (return (BinaryWidth (LShiftR, width, parg1, parg2))))))
       | AShiftR ->
 	  let barg2 = bits arg2
 	  in if_prune (bitsubset_expr shift_mask (known arg2))
-	      (if_prune (UnaryWidth (IntZero, 8, (bitand_expr barg2 shift_mask)))
-		  (prune arg1 (bitand_expr needed mask))
-		  (* else *)
-		  (let amount = bitand_expr barg2 shift_mask
-		  in let high_bit_mask = bitand_expr (bitneg_expr (BinaryWidth (LShiftR, 8, mask, amount))) mask
-		  in let need_high_bit = Unary (ConditionNeg, (UnaryWidth (IntZero, 8, (bitand_expr needed high_bit_mask))))
-		  in let1
-		    (if_prune need_high_bit
-			(return (bitmask_expr (int_literal_expr (of_int (width * 8 - 1))) (int_literal_expr one)))
-			(return (int_literal_expr zero)))
-		    (fun high_bit ->
-		      let2
-			(prune arg1 (bitor_expr high_bit
-				       (bitand_expr (shiftl_expr needed (bitand_expr barg2 shift_mask))
-					  mask)))
-			(prune arg2 shift_mask)
-			(fun parg1 parg2 ->
-			  (return (BinaryWidth (AShiftR, width, parg1, parg2)))))))
-	      (* else *)
-	      (let2
-		 (prune arg1 (bitand_expr (high_mask_expr needed) mask))
-		 (prune arg2 shift_mask)
-		 (fun parg1 parg2 ->
-		   return (BinaryWidth (AShiftR, width, parg1, parg2))))
+	       (fun _ ->
+		  (if_prune (UnaryWidth (IntZero, 8, (bitand_expr barg2 shift_mask)))
+		     (fun _ -> (prune arg1 (bitand_expr needed mask)))
+		     (* else *)
+		     (fun _ ->
+			(let amount = bitand_expr barg2 shift_mask
+			 in let high_bit_mask = bitand_expr (bitneg_expr (BinaryWidth (LShiftR, 8, mask, amount))) mask
+			 in let need_high_bit = Unary (ConditionNeg, (UnaryWidth (IntZero, 8, (bitand_expr needed high_bit_mask))))
+			 in let1
+			      (if_prune need_high_bit
+				 (fun _ -> (return (bitmask_expr (int_literal_expr (of_int (width * 8 - 1))) (int_literal_expr one))))
+				 (fun _ -> (return (int_literal_expr zero))))
+			      (fun high_bit ->
+				 let2
+				 (prune arg1 (bitor_expr high_bit
+						(bitand_expr (shiftl_expr needed (bitand_expr barg2 shift_mask))
+						   mask)))
+				 (prune arg2 shift_mask)
+				 (fun parg1 parg2 ->
+				    (return (BinaryWidth (AShiftR, width, parg1, parg2)))))))))
+	       (* else *)
+	       (fun _ -> (let2
+			    (prune arg1 (bitand_expr (high_mask_expr needed) mask))
+			    (prune arg2 shift_mask)
+			    (fun parg1 parg2 ->
+			       return (BinaryWidth (AShiftR, width, parg1, parg2)))))
       | IntMulHS | IntMulHU ->
 	  let2
 	    (prune arg1 mask)
@@ -459,108 +451,106 @@ let prune_expr fields expr needed =
 	    (fun parg1 parg2 ->
 	      return (BinaryWidth (op, width, parg1, parg2)))
     and prune_ternary_width op width arg1 arg2 arg3 =
-      let2
+      let3
 	(prune arg1 full_mask)
 	(prune arg2 full_mask)
-	(fun parg1 parg2 ->
-	  let1
-	    (prune arg3 full_mask)
-	    (fun parg3 ->
-	      return (TernaryWidth (op, width, parg1, parg2, parg3))))
+	(prune arg3 full_mask)
+	(fun parg1 parg2 parg3 ->
+	  return (TernaryWidth (op, width, parg1, parg2, parg3)))
     in
     if_prune (BinaryWidth (IntEqual, 8, bitand_expr (known expr) needed, needed))
-	(if is_const (cfold_expr fields expr) then
-	  return expr
-	else
-	  let bits = bits expr
-	  in match expr_value_type expr with
-	    Int -> return bits
-	  | Float -> raise Wrong_type
-	  | Condition -> return (is_bit_set_expr bits (int_literal_expr zero)))
-	(* else *)
-	(match expr with
-	  IntConst (IntLiteral _) -> return (bitand_expr expr needed)
-	| IntConst _ | FloatConst _ | ConditionConst _ | Register _ | LoadBO _ -> return expr
-	| Unary (op, arg) -> prune_unary op arg
-	| UnaryWidth (op, width, arg) -> prune_unary_width op width arg
-	| Binary (op, arg1, arg2) -> prune_binary op arg1 arg2
-	| BinaryWidth (op, width, arg1, arg2) -> prune_binary_width op width arg1 arg2
-	| TernaryWidth (op, width, arg1, arg2, arg3) -> prune_ternary_width op width arg1 arg2 arg3
-	| Extract (arg, start, length) ->
-	    (match (start, length) with
-		 (IntLiteral _, IntLiteral _) ->
-		   let upper_mask = shiftl_expr (int_literal_expr minus_one) (add_expr (IntConst start) (IntConst length))
-		   in let1
-		     (prune arg (bitand_expr (shiftl_expr needed (IntConst start))
-				   (bitmask_expr (IntConst start) (IntConst length))))
-		     (fun parg ->
-		       if_prune (Binary (ConditionAnd, UnaryWidth (IntZero, 8, bitxor_expr upper_mask (known arg)),
-					   UnaryWidth (IntZero, 8, bitand_expr upper_mask (bits arg))))
-			   (return (BinaryWidth (LShiftR, 8, parg, IntConst start)))
-			   (return (Extract (parg, start, length))))
-	       | (IntLiteral _, _) ->
-		   let1
-		     (prune arg (shiftl_expr needed (IntConst start)))
-		     (fun parg ->
-		       return (Extract (parg, start, length)))
-	       | _ ->
-		   let1
-		     (prune arg full_mask)
-		     (fun parg ->
-		       return (Extract (parg, start, length))))
-	| Insert (arg1, arg2, start, length) ->
-	    (match (start, length) with
-	      (IntLiteral _, IntLiteral _) ->
-		if_prune (UnaryWidth (IntZero, 8, (Extract (needed, start, length))))
-		    (prune arg1 (Insert (needed, int_literal_expr zero, start, length)))
-		    (let1
-		       (prune arg2 (Extract (needed, start, length)))
-		       (fun parg2 ->
-			 (if_prune (UnaryWidth (IntZero, 8,
-						(bitand_expr needed
-						   (bitneg_expr (bitmask_expr (IntConst start) (IntConst length))))))
-			     (return (Binary (ShiftL, parg2, IntConst start)))
-			     (let1
-				(prune arg1 (Insert (needed, int_literal_expr zero, start, length)))
-				(fun parg1 ->
-				  (return (Insert (parg1, parg2, start, length))))))))
-	    | (IntLiteral _, _) ->
-		let1
-		  (prune arg1 needed)
-		  (fun parg1 ->
-		    if_prune (UnaryWidth (IntZero, 8, (BinaryWidth (LShiftR, 8, needed, (IntConst start)))))
-			(return parg1)
-			(let1
-			   (prune arg2 (BinaryWidth (LShiftR, 8, needed, (IntConst start))))
-			   (fun parg2 ->
-			     (return (Insert (parg1, parg2, start, length))))))
-	    | _ ->
-		let2
-		  (prune arg1 needed)
-		  (prune arg2 (int_literal_expr minus_one))
-		  (fun parg1 parg2 ->
-		    return (Insert (parg1, parg2, start, length))))
-	| If (condition, cons, alt) ->
-	    let2
-	      (prune cons needed)
-	      (prune alt needed)
-	      (fun pcons palt ->
-		(let1
-		   (prune condition (int_literal_expr one))
-		   (fun pcondition ->
-		     return (If (pcondition, pcons, palt))))))
+      (fun _ -> (if is_const (cfold_expr fields expr) then
+		   return expr
+		 else
+		   let bits = bits expr
+		   in match expr_value_type expr with
+		       Int -> return bits
+		     | Float -> raise Wrong_type
+		     | Condition -> return (is_bit_set_expr bits (int_literal_expr zero))))
+      (* else *)
+      (fun _ ->
+	 (match expr with
+	      IntConst (IntLiteral _) -> return (bitand_expr expr needed)
+	    | IntConst _ | FloatConst _ | ConditionConst _ | Register _ | LoadBO _ -> return expr
+	    | Unary (op, arg) -> prune_unary op arg
+	    | UnaryWidth (op, width, arg) -> prune_unary_width op width arg
+	    | Binary (op, arg1, arg2) -> prune_binary op arg1 arg2
+	    | BinaryWidth (op, width, arg1, arg2) -> prune_binary_width op width arg1 arg2
+	    | TernaryWidth (op, width, arg1, arg2, arg3) -> prune_ternary_width op width arg1 arg2 arg3
+	    | Extract (arg, start, length) ->
+		(match (start, length) with
+		     (IntLiteral _, IntLiteral _) ->
+		       let upper_mask = shiftl_expr (int_literal_expr minus_one) (add_expr (IntConst start) (IntConst length))
+		       in let1
+			    (prune arg (bitand_expr (shiftl_expr needed (IntConst start))
+					  (bitmask_expr (IntConst start) (IntConst length))))
+			    (fun parg ->
+			       if_prune (Binary (ConditionAnd, UnaryWidth (IntZero, 8, bitxor_expr upper_mask (known arg)),
+						 UnaryWidth (IntZero, 8, bitand_expr upper_mask (bits arg))))
+			         (fun _ -> (return (BinaryWidth (LShiftR, 8, parg, IntConst start))))
+			         (fun _ -> (return (Extract (parg, start, length)))))
+		   | (IntLiteral _, _) ->
+		       let1
+			 (prune arg (shiftl_expr needed (IntConst start)))
+			 (fun parg ->
+			    return (Extract (parg, start, length)))
+		   | _ ->
+		       let1
+			 (prune arg full_mask)
+			 (fun parg ->
+			    return (Extract (parg, start, length))))
+	    | Insert (arg1, arg2, start, length) ->
+		(match (start, length) with
+		     (IntLiteral _, IntLiteral _) ->
+		       if_prune (UnaryWidth (IntZero, 8, (Extract (needed, start, length))))
+		         (fun _ -> (prune arg1 (Insert (needed, int_literal_expr zero, start, length))))
+		         (fun _ ->
+			    (let1
+			       (prune arg2 (Extract (needed, start, length)))
+			       (fun parg2 ->
+				  (if_prune (UnaryWidth (IntZero, 8,
+							 (bitand_expr needed
+							    (bitneg_expr (bitmask_expr (IntConst start) (IntConst length))))))
+				     (fun _ -> (return (Binary (ShiftL, parg2, IntConst start))))
+				     (fun _ -> (let1
+						  (prune arg1 (Insert (needed, int_literal_expr zero, start, length)))
+						  (fun parg1 ->
+						     (return (Insert (parg1, parg2, start, length))))))))))
+		   | (IntLiteral _, _) ->
+		       let1
+			 (prune arg1 needed)
+			 (fun parg1 ->
+			    if_prune (UnaryWidth (IntZero, 8, (BinaryWidth (LShiftR, 8, needed, (IntConst start)))))
+			      (fun _ -> (return parg1))
+			      (fun _ -> (let1
+					   (prune arg2 (BinaryWidth (LShiftR, 8, needed, (IntConst start))))
+					   (fun parg2 ->
+					      (return (Insert (parg1, parg2, start, length)))))))
+		   | _ ->
+		       let2
+			 (prune arg1 needed)
+			 (prune arg2 (int_literal_expr minus_one))
+			 (fun parg1 parg2 ->
+			    return (Insert (parg1, parg2, start, length))))
+	    | If (condition, cons, alt) ->
+		let3
+		  (prune condition (int_literal_expr one))
+		  (prune cons needed)
+		  (prune alt needed)
+		  (fun pcons palt pcondition ->
+		     return (If (pcondition, pcons, palt)))))
   in prune expr (int_literal_expr needed)
 
 let prune_stmt fields stmt =
   match stmt with
     Store (byte_order, width, addr, value) ->
-      plet2
+      (make_bind2 cm_bind)
 	(prune_expr fields addr (width_mask (machine_addr_width ())))
 	(prune_expr fields value (width_mask width))
 	(fun paddr pvalue ->
-	  preturn (Store (byte_order, width, paddr, pvalue)))
+	  cm_return (Store (byte_order, width, paddr, pvalue)))
   | Assign (register, value) ->
-      plet1
+      cm_bind
 	(prune_expr fields value (width_mask (machine_register_width register)))
 	(fun pvalue ->
-	  preturn (Assign (register, pvalue)))
+	  cm_return (Assign (register, pvalue)))
