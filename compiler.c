@@ -11,11 +11,11 @@
 typedef word_32 reg_t;
 typedef int label_t;
 
-#define MAX_LABELS              8
-#define MAX_BACKPATCHES         8
-#define MAX_CONSTANTS        8192
+#define MAX_LABELS               8
+#define MAX_BACKPATCHES          8
+#define MAX_CONSTANTS        16384
 
-#define MAX_UNRESOLVED_JUMPS 8192 /* should be a lot less if we actually do resolve branches */
+#define MAX_UNRESOLVED_JUMPS 16384 /* should be a lot less if we actually do resolve branches */
 
 #define MAX_CODE_INSNS     600000
 
@@ -36,12 +36,34 @@ typedef int label_t;
 #define SYSTEM_CALL_CONST          (NUM_REG_CONSTANTS + 4)
 #define C_STUB_CONST               (NUM_REG_CONSTANTS + 6)
 #define LEADING_ZEROS_CONST        (NUM_REG_CONSTANTS + 8)
-#define DIV_UNSIGNED_32_CONST      (NUM_REG_CONSTANTS + 10)
-#define DIV_SIGNED_32_CONST        (NUM_REG_CONSTANTS + 12)
+#define DIV_UNSIGNED_64_CONST      (NUM_REG_CONSTANTS + 10)
+#define DIV_SIGNED_64_CONST        (NUM_REG_CONSTANTS + 12)
+#define MOD_UNSIGNED_64_CONST      (NUM_REG_CONSTANTS + 14)
+#define MOD_SIGNED_64_CONST        (NUM_REG_CONSTANTS + 16)
+#define DIV_UNSIGNED_32_CONST      (NUM_REG_CONSTANTS + 18)
+#define DIV_SIGNED_32_CONST        (NUM_REG_CONSTANTS + 20)
+#define MOD_UNSIGNED_32_CONST      (NUM_REG_CONSTANTS + 22)
+#define MOD_SIGNED_32_CONST        (NUM_REG_CONSTANTS + 24)
+#define DIV_UNSIGNED_16_CONST      (NUM_REG_CONSTANTS + 26)
+#define DIV_SIGNED_16_CONST        (NUM_REG_CONSTANTS + 28)
+#define MOD_UNSIGNED_16_CONST      (NUM_REG_CONSTANTS + 30)
+#define MOD_SIGNED_16_CONST        (NUM_REG_CONSTANTS + 32)
+#define DIV_UNSIGNED_8_CONST       (NUM_REG_CONSTANTS + 34)
+#define DIV_SIGNED_8_CONST         (NUM_REG_CONSTANTS + 36)
+#define MOD_UNSIGNED_8_CONST       (NUM_REG_CONSTANTS + 38)
+#define MOD_SIGNED_8_CONST         (NUM_REG_CONSTANTS + 40)
 
+#if defined(EMU_PPC)
 #define FIRST_INTEGER_REG       1
 #define NUM_INTEGER_REGS       15
 #define REG_TYPE_INTEGER        1
+#elif defined(EMU_I386)
+#define FIRST_NATIVE_INTEGER_HOST_REG           1
+#define NUM_NATIVE_INTEGER_HOST_REGS            10 /* FIXME: this should be in the machine definition (NUM_INTEGER_EMU_REGISTERS) */
+#define FIRST_INTEGER_REG                       (FIRST_NATIVE_INTEGER_HOST_REG + NUM_NATIVE_INTEGER_HOST_REGS)
+#define NUM_INTEGER_REGS                        (15 - 10) /* FIXME: see above */
+#define REG_TYPE_INTEGER                        1
+#endif
 
 #define FIRST_FLOAT_REG         1
 #define NUM_FLOAT_REGS         15
@@ -115,6 +137,21 @@ int generated_insn_index;
 interpreter_t *compiler_intp = 0;
 #ifdef CROSSDEBUGGER
 interpreter_t *debugger_intp = 0;
+#endif
+
+#ifdef EMU_I386
+typedef struct
+{
+    word_32 addr;
+    word_32 flags_live;
+    word_32 flags_killed;
+} i386_insn_t;
+
+#define MAX_BLOCK_INSNS          1024
+#define MAX_AFTER_BRANCH_INSNS     15
+
+i386_insn_t block_insns[MAX_BLOCK_INSNS + MAX_AFTER_BRANCH_INSNS];
+int num_block_insns = 0;
 #endif
 
 #ifdef COLLECT_STATS
@@ -418,6 +455,14 @@ ref_integer_reg (int foreign_reg, int reading, int writing)
     if (reading)
 	assert(foreign_reg != -1);
 
+#ifdef EMU_I386
+    if (foreign_reg >= 0)
+    {
+	assert(foreign_reg < NUM_NATIVE_INTEGER_HOST_REGS);
+	return foreign_reg + FIRST_NATIVE_INTEGER_HOST_REG;
+    }
+#endif
+
     reg = ref_reg(integer_regs[alloc_sp], NUM_INTEGER_REGS, foreign_reg, writing, &newly_allocated);
     if (reading && newly_allocated)
 	load_reg(reg);
@@ -434,6 +479,11 @@ ref_integer_reg (int foreign_reg, int reading, int writing)
 void
 unref_integer_reg (reg_t reg)
 {
+#ifdef EMU_I386
+    if (reg >= FIRST_NATIVE_INTEGER_HOST_REG && reg < FIRST_NATIVE_INTEGER_HOST_REG + NUM_NATIVE_INTEGER_HOST_REGS)
+	return;
+#endif
+
     unref_reg(integer_regs[alloc_sp], NUM_INTEGER_REGS, reg);
 }
 
@@ -687,13 +737,16 @@ finish_fragment (void)
 void
 emit_store_mem_8 (reg_t value_reg, reg_t addr_reg)
 {
+#ifdef DIFFERENT_BYTEORDER
     emit(COMPOSE_XOR_IMM(addr_reg, 3, addr_reg));
+#endif
     emit(COMPOSE_STB(value_reg, 0, addr_reg));
 }
 
 void
 emit_store_mem_64 (reg_t value_reg, reg_t addr_reg)
 {
+#ifdef DIFFERENT_BYTEORDER
     reg_t tmp_reg;
 
     emit(COMPOSE_STL(value_reg, 4, addr_reg));
@@ -701,32 +754,42 @@ emit_store_mem_64 (reg_t value_reg, reg_t addr_reg)
     emit(COMPOSE_SRL_IMM(value_reg, 32, tmp_reg));
     emit(COMPOSE_STL(tmp_reg, 0, addr_reg));
     unref_integer_reg(tmp_reg);
+#else
+    emit(COMPOSE_STQ(value_reg, 0, addr_reg));
+#endif
 }
 
 void
 emit_store_mem_16 (reg_t value_reg, reg_t addr_reg)
 {
+#ifdef DIFFERENT_BYTEORDER
     emit(COMPOSE_XOR_IMM(addr_reg, 2, addr_reg));
+#endif
     emit(COMPOSE_STW(value_reg, 0, addr_reg));
 }
 
 void
 emit_load_mem_8 (reg_t value_reg, reg_t addr_reg)
 {
+#ifdef DIFFERENT_BYTEORDER
     emit(COMPOSE_XOR_IMM(addr_reg, 3, addr_reg));
+#endif
     emit(COMPOSE_LDBU(value_reg, 0, addr_reg));
 }
 
 void
 emit_load_mem_16 (reg_t value_reg, reg_t addr_reg)
 {
+#ifdef DIFFERENT_BYTEORDER
     emit(COMPOSE_XOR_IMM(addr_reg, 2, addr_reg));
+#endif
     emit(COMPOSE_LDWU(value_reg, 0, addr_reg));
 }
 
 void
 emit_load_mem_64 (reg_t value_reg, reg_t addr_reg)
 {
+#ifdef DIFFERENT_BYTEORDER
     reg_t tmp_reg = ref_integer_reg_for_writing(-1);
 
     emit(COMPOSE_LDL(tmp_reg, 0, addr_reg));
@@ -735,10 +798,16 @@ emit_load_mem_64 (reg_t value_reg, reg_t addr_reg)
     emit(COMPOSE_ZAPNOT_IMM(value_reg, 15, value_reg));
     emit(COMPOSE_BIS(value_reg, tmp_reg, value_reg));
     unref_integer_reg(tmp_reg);
+#else
+    emit(COMPOSE_LDQ(value_reg, 0, addr_reg));
+#endif
 }
 
-#ifdef EMU_PPC
+#if defined(EMU_PPC)
 #include "ppc_compiler.c"
+#elif defined(EMU_I386)
+#include "i386.h"
+#include "i386_compiler.c"
 #endif
 
 void
@@ -816,6 +885,42 @@ enter_fragment (word_32 foreign_addr, word_64 native_addr)
     }
 }
 
+word_64
+div_unsigned_64 (word_64 a, word_64 b)
+{
+#ifdef COLLECT_STATS
+    ++num_divisions;
+#endif
+    return a / b;
+}
+
+sword_64
+div_signed_64 (sword_64 a, sword_64 b)
+{
+#ifdef COLLECT_STATS
+    ++num_divisions;
+#endif
+    return a / b;
+}
+
+word_64
+mod_unsigned_64 (word_64 a, word_64 b)
+{
+#ifdef COLLECT_STATS
+    ++num_divisions;
+#endif
+    return a % b;
+}
+
+sword_64
+mod_signed_64 (sword_64 a, sword_64 b)
+{
+#ifdef COLLECT_STATS
+    ++num_divisions;
+#endif
+    return a % b;
+}
+
 word_32
 div_unsigned_32 (word_32 a, word_32 b)
 {
@@ -832,6 +937,96 @@ div_signed_32 (sword_32 a, sword_32 b)
     ++num_divisions;
 #endif
     return a / b;
+}
+
+word_32
+mod_unsigned_32 (word_32 a, word_32 b)
+{
+#ifdef COLLECT_STATS
+    ++num_divisions;
+#endif
+    return a % b;
+}
+
+sword_32
+mod_signed_32 (sword_32 a, sword_32 b)
+{
+#ifdef COLLECT_STATS
+    ++num_divisions;
+#endif
+    return a % b;
+}
+
+word_16
+div_unsigned_16 (word_16 a, word_16 b)
+{
+#ifdef COLLECT_STATS
+    ++num_divisions;
+#endif
+    return a / b;
+}
+
+sword_16
+div_signed_16 (sword_16 a, sword_16 b)
+{
+#ifdef COLLECT_STATS
+    ++num_divisions;
+#endif
+    return a / b;
+}
+
+word_16
+mod_unsigned_16 (word_16 a, word_16 b)
+{
+#ifdef COLLECT_STATS
+    ++num_divisions;
+#endif
+    return a % b;
+}
+
+sword_16
+mod_signed_16 (sword_16 a, sword_16 b)
+{
+#ifdef COLLECT_STATS
+    ++num_divisions;
+#endif
+    return a % b;
+}
+
+word_8
+div_unsigned_8 (word_8 a, word_8 b)
+{
+#ifdef COLLECT_STATS
+    ++num_divisions;
+#endif
+    return a / b;
+}
+
+sword_8
+div_signed_8 (sword_8 a, sword_8 b)
+{
+#ifdef COLLECT_STATS
+    ++num_divisions;
+#endif
+    return a / b;
+}
+
+word_8
+mod_unsigned_8 (word_8 a, word_8 b)
+{
+#ifdef COLLECT_STATS
+    ++num_divisions;
+#endif
+    return a % b;
+}
+
+sword_8
+mod_signed_8 (sword_8 a, sword_8 b)
+{
+#ifdef COLLECT_STATS
+    ++num_divisions;
+#endif
+    return a % b;
 }
 
 void
@@ -883,8 +1078,22 @@ init_compiler (interpreter_t *intp, interpreter_t *dbg_intp)
     add_const_64((word_64)system_call_entry);
     add_const_64((word_64)c_stub);
     add_const_64((word_64)leading_zeros);
+    add_const_64((word_64)div_unsigned_64);
+    add_const_64((word_64)div_signed_64);
+    add_const_64((word_64)mod_unsigned_64);
+    add_const_64((word_64)mod_signed_64);
     add_const_64((word_64)div_unsigned_32);
     add_const_64((word_64)div_signed_32);
+    add_const_64((word_64)mod_unsigned_32);
+    add_const_64((word_64)mod_signed_32);
+    add_const_64((word_64)div_unsigned_16);
+    add_const_64((word_64)div_signed_16);
+    add_const_64((word_64)mod_unsigned_16);
+    add_const_64((word_64)mod_signed_16);
+    add_const_64((word_64)div_unsigned_8);
+    add_const_64((word_64)div_signed_8);
+    add_const_64((word_64)mod_unsigned_8);
+    add_const_64((word_64)mod_signed_8);
 
 #ifdef COLLECT_STATS
     for (i = 0; i < NUM_INSNS; ++i)
@@ -896,6 +1105,99 @@ init_compiler (interpreter_t *intp, interpreter_t *dbg_intp)
 #endif
 }
 
+#ifdef EMU_I386
+void
+compute_liveness (interpreter_t *intp, word_32 addr)
+{
+    word_32 old_pc = intp->pc;
+    word_32 live;
+    int i;
+    int num_targets;
+    word_32 targets[2];
+    int can_fall_through, can_jump_indirectly;
+
+    num_block_insns = 0;
+
+    intp->pc = addr;
+
+    while (num_block_insns < MAX_BLOCK_INSNS)
+    {
+	block_insns[num_block_insns++].addr = intp->pc;
+
+	jump_analyze_i386_insn(intp, &num_targets, targets, &can_fall_through, &can_jump_indirectly);
+
+	if (num_targets > 0 || can_jump_indirectly || !can_fall_through)
+	    break;
+    }
+
+    assert(num_targets > 0 || can_jump_indirectly || !can_fall_through);
+
+    if (!can_jump_indirectly)
+    {
+	int target;
+	word_32 dummy_target;
+
+	/* printf("checking out after branch\n"); */
+
+	live = 0;
+
+	if (can_fall_through)
+	    targets[num_targets++] = intp->pc;
+
+	for (target = 0; target < num_targets; ++target)
+	{
+	    word_32 block_live = 0xffffffff;
+	    word_32 dummy;
+
+	    intp->pc = targets[target];
+
+	    for (i = num_block_insns; i < num_block_insns + MAX_AFTER_BRANCH_INSNS; ++i)
+	    {
+		int num_block_targets;
+
+		block_insns[i].addr = intp->pc;
+
+		jump_analyze_i386_insn(intp, &num_block_targets, &dummy_target, &can_fall_through, &can_jump_indirectly);
+
+		if (num_block_targets > 0 || can_jump_indirectly || !can_fall_through)
+		{
+		    ++i;
+		    break;
+		}
+	    }
+
+	    for (--i; i >= num_block_insns; --i)
+	    {
+		intp->pc = block_insns[i].addr;
+		liveness_i386_insn(intp, &block_live, &dummy);
+	    }
+
+	    live |= block_live;
+	}
+    }
+    else
+	live = 0xffffffff;
+
+    for (i = num_block_insns - 1; i >= 0; --i)
+    {
+	intp->pc = block_insns[i].addr;
+	liveness_i386_insn(intp, &live, &block_insns[i].flags_killed);
+	block_insns[i].flags_live = live;
+    }
+
+    intp->pc = old_pc;
+}
+
+void
+print_liveness (interpreter_t *intp)
+{
+    int i;
+
+    for (i = 0; i < num_block_insns; ++i)
+	printf("0x%08x   0x%08x 0x%08x\n", block_insns[i].addr, block_insns[i].flags_live, block_insns[i].flags_killed);
+}
+#endif
+
 word_64
 compile_basic_block (word_32 addr)
 {
@@ -904,19 +1206,31 @@ compile_basic_block (word_32 addr)
 #if defined(DUMP_CODE) || defined(COLLECT_STATS)
     word_64 x = start;
     int old_num_constants = num_constants;
+#endif
+#ifdef EMU_I386
     int i;
 #endif
 
     start_timer();
 
+#ifdef EMU_I386
+    compute_liveness(compiler_intp, addr);
+
+    i = 0;
+
+    compiler_intp->pc = addr;
+#endif
+
     have_jumped = 0;
 
     while (!have_jumped)
     {
-#ifdef EMU_PPC
+#if defined(EMU_PPC)
 	compile_ppc_insn(mem_get_32(compiler_intp, insnp), insnp);
-#else
-	assert(0);
+#elif defined(EMU_I386)
+	word_32 insn_addr = compiler_intp->pc;
+
+	compile_i386_insn(compiler_intp, block_insns[i++].flags_killed);
 #endif
 
 #ifdef COLLECT_STATS
@@ -926,7 +1240,13 @@ compile_basic_block (word_32 addr)
 
 #ifdef DUMP_CODE
 	printf("++++++++++++++++\n%08x  ", insnp);
+#if defined(EMU_PPC)
 	disassemble_ppc_insn(mem_get_32(compiler_intp, insnp), insnp);
+#elif defined(EMU_I386)
+	compiler_intp->pc = insn_addr;
+	disassemble_i386_insn(compiler_intp);
+	printf("       0x%08x", block_insns[i - 1].flags_killed);
+#endif
 	printf("\n- - - - - - - - \n");
 	while (x < (word_64)emit_loc)
 	{
@@ -938,10 +1258,14 @@ compile_basic_block (word_32 addr)
 #endif
 
 #if defined(COLLECT_STATS) || defined(DUMP_CODE)
-	x = emit_loc;
+	x = (word_64)emit_loc;
 #endif
 
+#if defined(EMU_PPC)
 	insnp += 4;
+#elif defined(EMU_I386)
+	insnp = compiler_intp->pc;
+#endif
     }
 
     store_all_foreign_regs();
@@ -981,6 +1305,7 @@ compare_register_sets (void)
     int diff = 0;
     int i;
 
+#if defined(EMU_PPC)
     for (i = 0; i < 5; ++i)
 	if (compiler_intp->regs_SPR[i] != debugger_intp->regs_SPR[i])
 	    diff = 1;
@@ -991,13 +1316,28 @@ compare_register_sets (void)
 	if (*(word_64*)&compiler_intp->regs_FPR[i] != *(word_64*)&debugger_intp->regs_FPR[i])
 	    diff = 1;
     }
+#elif defined(EMU_I386)
+    /*
+    if (compiler_intp->regs_SPR[0] != debugger_intp->regs_SPR[0])
+	diff = 1;
+    */
+    for (i = 0; i < 8; ++i)
+    {
+	if (compiler_intp->regs_GPR[i] != debugger_intp->regs_GPR[i])
+	    diff = 1;
+	if (compiler_intp->regs_FPST[i] != debugger_intp->regs_FPST[i])
+	    diff = 1;
+    }
+    if (compiler_intp->regs_FSPR[0] != debugger_intp->regs_FSPR[0])
+	diff = 1;
+#endif
 
     if (diff)
     {
 	printf("*** compiler\n");
-	dump_ppc_registers(compiler_intp);
+	dump_registers(compiler_intp);
 	printf("*** interpreter\n");
-	dump_ppc_registers(debugger_intp);
+	dump_registers(debugger_intp);
 	assert(0);
     }
 }
@@ -1009,8 +1349,8 @@ provide_fragment (word_32 addr)
     word_64 native_addr = lookup_fragment(addr);
 
     /*
-    move_ppc_regs_compiler_to_interpreter(compiler_intp);
-    dump_ppc_registers(compiler_intp);
+    move_regs_compiler_to_interpreter(compiler_intp);
+    dump_registers(compiler_intp);
     */
 
 #ifdef COLLECT_STATS
@@ -1021,8 +1361,8 @@ provide_fragment (word_32 addr)
     printf("*** jumping to %08x\n", addr);
     debugger_intp->have_jumped = 0;
     while (!debugger_intp->have_jumped)
-	interpret_ppc_insn(debugger_intp);
-    move_ppc_regs_compiler_to_interpreter(compiler_intp);
+	interpret_insn(debugger_intp);
+    move_regs_compiler_to_interpreter(compiler_intp);
     compare_register_sets();
     assert(debugger_intp->pc == addr);
 #endif
@@ -1075,11 +1415,8 @@ start_compiler (word_32 addr)
 {
     word_64 native_addr = compile_basic_block(addr);
 
-#ifdef EMU_PPC
-    move_ppc_regs_interpreter_to_compiler(compiler_intp);
-#else
-    assert(0);
-#endif
+    move_regs_interpreter_to_compiler(compiler_intp);
+
     start_execution(native_addr); /* this call never returns */
 }
 
@@ -1112,11 +1449,7 @@ print_compiler_stats (void)
 void
 handle_compiler_system_call (void)
 {
-#ifdef EMU_PPC
-    move_ppc_regs_compiler_to_interpreter(compiler_intp);
-#else
-    assert(0);
-#endif
+    move_regs_compiler_to_interpreter(compiler_intp);
     /*
     printf("*** system call\n");
     dump_ppc_registers(compiler_intp);
@@ -1124,9 +1457,5 @@ handle_compiler_system_call (void)
 
     handle_system_call(compiler_intp);
 
-#ifdef EMU_PPC
-    move_ppc_regs_interpreter_to_compiler(compiler_intp);
-#else
-    assert(0);
-#endif
+    move_regs_interpreter_to_compiler(compiler_intp);
 }

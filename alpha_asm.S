@@ -1,9 +1,44 @@
 #define v0	$0
 #define a0	$16
+#define a1	$17
+#define a2	$18
+#define a3	$19
+#define a4	$20
+#define a5	$21
+#define t8	$22
 #define ra	$26
 #define pv	$27
 #define gp	$29
 #define sp	$30
+
+#ifdef EMU_I386
+#define LOAD_NATIVE_HOST_REGISTERS	\
+	ldl	$1,0(pv)	;\
+	ldl	$2,8(pv)	;\
+	ldl	$3,16(pv)	;\
+	ldl	$4,24(pv)	;\
+	ldl	$5,32(pv)	;\
+	ldl	$6,40(pv)	;\
+	ldl	$7,48(pv)	;\
+	ldl	$8,56(pv)	;\
+	ldl	$9,64(pv)	;\
+	ldl	$10,72(pv)
+#define STORE_NATIVE_HOST_REGISTERS(o)	\
+	stl	$1,0(o)	;\
+	stl	$2,8(o)	;\
+	stl	$3,16(o)	;\
+	stl	$4,24(o)	;\
+	stl	$5,32(o)	;\
+	stl	$6,40(o)	;\
+	stl	$7,48(o)	;\
+	stl	$8,56(o)	;\
+	stl	$9,64(o)	;\
+	stl	$10,72(o)
+#else
+#define LOAD_NATIVE_HOST_REGISTERS
+#define STORE_NATIVE_HOST_REGISTERS(o)
+#endif
+	
 
 	.set	noat
 	.set	noreorder
@@ -40,12 +75,19 @@ flush_icache:
 direct_dispatcher:
 	ldgp	gp,0(pv)
 
+#ifdef EMU_I386
+	lda	a0,constant_area
+	STORE_NATIVE_HOST_REGISTERS(a0)
+#endif
+
 	mov	ra,a0
 	jsr	ra,provide_fragment_and_patch
 	ldgp	gp,0(ra)
 	# v0 now holds the native target address
 
 	lda	pv,constant_area
+
+	LOAD_NATIVE_HOST_REGISTERS
 
 	jmp	$31,(v0)
 	.end	direct_dispatcher
@@ -64,25 +106,31 @@ indirect_dispatcher:
 	ldgp	gp,0(pv)
 
 #ifdef COMPILER
-	lda	$1,fragment_hash_table
-	ldiq	$2,16383*4
-	and	a0,$2,$2
-	s4addq	$2,$1,$1
-	ldq	$2,8($1)	# $2 = native_addr
-	beq	$2,call_provide_fragment
-	ldl	$3,0($1)	# $3 = foreign_addr
-	cmpeq	$3,a0,$4
-	beq	$4,call_provide_fragment
+	lda	a1,fragment_hash_table
+	ldiq	a2,16383*4
+	and	a0,a2,a2
+	s4addq	a2,a1,a1
+	ldq	a2,8(a1)	# a2 = native_addr
+	beq	a2,call_provide_fragment
+	ldl	a3,0(a1)	# a3 = foreign_addr
+	cmpeq	a3,a0,a4
+	beq	a4,call_provide_fragment
 	lda	pv,constant_area
-	jmp	$31,($2)
+	jmp	$31,(a2)
 
 call_provide_fragment:
+#endif
+#ifdef EMU_I386
+	lda	a1,constant_area
+	STORE_NATIVE_HOST_REGISTERS(a1)
 #endif
 	jsr	ra,provide_fragment
 	ldgp	gp,0(ra)
 	# v0 now holds the native target address
 
 	lda	pv,constant_area
+
+	LOAD_NATIVE_HOST_REGISTERS
 
 	jmp	$31,(v0)
 	.end	indirect_dispatcher
@@ -100,10 +148,16 @@ system_call_entry:
 	lda	sp,-16(sp)
 	stq	ra,0(sp)
 
+#ifdef EMU_I386
+	lda	a0,constant_area
+	STORE_NATIVE_HOST_REGISTERS(a0)
+#endif
 	jsr	ra,handle_compiler_system_call
 	ldgp	gp,0(ra)
 
 	lda	pv,constant_area
+
+	LOAD_NATIVE_HOST_REGISTERS
 
 	ldq	ra,0(sp)
 	lda	sp,16(sp)
@@ -122,6 +176,8 @@ start_execution:
 
 	lda	pv,constant_area
 
+	LOAD_NATIVE_HOST_REGISTERS
+
 	jmp	$31,(a0)
 	.end	start_execution
 
@@ -137,6 +193,10 @@ c_stub:
 	ldgp	gp,0(pv)
 	lda	sp,-96(sp)
 	stq	ra,0(sp)
+#ifdef EMU_I386
+	lda	t8,constant_area
+	STORE_NATIVE_HOST_REGISTERS(t8)
+#else
 	stq	$1,8(sp)
 	stq	$2,16(sp)
 	stq	$3,24(sp)
@@ -147,6 +207,7 @@ c_stub:
 	stt	$f3,64(sp)
 	stt	$f4,72(sp)
 	stt	$f5,80(sp)
+#endif
 
 	mov	$0,pv
 	jsr	ra,(pv)
@@ -154,7 +215,9 @@ c_stub:
 
 	lda	pv,constant_area
 
-	ldq	ra,0(sp)
+#ifdef EMU_I386
+	LOAD_NATIVE_HOST_REGISTERS
+#else
 	ldq	$1,8(sp)
 	ldq	$2,16(sp)
 	ldq	$3,24(sp)
@@ -165,6 +228,8 @@ c_stub:
 	ldt	$f3,64(sp)
 	ldt	$f4,72(sp)
 	ldt	$f5,80(sp)
+#endif
+	ldq	ra,0(sp)
 	lda	sp,96(sp)
 	ret	$31,(ra)
 	.end	c_stub

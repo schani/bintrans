@@ -253,6 +253,7 @@ int emu_errnos[] = { 0,
 #define ANNOUNCE_SYSCALL(n)
 #endif
 
+/*
 #define FAKE_PID            0x4851
 
 #define FAKE_FSTAT_DEV      0
@@ -266,6 +267,7 @@ int emu_errnos[] = { 0,
 #define FAKE_FSTAT_ATIME    0x3b4cdcac
 #define FAKE_FSTAT_MTIME    0x3b4cdcac
 #define FAKE_FSTAT_CTIME    0x3b4cdcac
+*/
 
 int debug = 0;
 
@@ -2049,18 +2051,28 @@ disassemble (interpreter_t *intp, word_32 addr, word_32 len)
 {
     word_32 i;
 
+#ifdef EMU_I386
+    word_32 old_pc = intp->pc;
+
+    intp->pc = addr;
+#endif
+    
     for (i = 0; i < len; ++i)
     {
-#ifdef EMU_PPC
+#if defined(EMU_PPC)
 	printf("%08x:  ", addr);
 	disassemble_ppc_insn(mem_get_32(intp, addr), addr);
-	printf("\n");
-#else
-	assert(0);
-#endif
-
 	addr += 4;
+#elif defined(EMU_I386)
+	printf("%08x:  ", intp->pc);
+	disassemble_i386_insn(intp);
+#endif
+	printf("\n");
     }
+
+#ifdef EMU_I386
+    intp->pc = old_pc;
+#endif
 }
 
 void
@@ -2228,6 +2240,23 @@ debugger (interpreter_t *intp)
 
 	    delete_breakpoint(intp, num);
 	}
+#ifdef EMU_I386
+	else if (strcmp(token, "liveness") == 0)
+	{
+	    word_32 addr;
+
+	    p = get_token(p, token);
+	    if (p == 0)
+	    {
+		printf("error\n");
+		continue;
+	    }
+	    addr = strtol(token, 0, 16);
+
+	    compute_liveness(intp, addr);
+	    print_liveness(intp);
+	}
+#endif
 	else if (strcmp(token, "file") == 0)
 	{
 	    int fd, native_fd;
@@ -2312,7 +2341,10 @@ init_interpreter_struct (interpreter_t *intp, int direct_memory, int compiler)
     }
 #elif defined(EMU_I386)
     for (i = 0; i < 8; ++i)
+    {
 	intp->regs_GPR[i] = 0;
+	intp->regs_FPST[i] = 0.0;
+    }
 
     intp->regs_SPR[0] = 0;
     intp->regs_FSPR[0] = 0;

@@ -4,21 +4,7 @@
 #include <assert.h>
 
 #include "bintrans.h"
-
-#define I386_PREFIX_LOCK               0x001
-#define I386_PREFIX_REPNE              0x002
-#define I386_PREFIX_REP                0x004
-#define I386_PREFIX_SSE                0x008
-#define I386_PREFIX_CS_OVERRIDE        0x010
-#define I386_PREFIX_SS_OVERRIDE        0x020
-#define I386_PREFIX_DS_OVERRIDE        0x040
-#define I386_PREFIX_ES_OVERRIDE        0x080
-#define I386_PREFIX_FS_OVERRIDE        0x100
-#define I386_PREFIX_GS_OVERRIDE        0x200
-#define I386_PREFIX_OP_SIZE_OVERRIDE   0x400
-#define I386_PREFIX_ADDR_SIZE_OVERRIDE 0x800
-
-#define I386_NUM_PREFIXES 9
+#include "i386.h"
 
 static struct { word_8 prefix; int flag; } prefixes[I386_NUM_PREFIXES] = {
     { 0xf0, I386_PREFIX_LOCK },
@@ -54,12 +40,14 @@ i386_decode_opcode (interpreter_t *intp, int *prefix_flags, word_8 *opcode1, wor
 	}
 	else
 	{
+	    /*
 	    if (b == 0x0f || b == 0xf2 || b == 0xf3)
 	    {
 		*opcode1 = b;
 		*opcode2 = mem_get_8(intp, intp->pc++);
 	    }
 	    else
+	    */
 		*opcode1 = b;
 	    break;
 	}
@@ -67,16 +55,26 @@ i386_decode_opcode (interpreter_t *intp, int *prefix_flags, word_8 *opcode1, wor
 }
 
 void
-i386_decode_modrm (interpreter_t *intp, word_8 *_mod, word_8 *_reg, word_8 *_rm,
-		   word_8 *_scale, word_8 *_index, word_8 *_base, word_8 *_disp8, word_32 *_disp32)
+i386_decode_modrm (interpreter_t *intp, word_8 *_modrm, word_8 *_mod, word_8 *_reg, word_8 *_rm)
 {
-    word_8 modrm = mem_get_8(intp, intp->pc++), sib;
-    word_8 mod, reg, rm;
+    word_8 modrm = mem_get_8(intp, intp->pc++);
+
+    *_modrm = modrm;
+
+    *_mod = modrm >> 6;
+    *_reg = (modrm >> 3) & 7;
+    *_rm = modrm & 7;
+}
+
+void
+i386_decode_sib (interpreter_t *intp, word_8 modrm, word_8 *_scale, word_8 *_index, word_8 *_base, word_8 *_disp8, word_32 *_disp32)
+{
+    word_8 mod, reg, rm, sib;
     int need_sib = 0, need_disp8 = 0, need_disp32 = 0;
 
-    *_mod = mod = modrm >> 6;
-    *_reg = reg = (modrm >> 3) & 7;
-    *_rm = rm = modrm & 7;
+    mod = modrm >> 6;
+    reg = (modrm >> 3) & 7;
+    rm = modrm & 7;
 
     if (mod == 1)
 	need_disp8 = 1;
@@ -264,4 +262,6 @@ setup_i386_registers (interpreter_t *intp, word_32 stack_bottom)
 
 #include "i386_interpreter.c"
 #include "i386_disassembler.c"
+#include "i386_livenesser.c"
+#include "i386_jump_analyzer.c"
 #endif

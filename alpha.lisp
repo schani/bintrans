@@ -353,6 +353,10 @@
   ((set-fc (integer-to-double (double-to-bits (fop fb)))))
   ((fa 31)))
 
+(define-float-insn cvtqtc #x16 #x03e
+  ((set-fc (integer-to-double (double-to-bits (fop fb)))))
+  ((fa 31)))
+
 (define-float-insn cvtst #x16 #x2ac
   ()					;FIXME
   ((fa dont-care)
