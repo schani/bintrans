@@ -33,7 +33,6 @@
 #define COUNT_POOL_SIZE             32768
 
 #ifdef DYNAMO_TRACES
-#define MAX_DYNAMO_TRACE              128
 int current_dynamo_trace_length;
 word_32 current_dynamo_trace[MAX_DYNAMO_TRACE];
 extern fragment_hash_supplement_t fragment_entry_supplement;

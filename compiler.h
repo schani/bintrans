@@ -23,6 +23,7 @@
 #define MAX_CODE_INSNS        700000
 #ifdef DYNAMO_TRACES
 #define MAX_ALT_CODE_INSNS    300000
+#define MAX_DYNAMO_TRACE         128
 #else
 #define MAX_ALT_CODE_INSNS         0
 #endif

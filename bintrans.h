@@ -258,6 +258,14 @@ void compute_liveness (interpreter_t *intp, word_32 addr);
 void print_liveness (interpreter_t *intp);
 #endif
 
+#ifdef EMU_PPC
+typedef struct
+{
+    word_32 killed_cr;
+    word_32 killed_xer;
+} ppc_insn_t;
+#endif
+
 /* these come from ppc_compiler.c */
 void move_ppc_regs_interpreter_to_compiler (interpreter_t *intp);
 void move_ppc_regs_compiler_to_interpreter (interpreter_t *intp);

@@ -1649,6 +1649,10 @@ emit_load_mem_64 (reg_t value_reg, reg_t addr_reg)
 #else
 #include "ppc_to_alpha_compiler.c"
 #endif
+#ifdef DYNAMO_TRACES
+#include "ppc_livenesser.c"
+#include "ppc_killer.c"
+#endif
 #elif defined(EMU_I386)
 #include "i386.h"
 #include "i386_compiler.c"

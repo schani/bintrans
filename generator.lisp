@@ -79,8 +79,8 @@
 (defun sort-by-fixed-order (lst order)
   (sort lst #'(lambda (a b) (< (position a order) (position b order)))))
 
-(defun mappend (func lst)
-  (apply #'append (mapcar func lst)))
+(defun mappend (func &rest lists)
+  (apply #'append (apply #'mapcar func lists)))
 
 (defun mapcar* (func &rest lists)
   (remove nil (apply #'mapcar func lists)))
@@ -922,10 +922,7 @@
 		 (>f (left right)
 		     (if (> (calc-float left) (calc-float right)) 1 0))
 		 (>=f (left right)
-		     (if (>= (calc-float left) (calc-float right)) 1 0))
-
-
-		 ))))
+		     (if (>= (calc-float left) (calc-float right)) 1 0))))))
     (ecase (expr-type expr)
       (integer (make-integer-expr (expr-width expr) (calc expr)))
       (float (make-expr :kind 'float :type 'float :width (expr-width expr) :operands (list (calc-float expr)))))))
@@ -4112,8 +4109,13 @@ if (can_inv_maskmask(~A, ~A))
 	  (subregister (register class number begin end named)
 		       (generate-for-register register class number (format nil "0x~X" (- (1- (ash 2 end)) (1- (ash 1 begin))))))
 	  (numbered-subregister (register class number width index)
-				(generate-for-register register class number
-						       (format nil "(~A << (~A * ~A))" (1- (ash 1 width)) width (generate-interpreter index nil))))
+				(let ((width (first (expr-operands width))))
+				  (generate-for-register register class number
+							 (format nil "(~A << (~A * ~A))" (1- (ash 1 width)) width (generate-interpreter index nil)))))
+	  (bit-set-p (value index)
+		     (if (expr-constp index)
+			 (format nil "(1 << ~A)" (generate-interpreter index nil))
+			 (format nil "(~A | ~A)" (generate-used-reg-bits reg value) (generate-used-reg-bits reg index))))
 	  (t
 	   (format nil "(0 ~{| ~A~})" (mapcar* #'(lambda (x) (if (expr-p x) (generate-used-reg-bits reg x) nil)) (expr-operands expr))))))))
 
@@ -4161,9 +4163,10 @@ killed |= ~A;~%"
 			    (generate-for-register register class number
 						   (format nil "0x~X" (- (1- (ash 2 end)) (1- (ash 1 begin))))))
 	       (numbered-subregister (register class number width index)
-				     (generate-for-register register class number
-							    (format nil "(~A << (~A * ~A))"
-								    (1- (ash 1 width)) width (generate-interpreter index nil))))
+				     (let ((width (first (expr-operands width))))
+				       (generate-for-register register class number
+							      (format nil "(~A << (~A * ~A))"
+								      (1- (ash 1 width)) width (generate-interpreter index nil)))))
 	       (if (cond cons alt)
 		   (assert (expr-constp cond))
 		   (format t "if (~A) {~%" (generate-interpreter cond nil))
@@ -4185,78 +4188,114 @@ killed |= ~A;~%"
 	(let ((*standard-output* out))
 	  (generate-for-lvalue lvalue))))))
 
-(defun generate-live-killed (reg exprs)
-  (labels ((generate-for-register (register class number bits-code used-bits-code)
-	     (cond ((eq reg register)
-		    (format t "if (live & ~A) {
-killed |= ~A;
-live &= ~~~A;
-live |= ~A;
+(defun generate-live-killed (regs exprs)
+  (labels ((r-u-list (bitss)
+	     (mappend #'(lambda (r u) (list (register-name r) u)) regs bitss))
+	   (generate-for-register (register class number bits-code used-bits-codes)
+	     ;; we have to distinguish three cases here:
+	     ;;
+	     ;; 1. the lhs register is definitely one of our culprits
+	     ;; and we know, which one.  in this case, we generate the
+	     ;; straightforward code.
+	     ;;
+	     ;; 2. the lhs register is definitely not one of the
+	     ;; registers we are computing liveness for.  in this case,
+	     ;; the code is straightforward, as well.
+	     ;;
+	     ;; 3. the lhs register may be one of the registers, but
+	     ;; we do not know until run-time.  in this case we have
+	     ;; to check for each of the possibilities in turn.
+	     (let ((name (register-name register))
+		   (r-u-list (r-u-list used-bits-codes)))
+	       (cond ((member register regs) ;case 1
+		      (format t "if (live_~A & ~A) {
+killed_~A |= ~A;
+live_~A &= ~~~A;
+~{live_~A |= ~A;~^~%~}
 }~%"
-			    bits-code bits-code bits-code used-bits-code))
-		   ((and (not (null register)) (not (eq reg register)))
-		    (format t "live |= ~A;~%" used-bits-code))
-		   ((and (null register) (eq class (register-register-class reg)))
-		    (format t "if (~A == ~A) {
-if (live & ~A) {
-killed |= ~A;
-live &= ~~~A;
-live |= ~A;
+			      name bits-code
+			      name bits-code
+			      name bits-code
+			      r-u-list))
+		     ((not (null register)) ;case 2
+		      (format t "~{live_~A |= ~A;~%~}" r-u-list))
+		     (t			;case 3
+		      (format t "{
+word_32 number = ~A;~%"
+			      (generate-interpreter number nil))
+		      (do ((regs regs (cdr regs))
+			   (used-bits-codes used-bits-codes (cdr used-bits-codes)))
+			  ((null regs))
+			(let ((reg (car regs))
+			      (used-bits-code (car used-bits-codes)))
+			  (when (eq class (register-register-class reg))
+			    (format t "if (number == ~A) {
+killed_~A |= ~A;
+live_~A &= ~~~A;
+~{live_~A |= ~A;~^~%~}
+} else "
+				    (register-number reg)
+				    name bits-code
+				    name bits-code
+				    r-u-list))))
+		      (format t "{
+~{live_~A |= ~A;~^~%~}
 }
-} else {
-live |= ~A;
 }~%"
-			    (generate-interpreter number nil) (register-number reg)
-			    bits-code bits-code bits-code used-bits-code
-			    used-bits-code))
-		   (t
-		    (format t "live |= ~A;~%" used-bits-code))))
-	   (generate-for-lvalue (expr rhs-bits)
+			      r-u-list)))))
+	   (generate-used-reg-bitss (expr)
+	     (mapcar #'(lambda (r) (generate-used-reg-bits r expr)) regs))
+	   (generate-for-lvalue (expr rhs-bitss)
 	     (expr-case expr
 	       (register (register class number)
 			 (generate-for-register register class number
-						(format nil "0x~X" (1- (ash 1 (register-width reg))))
-						rhs-bits))
+						(format nil "0x~X" (1- (ash 1 (register-width register))))
+						rhs-bitss))
 	       (array-register (class number)
+			       (assert nil)
 			       (assert (not (eq class (register-register-class reg)))))
 	       (subregister (register class number begin end named)
 			    (generate-for-register register class number
 						   (format nil "0x~X" (- (1- (ash 2 end)) (1- (ash 1 begin))))
-						   rhs-bits))
+						   rhs-bitss))
 	       (numbered-subregister (register class number width index)
-				     (generate-for-register register class number
-							    (format nil "(~A << (~A * ~A))"
-								    (1- (ash 1 width)) width (generate-interpreter index nil))
-							    rhs-bits))
+				     (let ((width (first (expr-operands width))))
+				       (generate-for-register register class number
+							      (format nil "(~A << (~A * ~A))"
+								      (1- (ash 1 width)) width (generate-interpreter index nil))
+							      rhs-bitss)))
 	       (mem (addr)
-		    (format t "live |= ~A | ~A;~%" (generate-used-reg-bits reg addr) rhs-bits))
+		    (format t "~{live_~A |= ~A | ~A;~%~}"
+			    (mappend #'(lambda (r u b) (list (register-name r) u b))
+				     regs (generate-used-reg-bitss addr) rhs-bitss)))
 	       (if (cond cons alt)
 		   (assert (expr-constp cond))
 		   (format t "if (~A) {~%" (generate-interpreter cond nil))
-		   (generate-for-lvalue cons rhs-bits)
+		   (generate-for-lvalue cons rhs-bitss)
 		   (format t "} else {~%")
-		   (generate-for-lvalue alt rhs-bits)
+		   (generate-for-lvalue alt rhs-bitss)
 		   (format t "}~%"))
 	       (case (value cases)
 		 (format t "switch (~A) {~%" (generate-interpreter value nil))
 		 (dolist (case cases)
 		   (format t "~{case ~A: ~}~%" (car case))
-		   (generate-for-lvalue (cdr case) rhs-bits)
+		   (generate-for-lvalue (cdr case) rhs-bitss)
 		   (format t "break;~%"))
 		 (format t "}~%"))))
 	   (generate (expr)
 	     (expr-case expr
 	       (let (let-bindings body)
-		 (generate-live-killed reg body)
+		 (generate-live-killed regs body)
 		 (dolist (let-binding let-bindings)
-		   (format t "live |= ~A;~%" (generate-used-reg-bits reg (cdr let-binding)))))
+		   (dolist (reg regs)
+		     (format t "live_~A |= ~A;~%" (register-name reg) (generate-used-reg-bits reg (cdr let-binding))))))
 	       (set (lvalue rhs)
-		    (let ((rhs-bits (generate-used-reg-bits reg rhs)))
-		      (if (all-lvalues-irrelevant-for-liveness reg lvalue)
-			  (format t "live |= ~A;~%" rhs-bits)
-			  (generate-for-lvalue lvalue rhs-bits))))
+		    (let ((rhs-bitss (generate-used-reg-bitss rhs)))
+		      (if (every #'(lambda (r) (all-lvalues-irrelevant-for-liveness r lvalue)) regs)
+			  (format t "~{live_~A |= ~A;~%~}" (r-u-list rhs-bitss))
+			  (generate-for-lvalue lvalue rhs-bitss))))
 	       (jump (target)
-		     (format t "live |= ~A;~%" (generate-used-reg-bits reg target)))
+		     (format t "~{live_~A |= ~A;~%~}" (r-u-list (generate-used-reg-bitss target))))
 	       (if (cond cons alt)
 		   (if (expr-constp cond)
 		       (progn
@@ -4265,21 +4304,24 @@ live |= ~A;
 			 (format t "} else {~%")
 			 (generate alt)
 			 (format t "}~%"))
-		       (progn
+		       (let ((names (mapcar #'register-name regs)))
 			 (format t "{
-~A save_killed = killed, tmp_killed, save_live = live, tmp_live;
-killed = 0;~%"
-				 (c-type (register-width reg) 'integer))
+~{~A save_killed_~A = killed_~:*~A, tmp_killed_~:*~A, save_live_~:*~A = live_~:*~A, tmp_live_~:*~A;~^~%~}
+~{killed_~A = 0;~%~}"
+				 (mappend #'(lambda (r) (list (c-type (register-width r) 'integer) (register-name r))) regs)
+				 names)
 			 (generate cons)
-			 (format t "tmp_live = live;
-live = save_live;
-tmp_killed = killed;
-killed = 0;~%")
+			 (format t "~{tmp_live_~A = live_~:*~A;
+live_~:*~A = save_live_~:*~A;
+tmp_killed_~:*~A = killed_~:*~A;
+killed_~:*~A = 0;~%~}"
+				 names)
 			 (generate alt)
-			 (format t "live = live | tmp_live;
-killed = save_killed | killed | tmp_killed;
-}~%")
-			 (format t "live |= ~A;~%" (generate-used-reg-bits reg cond)))))
+			 (format t "~{live_~A = live_~:*~A | tmp_live_~:*~A;
+killed_~:*~A = save_killed_~:*~A | killed_~:*~A | tmp_killed_~:*~A;~^~%~}
+}~%"
+				 names)
+			 (format t "~{live_~A |= ~A;~%~}" (r-u-list (generate-used-reg-bitss cond))))))
 	       (case (value cases)
 		 (format t "switch (~A) {~%" (generate-interpreter value nil))
 		 (dolist (case cases)
@@ -4288,23 +4330,70 @@ killed = save_killed | killed | tmp_killed;
 		   (format t "break;~%"))
 		 (format t "}~%"))
 	       (dowhile (cond body)
-			(format t "{
+			(assert nil)
+			(let ((reg nil)) ;just to make it compile
+			  (format t "{
 ~A last_live, save_live = 0;
 do {
 last_live = save_live;
 save_live = live;~%"
-				(c-type (register-width reg) 'integer))
-			(format t "live |= ~A;~%" (generate-used-reg-bits reg cond))
-			(generate-live-killed reg body)
-			(format t "live = live | save_live;
+				  (c-type (register-width reg) 'integer))
+			  (format t "live |= ~A;~%" (generate-used-reg-bits reg cond))
+			  (generate-live-killed reg body)
+			  (format t "live = live | save_live;
 } while (last_live != live);
-}~%"))
+}~%")))
 	       (nop ()
 		    (format t "/* nop */~%"))
+	       (ignore (value)
+		       (format t "/* ignore */~%"))
 	       (system-call ()
-			    (format t "live = ~A;~%" (1- (ash 1 (register-width reg))))))))
+			    (format t "~{live_~A = ~A;~%~}"
+				    (mappend #'(lambda (r) (list (register-name r) (1- (ash 1 (register-width r))))) regs))))))
     (dolist (expr (reverse exprs))
       (generate expr))))
+
+(defun generate-killed (regs exprs)
+  (dolist (reg regs)
+    (labels ((generate (expr)
+	       (expr-case expr
+		 (let (let-bindings body)
+		   (mapc #'generate body))
+		 (set (lvalue rhs)
+		      (princ (generate-killed-for-set-expr reg lvalue)))
+		 (jump (target)
+		       (format t "/* jump */~%"))
+		 (if (cond cons alt)
+		     (if (expr-constp cond)
+			 (progn
+			   (format t "if (~A) {~%" (generate-interpreter cond nil))
+			   (generate cons)
+			   (format t "} else {~%")
+			   (generate alt)
+			   (format t "}~%"))
+			 (progn
+			   (generate cons)
+			   (generate alt))))
+		 (case (value cases)
+		   (format t "switch (~A) {~%" (generate-interpreter value nil))
+		   (dolist (case cases)
+		     (format t "~{case ~A: ~}~%" (car case))
+		     (generate (cdr case))
+		     (format t "break;~%"))
+		   (format t "}~%"))
+		 (nop ()
+		      (format t "/* nop */~%"))
+		 (ignore (value)
+			 (format t "/* ignore */~%"))
+		 (system-call ()
+			      (format t "/* syscall */~%")))))
+      (format t "{
+~A killed = 0;~%"
+	      (c-type (register-width reg) 'integer))
+      (mapc #'generate exprs)
+      (format t "killed_~A = killed;
+}~%"
+	      (register-name reg)))))
 
 (defun can-fall-through-p (exprs)
   (cond ((eq (expr-kind (car exprs)) 'jump)
@@ -4464,6 +4553,35 @@ save_live = live;~%"
 		(dcs (machine-name machine)) (c-type (machine-insn-bits machine) 'integer) (c-type (machine-word-bits machine) 'integer))
 	(generate-insn-recognizer decision-tree #'disassemble-insn)
 	(format t "}~%")))))
+
+(defun generate-livenesser (machine registers)
+  (with-open-file (out (format nil "~A_livenesser.c" (dcs (machine-name machine))) :direction :output :if-exists :supersede)
+    (let ((*standard-output* out)
+	  (decision-tree (build-decision-tree (machine-insns machine))))
+      (format t "void liveness_~A_insn (~A insn, ~A pc, ~{~A *_live_~A, ~:*~:*~A *_killed_~A~^, ~}) {
+~:*~{~A live_~A = *_live_~:*~A, killed_~:*~A = 0;~%~}"
+	      (dcs (machine-name machine))
+	      (c-type (machine-insn-bits machine) 'integer) (c-type (machine-word-bits machine) 'integer)
+	      (mappend #'(lambda (r) (list (c-type (register-width r) 'integer) (register-name r))) registers))
+      (generate-insn-recognizer decision-tree #'(lambda (insn)
+						  (generate-live-killed registers (insn-effect insn))))
+      (format t "~{*_live_~A = live_~:*~A;
+*_killed_~:*~A = killed_~:*~A;~%~}}~%"
+	      (mapcar #'register-name registers)))))
+
+(defun generate-killer (machine registers)
+  (with-open-file (out (format nil "~A_killer.c" (dcs (machine-name machine))) :direction :output :if-exists :supersede)
+    (let ((*standard-output* out)
+	  (decision-tree (build-decision-tree (machine-insns machine))))
+      (format t "void kill_~A_insn (~A insn, ~A pc, ~{~A *_killed_~A~^, ~}) {
+~:*~{~A killed_~A;~%~}"
+	      (dcs (machine-name machine))
+	      (c-type (machine-insn-bits machine) 'integer) (c-type (machine-word-bits machine) 'integer)
+	      (mappend #'(lambda (r) (list (c-type (register-width r) 'integer) (register-name r))) registers))
+      (generate-insn-recognizer decision-tree #'(lambda (insn)
+						  (generate-killed registers (insn-effect insn))))
+      (format t "~{*_killed_~A = killed_~:*~A;~%~}}~%"
+	      (mapcar #'register-name registers)))))
 
 (defun generate-jump-analyzer (machine)
   (let ((*this-machine* machine))

@@ -23,6 +23,10 @@
 (load "ui.lisp")
 
 (load "transformations.lisp")
+
+(defvar *ppc* nil)
+(defvar *alpha* nil)
+
 (load "ppc.lisp")
 ;(load "alpha.lisp")
 

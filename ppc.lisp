@@ -132,12 +132,10 @@
 	  (,@fields
 	   (rc 1))
 	(,@effect
-	 (set cr-0 (logor (if (<s (reg ,result-reg-field gpr) 0)
-			      8
-			      (if (>s (reg ,result-reg-field gpr) 0)
-				  4
-				      2))
-			  (zex xer-so))))
+	 (set (numbered-subreg 1 31 cr) (if (<s (reg ,result-reg-field gpr) 0) 1 0))
+	 (set (numbered-subreg 1 30 cr) (if (>s (reg ,result-reg-field gpr) 0) 1 0))
+	 (set (numbered-subreg 1 29 cr) (if (= (reg ,result-reg-field gpr) 0) 1 0))
+	 (set (numbered-subreg 1 28 cr) xer-so))
 	(,(format nil (car asm) name-dot-string) ,@(cdr asm))))))
 
 ;;;; insns
@@ -185,12 +183,10 @@
     ((opcd 13))
   ((set xer-ca (+carry (reg ra gpr) (width 32 (sex simm))))
    (set (reg rd gpr) (+ (reg ra gpr) (sex simm)))
-   (set cr-0 (logor (if (<s (reg rd gpr) 0)
-			8
-			(if (>s (reg rd gpr) 0)
-			    4
-			    2))
-		    (zex xer-so))))
+   (set (numbered-subreg 1 31 cr) (if (<s (reg rd gpr) 0) 1 0))
+   (set (numbered-subreg 1 30 cr) (if (>s (reg rd gpr) 0) 1 0))
+   (set (numbered-subreg 1 29 cr) (if (= (reg rd gpr) 0) 1 0))
+   (set (numbered-subreg 1 28 cr) xer-so))
   ("addic. r%u,r%u,%d" rd ra simm))
 
 (define-insn addis
@@ -228,23 +224,19 @@
 (define-insn andi.
     ((opcd 28))
   ((set (reg ra gpr) (logand (reg rs gpr) (zex uimm)))
-   (set cr-0 (logor (if (<s (reg ra gpr) 0)
-			8
-			(if (>s (reg ra gpr) 0)
-			    4
-			    2))
-		    (zex xer-so))))
+   (set (numbered-subreg 1 31 cr) (if (<s (reg ra gpr) 0) 1 0))
+   (set (numbered-subreg 1 30 cr) (if (>s (reg ra gpr) 0) 1 0))
+   (set (numbered-subreg 1 29 cr) (if (= (reg ra gpr) 0) 1 0))
+   (set (numbered-subreg 1 28 cr) xer-so))
   ("andi. r%u,r%u,%u" ra rs uimm))
 
 (define-insn andis.
     ((opcd 29))
   ((set (reg ra gpr) (logand (reg rs gpr) (shiftl (zex uimm) 16)))
-   (set cr-0 (logor (if (<s (reg ra gpr) 0)
-			8
-			(if (>s (reg ra gpr) 0)
-			    4
-			    2))
-		    (zex xer-so))))
+   (set (numbered-subreg 1 31 cr) (if (<s (reg ra gpr) 0) 1 0))
+   (set (numbered-subreg 1 30 cr) (if (>s (reg ra gpr) 0) 1 0))
+   (set (numbered-subreg 1 29 cr) (if (= (reg ra gpr) 0) 1 0))
+   (set (numbered-subreg 1 28 cr) xer-so))
   ("andis. r%u,r%u,%u" ra rs uimm))
 
 (define-insn b
@@ -397,26 +389,20 @@
      (l 0)
      (xo1 32)
      (rc 0))
-  ((set (numbered-subreg 4 (- (width 3 7) crfd) cr)
-	(logor (if (< (reg ra gpr) (reg rb gpr))
-		   8
-		   (if (> (reg ra gpr) (reg rb gpr))
-		       4
-		       2))
-	       (zex xer-so))))
+  ((set (numbered-subreg 1 (width 5 (+ (shiftl (- 7 (zex crfd)) 2) 3)) cr) (if (< (reg ra gpr) (reg rb gpr)) 1 0))
+   (set (numbered-subreg 1 (width 5 (+ (shiftl (- 7 (zex crfd)) 2) 2)) cr) (if (> (reg ra gpr) (reg rb gpr)) 1 0))
+   (set (numbered-subreg 1 (width 5 (+ (shiftl (- 7 (zex crfd)) 2) 1)) cr) (if (= (reg ra gpr) (reg rb gpr)) 1 0))
+   (set (numbered-subreg 1 (width 5 (shiftl (- 7 (zex crfd)) 2)) cr) xer-so))
   ("cmplw cr%u,r%u,r%u" crfd ra rb))
 
 (define-insn cmplwi
     ((opcd 10)
      (l 0)
      (lz 0))
-  ((set (numbered-subreg 4 (- (width 3 7) crfd) cr)
-	(logor (if (< (reg ra gpr) (width 32 (zex uimm)))
-		   8
-		   (if (> (reg ra gpr) (width 32 (zex uimm)))
-		       4
-		       2))
-	       (zex xer-so))))
+  ((set (numbered-subreg 1 (width 5 (+ (shiftl (- 7 (zex crfd)) 2) 3)) cr) (if (< (reg ra gpr) (width 32 (zex uimm))) 1 0))
+   (set (numbered-subreg 1 (width 5 (+ (shiftl (- 7 (zex crfd)) 2) 2)) cr) (if (> (reg ra gpr) (width 32 (zex uimm))) 1 0))
+   (set (numbered-subreg 1 (width 5 (+ (shiftl (- 7 (zex crfd)) 2) 1)) cr) (if (= (reg ra gpr) (width 32 (zex uimm))) 1 0))
+   (set (numbered-subreg 1 (width 5 (shiftl (- 7 (zex crfd)) 2)) cr) xer-so))
   ("cmplwi cr%u,r%u,%u" crfd ra uimm))
 
 (define-insn cmpw
@@ -424,27 +410,21 @@
      (lz 0)
      (l 0)
      (xo1 0)
-     (rc 0))
-  ((set (numbered-subreg 4 (- (width 3 7) crfd) cr)
-	(logor (if (<s (reg ra gpr) (reg rb gpr))
-		   8
-		   (if (>s (reg ra gpr) (reg rb gpr))
-		       4
-		       2))
-	       (zex xer-so))))
+     (rc 0)) 
+  ((set (numbered-subreg 1 (width 5 (+ (shiftl (- 7 (zex crfd)) 2) 3)) cr) (if (<s (reg ra gpr) (reg rb gpr)) 1 0))
+   (set (numbered-subreg 1 (width 5 (+ (shiftl (- 7 (zex crfd)) 2) 2)) cr) (if (>s (reg ra gpr) (reg rb gpr)) 1 0))
+   (set (numbered-subreg 1 (width 5 (+ (shiftl (- 7 (zex crfd)) 2) 1)) cr) (if (= (reg ra gpr) (reg rb gpr)) 1 0))
+   (set (numbered-subreg 1 (width 5 (shiftl (- 7 (zex crfd)) 2)) cr) xer-so))
   ("cmpw cr%u,r%u,r%u" crfd ra rb))
 
 (define-insn cmpwi
     ((opcd 11)
      (l 0)
      (lz 0))
-  ((set (numbered-subreg 4 (- (width 3 7) crfd) cr)
-	(logor (if (<s (reg ra gpr) (width 32 (sex simm)))
-		   8
-		   (if (>s (reg ra gpr) (width 32 (sex simm)))
-		       4
-		       2))
-	       (zex xer-so))))
+  ((set (numbered-subreg 1 (width 5 (+ (shiftl (- 7 (zex crfd)) 2) 3)) cr) (if (<s (reg ra gpr) (width 32 (sex simm))) 1 0))
+   (set (numbered-subreg 1 (width 5 (+ (shiftl (- 7 (zex crfd)) 2) 2)) cr) (if (>s (reg ra gpr) (width 32 (sex simm))) 1 0))
+   (set (numbered-subreg 1 (width 5 (+ (shiftl (- 7 (zex crfd)) 2) 1)) cr) (if (= (reg ra gpr) (width 32 (sex simm))) 1 0))
+   (set (numbered-subreg 1 (width 5 (shiftl (- 7 (zex crfd)) 2)) cr) xer-so))
   ("cmpwi cr%u,r%u,%d" crfd ra simm))
 
 (define-insn cntlzw
@@ -601,12 +581,10 @@
      (crdz 0)
      (xo1 0)
      (rc 0))
-  ((set (numbered-subreg 4 (- (width 3 7) crfd) cr)
-	(if (<f (reg fra fpr) (reg frb fpr))
-	    8
-	    (if (>f (reg fra fpr) (reg frb fpr))
-		4
-		2))))
+  ((set (numbered-subreg 1 (width 5 (+ (shiftl (- 7 (zex crfd)) 2) 3)) cr) (if (<f (reg fra fpr) (reg frb fpr)) 1 0))
+   (set (numbered-subreg 1 (width 5 (+ (shiftl (- 7 (zex crfd)) 2) 2)) cr) (if (>f (reg fra fpr) (reg frb fpr)) 1 0))
+   (set (numbered-subreg 1 (width 5 (+ (shiftl (- 7 (zex crfd)) 2) 1)) cr) (if (=f (reg fra fpr) (reg frb fpr)) 1 0))
+   (set (numbered-subreg 1 (width 5 (shiftl (- 7 (zex crfd)) 2)) cr) xer-so))
   ("fcmpu cr%u,fr%u,fr%u" crfd fra frb))
 
 ;fctiw (floating convert to word)
