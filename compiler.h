@@ -73,6 +73,39 @@ void emit (word_32 insn);
 void compare_register_sets (void);
 #endif
 
+/* liveness.c */
+#ifdef EMU_I386
+typedef struct
+{
+    word_32 addr;
+    word_32 flags_live;
+    word_32 flags_killed;
+} i386_insn_t;
+
+#define MAX_BLOCK_INSNS          1024
+#define MAX_AFTER_BRANCH_INSNS     30
+
+extern i386_insn_t block_insns[MAX_BLOCK_INSNS + MAX_AFTER_BRANCH_INSNS];
+extern int num_block_insns;
+
+void compute_liveness (interpreter_t *intp, word_32 addr);
+void print_liveness (interpreter_t *intp);
+#endif
+
+#if defined(EMU_PPC) && defined(DYNAMO_TRACES)
+typedef struct
+{
+    word_32 live_cr;
+    word_32 live_xer;
+    word_32 killed_cr;
+    word_32 killed_xer;
+} ppc_insn_t;
+
+extern ppc_insn_t block_insns[MAX_DYNAMO_TRACE];
+
+void compute_liveness_for_trace (interpreter_t *intp, word_32 *addrs, int length);
+#endif
+
 /* ppc_compiler.c */
 void compile_ppc_insn (word_32 insn, word_32 pc, int optimize_taken_jump, label_t taken_jump_label);
 
@@ -85,3 +118,9 @@ void compile_to_alpha_ppc_insn (word_32 insn, word_32 pc, int optimize_taken_jum
 
 /* ppc_jump_analyzer.c */
 void jump_analyze_ppc_insn (word_32 insn, word_32 pc, int *_num_targets, word_32 *targets, int *_can_fall_through, int *_can_jump_indirectly);
+
+/* ppc_livenesser.c */
+void liveness_ppc_insn (word_32 insn, word_32 pc, word_32 *_live_CR, word_32 *_killed_CR, word_32 *_live_XER, word_32 *_killed_XER);
+
+/* ppc_killer.c */
+void kill_ppc_insn (word_32 insn, word_32 pc, word_32 *_killed_CR, word_32 *_killed_XER);

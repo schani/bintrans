@@ -4395,6 +4395,77 @@ save_live = live;~%"
 }~%"
 	      (register-name reg)))))
 
+(defun generate-consumed (regs exprs)
+  (dolist (reg regs)
+    (labels ((generate-for-lvalue (expr)
+	       (expr-case expr
+		 (register (register class number)
+			   (assert (expr-constp number))
+			   "0")
+		 (array-register (class number)
+				 (generate-used-reg-bits reg number))
+		 (subregister (register class number begin end named)
+			      (assert (and (expr-constp number)))
+			      "0")
+		 (numbered-subregister (register class number width index)
+				       (assert (and (expr-constp number) (expr-constp width)))
+				       (generate-used-reg-bits reg index))
+		 (mem (addr)
+		      (generate-used-reg-bits reg addr))
+		 (if (cond cons alt)
+		     (assert (expr-constp cond))
+		     (format nil "(~A ? ~A : ~A)"
+			     (generate-interpreter cond nil)
+			     (generate-used-reg-bits reg cons) (generate-used-reg-bits reg alt)))
+		 (case (value cases)
+		   (assert nil)		;we're too lazy to handle this yet
+		   (format t "switch (~A) {~%" (generate-interpreter value nil))
+		   (dolist (case cases)
+		     (format t "~{case ~A: ~}~%" (car case))
+		     (generate-for-lvalue (cdr case))
+		     (format t "break;~%"))
+		   (format t "}~%"))))
+	     (generate (expr)
+	       (expr-case expr
+		 (let (let-bindings body)
+		   (mapc #'generate body))
+		 (set (lvalue rhs)
+		      (format t "consumed |= ~A | ~A;~%" (generate-for-lvalue lvalue) (generate-used-reg-bits reg rhs)))
+		 (jump (target)
+		       (format t "consumed |= ~A;~%" (generate-used-reg-bits reg target)))
+		 (if (cond cons alt)
+		     (if (expr-constp cond)
+			 (progn
+			   (format t "if (~A) {~%" (generate-interpreter cond nil))
+			   (generate cons)
+			   (format t "} else {~%")
+			   (generate alt)
+			   (format t "}~%"))
+			 (progn
+			   (format t "consumed |= ~A;~%" (generate-used-reg-bits reg cond))
+			   (generate cons)
+			   (generate alt))))
+		 (case (value cases)
+		   (format t "switch (~A) {~%" (generate-interpreter value nil))
+		   (dolist (case cases)
+		     (format t "~{case ~A: ~}~%" (car case))
+		     (generate (cdr case))
+		     (format t "break;~%"))
+		   (format t "}~%"))
+		 (nop ()
+		      (format t "/* nop */~%"))
+		 (ignore (value)
+			 (format t "/* ignore */~%"))
+		 (system-call ()
+			      (format t "consumed = 0x~X;~%" (1- (ash 1 (register-width reg))))))))
+      (format t "{
+~A consumed = 0;~%"
+	      (c-type (register-width reg) 'integer))
+      (mapc #'generate exprs)
+      (format t "consumed_~A = consumed;
+}~%"
+	      (register-name reg)))))
+
 (defun can-fall-through-p (exprs)
   (cond ((eq (expr-kind (car exprs)) 'jump)
 	 nil)
@@ -4479,7 +4550,7 @@ save_live = live;~%"
 			    directives args)))
       (format t "printf(\"~A\"~{, ~A~});~%" format-string c-exprs))))
 
-(defun generate-insn-recognizer (tree action)
+(defun generate-insn-recognizer (tree action &key (unrecognized-action "assert(0);"))
   (if (insn-p tree)
       (progn
 	(format t "/* ~A */~%" (insn-name tree) (insn-name tree))
@@ -4491,9 +4562,9 @@ save_live = live;~%"
 	(format t "switch (~A) {~%" (code-for-field "insn" begin end))
 	(dolist (subtree subtrees)
 	  (format t "case ~A:~%" (car subtree))
-	  (generate-insn-recognizer (cdr subtree) action)
+	  (generate-insn-recognizer (cdr subtree) action :unrecognized-action unrecognized-action)
 	  (format t "break;~%"))
-	(format t "default:~%assert(0);~%}~%"))))
+	(format t "default:~%~A~%}~%" unrecognized-action))))
 
 (defun generate-register-dumper (machine)
   (format t "void dump_~A_registers (interpreter_t *intp) {~%" (dcs (machine-name machine)))
@@ -4579,8 +4650,28 @@ save_live = live;~%"
 	      (c-type (machine-insn-bits machine) 'integer) (c-type (machine-word-bits machine) 'integer)
 	      (mappend #'(lambda (r) (list (c-type (register-width r) 'integer) (register-name r))) registers))
       (generate-insn-recognizer decision-tree #'(lambda (insn)
-						  (generate-killed registers (insn-effect insn))))
-      (format t "~{*_killed_~A = killed_~:*~A;~%~}}~%"
+						  (generate-killed registers (insn-effect insn)))
+				:unrecognized-action "goto unrecognized;")
+      (format t "~{*_killed_~A = killed_~:*~A;~%~}return;
+unrecognized:
+~:*~{*_killed_~A = 0xffffffff;~%~}}~%"	;FIXME: this constant should be dependent on the register width
+	      (mapcar #'register-name registers)))))
+
+(defun generate-consumer (machine registers)
+  (with-open-file (out (format nil "~A_consumer.c" (dcs (machine-name machine))) :direction :output :if-exists :supersede)
+    (let ((*standard-output* out)
+	  (decision-tree (build-decision-tree (machine-insns machine))))
+      (format t "void consume_~A_insn (~A insn, ~A pc, ~{~A *_consumed_~A~^, ~}) {
+~:*~{~A consumed_~A;~%~}"
+	      (dcs (machine-name machine))
+	      (c-type (machine-insn-bits machine) 'integer) (c-type (machine-word-bits machine) 'integer)
+	      (mappend #'(lambda (r) (list (c-type (register-width r) 'integer) (register-name r))) registers))
+      (generate-insn-recognizer decision-tree #'(lambda (insn)
+						  (generate-consumed registers (insn-effect insn)))
+				:unrecognized-action "goto unrecognized;")
+      (format t "~{*_consumed_~A = consumed_~:*~A;~%~}return;
+unrecognized:
+~:*~{*_consumed_~A = 0xffffffff;~%~}}~%"	;FIXME: this constant should be dependent on the register width
 	      (mapcar #'register-name registers)))))
 
 (defun generate-jump-analyzer (machine)
@@ -4601,10 +4692,16 @@ can_jump_indirectly = ~:[0~;1~];~%"
 							      (can-fall-through-p exprs) can-jump-indirectly)
 						      (when (not can-jump-indirectly)
 							(dolist (expr exprs)
-							  (generate-direct-jump-targets expr))))))
+							  (generate-direct-jump-targets expr)))))
+				  :unrecognized-action "goto unrecognized;")
 	(format t "*_num_targets = num_targets;
 *_can_fall_through = can_fall_through;
-*_can_jump_indirectly = can_jump_indirectly;~%}~%")))))
+*_can_jump_indirectly = can_jump_indirectly;
+return;
+unrecognized:
+*_num_targets = 0;
+*_can_fall_through = 1;
+*_can_jump_indirectly = 1;~%}~%")))))
   
 
 (defun generate-registers-and-insns-code (machine)

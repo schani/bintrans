@@ -2254,6 +2254,24 @@ compile_trace (word_32 addr, int length, int bits)
     return start;
 }
 
+int
+count_bits (word_32 x)
+{
+    int c = 0;
+
+    while (x != 0)
+    {
+	c += x & 1;
+	x >>= 1;
+    }
+
+    return c;
+}
+
+#ifdef COLLECT_STATS
+unsigned long real_killed_bits = 0, killed_bits = 0;
+#endif
+
 word_64
 compile_dynamo_trace (word_32 *addrs, int length)
 {
@@ -2264,6 +2282,25 @@ compile_dynamo_trace (word_32 *addrs, int length)
 
     old_num_translated_insns = num_translated_insns;
 #endif
+
+    {
+	compute_liveness_for_trace(compiler_intp, addrs, length);
+
+	printf("*** cr kills\n");
+	for (i = 0; i < length; ++i)
+	{
+	    word_32 killed_cr, killed_xer;
+
+	    kill_ppc_insn(mem_get_32(compiler_intp, addrs[i]), addrs[i], &killed_cr, &killed_xer);
+	    printf("%08x  %08x  %08x  live: %08x\n", addrs[i], killed_cr, block_insns[i].killed_cr, block_insns[i].live_cr);
+
+#ifdef COLLECT_STATS
+	    real_killed_bits += count_bits(killed_cr);
+	    killed_bits += count_bits(block_insns[i].killed_cr);
+#endif
+	}
+	printf("***\n");
+    }
 
     start_timer();
 
@@ -2905,6 +2942,9 @@ print_compiler_stats (void)
     printf("stub calls:                    %lu\n", num_stub_calls);
     printf("loop profiler calls:           %lu\n", num_loop_profiler_calls);
     printf("isyncs:                        %lu\n", num_isyncs);
+
+    printf("real killed cr bits:           %lu\n", real_killed_bits);
+    printf("killed cr bits:                %lu\n", killed_bits);
 
 #ifdef COLLECT_PPC_FPR_STATS
     for (i = 0; i < 32; ++i)

@@ -24,6 +24,7 @@
 #include <assert.h>
 
 #include "bintrans.h"
+#include "compiler.h"
 
 #ifdef EMU_I386
 i386_insn_t block_insns[MAX_BLOCK_INSNS + MAX_AFTER_BRANCH_INSNS];
@@ -120,5 +121,140 @@ print_liveness (interpreter_t *intp)
 
     for (i = 0; i < num_block_insns; ++i)
 	printf("0x%08x   0x%08x 0x%08x\n", block_insns[i].addr, block_insns[i].flags_live, block_insns[i].flags_killed);
+}
+#endif
+
+#if defined(EMU_PPC) && defined(DYNAMO_TRACES)
+#include "ppc_consumer.c"
+
+#define MAX_ALT_DEPTH          40
+
+ppc_insn_t block_insns[MAX_DYNAMO_TRACE];
+
+void
+compute_limited_liveness (interpreter_t *intp, word_32 pc, int max_depth, word_32 *live_cr, word_32 *live_xer)
+{
+    word_32 needed_cr = 0, needed_xer = 0;
+    word_32 dead_cr = 0, dead_xer = 0;
+    int i;
+
+    for (i = 0; i < max_depth; ++i)
+    {
+	word_32 consumed_cr, consumed_xer;
+	word_32 killed_cr, killed_xer;
+	word_32 insn = mem_get_32(intp, pc);
+	int num_targets;
+	word_32 target;
+	int can_fall_through, can_jump_indirectly;
+
+	consume_ppc_insn(insn, pc, &consumed_cr, &consumed_xer);
+	kill_ppc_insn(insn, pc, &killed_cr, &killed_xer);
+
+	needed_cr |= consumed_cr & ~dead_cr;
+	needed_xer |= consumed_xer & ~dead_xer;
+
+	dead_cr |= killed_cr;
+	dead_xer |= killed_xer;
+
+	jump_analyze_ppc_insn(insn, pc, &num_targets, &target, &can_fall_through, &can_jump_indirectly);
+
+	if (can_jump_indirectly)
+	    break;
+
+	if (!can_fall_through)
+	{
+	    assert(num_targets == 1);
+	    pc = target;
+	}
+	else if (num_targets == 0)
+	    pc += 4;
+	else
+	{
+	    assert(num_targets == 1);
+	    break;
+	}
+    }
+
+    *live_cr = ~dead_cr | needed_cr;
+    *live_xer = ~dead_xer | needed_xer;
+}
+
+void
+compute_liveness_for_trace (interpreter_t *intp, word_32 *addrs, int length)
+{
+    word_32 live_cr, live_xer, killed_cr, killed_xer;
+    /* word_32 real_killed_cr, real_killed_xer; */
+    int i;
+    int num_targets;
+    word_32 target;
+    int can_fall_through, can_jump_indirectly;
+
+    assert(length <= MAX_DYNAMO_TRACE);
+
+    /* first check the end of the trace */
+    jump_analyze_ppc_insn(mem_get_32(intp, addrs[length - 1]), addrs[length - 1], &num_targets, &target, &can_fall_through, &can_jump_indirectly);
+    if (can_jump_indirectly)
+	live_cr = live_xer = 0xffffffff;
+    else
+    {
+	if (can_fall_through)
+	    compute_limited_liveness(intp, addrs[length - 1] + 4, MAX_ALT_DEPTH, &live_cr, &live_xer);
+	else
+	    live_cr = live_xer = 0;
+
+	if (num_targets > 0)
+	{
+	    word_32 alt_live_cr, alt_live_xer;
+
+	    assert(num_targets == 1);
+
+	    compute_limited_liveness(intp, target, MAX_ALT_DEPTH, &alt_live_cr, &alt_live_xer);
+
+	    live_cr |= alt_live_cr;
+	    live_xer |= alt_live_xer;
+	}
+    }
+
+    for (i = length - 1; i >= 0; --i)
+    {
+	word_32 pc = addrs[i], insn = mem_get_32(intp, pc);
+
+	liveness_ppc_insn(insn, pc, &live_cr, &killed_cr, &live_xer, &killed_xer);
+	/* kill_ppc_insn(insn, pc, &real_killed_cr, &real_killed_xer); */
+
+	block_insns[i].killed_cr = killed_cr;
+	block_insns[i].killed_xer = killed_xer;
+
+	jump_analyze_ppc_insn(insn, pc, &num_targets, &target, &can_fall_through, &can_jump_indirectly);
+
+	if (can_jump_indirectly)
+	    live_cr = live_xer = 0xffffffff;
+	else if (num_targets > 0 && can_fall_through && i < length - 1)
+	{
+	    word_32 alt_pc;
+	    word_32 alt_live_cr, alt_live_xer;
+
+	    assert(num_targets == 1);
+
+	    if (addrs[i + 1] == pc + 4)
+		alt_pc = target;
+	    else
+	    {
+		assert(addrs[i + 1] == target);
+
+		alt_pc = pc + 4;
+	    }
+
+	    compute_limited_liveness(intp, alt_pc, MAX_ALT_DEPTH, &alt_live_cr, &alt_live_xer);
+
+	    printf("alt analysis from %08x: %08x\n", alt_pc, alt_live_cr);
+
+	    live_cr |= alt_live_cr;
+	    live_xer |= alt_live_xer;
+	}
+
+	block_insns[i].live_cr = live_cr;
+	block_insns[i].live_xer = live_xer;
+    }
 }
 #endif

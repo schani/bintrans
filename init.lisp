@@ -43,3 +43,9 @@
   (generate-disassembler-file *ppc*)
   (generate-interpreter-file *ppc*)
   (generate-compiler-file *ppc*))
+
+(defun generate-ppc-insn-analyzers ()
+  (generate-jump-analyzer *ppc*)
+  (generate-livenesser *ppc* (list (lookup-register 'cr) (lookup-register 'xer)))
+  (generate-killer *ppc* (list (lookup-register 'cr) (lookup-register 'xer)))
+  (generate-consumer *ppc* (list (lookup-register 'cr) (lookup-register 'xer))))

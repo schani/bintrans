@@ -239,33 +239,6 @@ void print_compiler_stats (void);
 
 extern char *insn_names[];
 
-/* liveness.c */
-#ifdef EMU_I386
-typedef struct
-{
-    word_32 addr;
-    word_32 flags_live;
-    word_32 flags_killed;
-} i386_insn_t;
-
-#define MAX_BLOCK_INSNS          1024
-#define MAX_AFTER_BRANCH_INSNS     30
-
-extern i386_insn_t block_insns[MAX_BLOCK_INSNS + MAX_AFTER_BRANCH_INSNS];
-extern int num_block_insns;
-
-void compute_liveness (interpreter_t *intp, word_32 addr);
-void print_liveness (interpreter_t *intp);
-#endif
-
-#ifdef EMU_PPC
-typedef struct
-{
-    word_32 killed_cr;
-    word_32 killed_xer;
-} ppc_insn_t;
-#endif
-
 /* these come from ppc_compiler.c */
 void move_ppc_regs_interpreter_to_compiler (interpreter_t *intp);
 void move_ppc_regs_compiler_to_interpreter (interpreter_t *intp);
