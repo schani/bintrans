@@ -207,7 +207,7 @@ let rec alpha_wrap stmt =
   let wrap_addr width addr =
     match width with
 	1 -> bitxor_expr addr (int_literal_expr 3L)
-      | 2 -> bitxor_expr addr (int_literal_expr 1L)
+      | 2 -> bitxor_expr addr (int_literal_expr 2L)
       | 4 -> addr
       | _ -> raise Width_not_supported
   in let rec wrap_expr expr =
@@ -215,7 +215,7 @@ let rec alpha_wrap stmt =
 	  Unary (LoadByte, addr) ->
 	    Unary (LoadByte, wrap_addr 1 (wrap_expr addr))
 	| LoadBO (bo, width, addr) ->
-	    LoadBO (bo, width, wrap_addr width (wrap_expr addr))
+	    LoadBO (other_byte_order bo, width, wrap_addr width (wrap_expr addr))
 	| _ ->
 	    apply_to_expr_subs wrap_expr expr
   in match stmt with

@@ -543,7 +543,12 @@ let unmemoized_prune_expr prune_one_arg mapping fields expr needed =
       (fun _ ->
 	 (match expr with
 	      IntConst (IntLiteral _) -> return (bitand_expr expr needed)
-	    | IntConst _ | FloatConst _ | ConditionConst _ | Register _ | LoadBO _ -> return expr
+	    | IntConst _ | FloatConst _ | ConditionConst _ | Register _ -> return expr
+	    | LoadBO (bo, width, addr) ->
+		let1
+		  (prune addr (int_literal_expr (width_mask (mapping.source_machine.addr_width))))
+		  (fun paddr ->
+		     return (LoadBO (bo, width, paddr)))
 	    | Unary (op, arg) -> prune_unary op arg
 	    | UnaryWidth (op, width, arg) -> prune_unary_width op width arg
 	    | Binary (op, arg1, arg2) -> prune_binary op arg1 arg2

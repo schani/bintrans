@@ -34,6 +34,8 @@ open Normal_form
 open Mapping
 open Machine
 
+exception Hell
+
 (*** simplifying expressions and statements ***)
 
 let rec simplify_and_prune_until_fixpoint depth print prune simplify fields x =
@@ -58,10 +60,30 @@ let simplify_and_prune_stmt_until_fixpoint mapping =
 
 (*** simplifying the conditions ***)
 
+let compare_exprs try_fields expr1 expr2 =
+  let rec compare fields_so_far try_fields =
+    match try_fields with
+	[] ->
+	  if (cfold_expr fields_so_far expr1) <> (cfold_expr fields_so_far expr2) then
+	    ( print_expr expr1 ; print_newline () ;
+	      print_expr expr2 ; print_newline () ;
+	      raise Hell)
+	  else
+	    ()
+      | (name, first, last) :: rest when first < last ->
+	  (compare ((name, first) :: fields_so_far) rest ;
+	   compare fields_so_far ((name, (add first 1L), last) :: rest))
+      | _ ->
+	  ()
+  in compare [] try_fields
+
 let simplify_conditions conds =
   let prune_and_simplify x =
     fst (cm_yield (simplify_and_prune_expr_until_fixpoint dummy_mapping [] x))
-  in uniq (map (fun x -> cfold_expr [] (prune_and_simplify x))
+  in uniq (map (fun x ->
+		  let sx = cfold_expr [] (prune_and_simplify x)
+		  in (* compare_exprs [("sh", 0L, 32L); ("mb", 0L, 32L); ("me", 0L, 32L)] x sx ; *)
+		    sx)
 	     (filter (fun x -> not (is_const (cfold_expr [] x))) conds))
 
 let fast_simplify_conditions conds =

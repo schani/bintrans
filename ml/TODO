@@ -1,9 +1,39 @@
+implement alpha insns:
+   subl for subtraction and addition(!)
+   lda for 64 bit subtraction
+
+ ++++++++++++++++
+ rlwinm r0,r0,5,31,31
+ - - - - - - - - 
+-sll $9,36,$9
+-srl $9,63,$9
++zapnot $9,15,$1
++srl $1,27,$1
++and $1,1,$9
+ ++++++++++++++++
+ ++++++++++++++++
+ rlwinm r0,r0,8,24,31
+ - - - - - - - - 
+-extbl $9,3,$9
++zapnot $9,15,$9
++srl $9,24,$9
+ ++++++++++++++++
+
+
+
 sex optimizer must not only try either all registers with zero or all
 with one but all combinations!
 
-ask on comp.lang.functional about user op monad problem.
+when accessing ppc memory on the alpha, we need to sex or zex the address.  we
+can do this by making the pruner prune addresses to alpha width (i.e. 8 bytes)
+and making the alpha wrapper sex or zex the address.  note: the hand coded
+generator does not do this to improve efficiency, in the hope that it will not
+cause problems.
 
-check out why rlwinm with sex doesn't use the rotl alpha matcher
+add conditions to simplifiers, so that for example the sex(ashiftr(x))
+simplification can be made more generic.
+
+ask on comp.lang.functional about user op monad problem.
 
 include fields in source machine description.  bits known to be zero should be
 communicated to known and bits.

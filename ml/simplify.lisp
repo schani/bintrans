@@ -44,3 +44,6 @@
 
 (defsimplify (sex 2 (sex 1 ?x))
     (sex 1 x))
+
+(defsimplify (sex 4 (ashiftr 8 ?x 32))
+  (ashiftr 8 x 32))

@@ -70,6 +70,13 @@ let width_shift_mask width =
     | 8 -> 0x3fL
     | _ -> raise Unsupported_width
 
+(*** byte order ***)
+
+let other_byte_order bo =
+  match bo with
+      LittleEndian -> BigEndian
+    | BigEndian -> LittleEndian
+
 (*** ops ***)
 
 type unary_op =
@@ -453,7 +460,9 @@ let apply_to_expr_subs_with_monad return bind modify expr =
       | FloatConst _ -> return expr
       | ConditionConst _ -> return expr
       | Register _ -> return expr
-      | LoadBO _ -> return expr
+      | LoadBO (bo, width, addr) ->
+	  bind (modify addr)
+	    (fun maddr -> return (LoadBO (bo, width, maddr)))
       | Unary (op, arg) ->
 	  bind (modify arg)
 	    (fun marg -> return (Unary (op, marg)))

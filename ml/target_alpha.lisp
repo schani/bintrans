@@ -25,16 +25,30 @@
   (let ((a-rhs (subst '(register ?ra) 'a rhs)))
     `(progn
       (defmatcher ,name
-	  (set ?rs ,(subst '(register ?rb) 'b a-rhs))
+	(set ?rs ,(subst '(register ?rb) 'b a-rhs))
 	1
 	(,(format nil "~~A = ~A;" c-format) rs ra rb)
 	(,(format nil "emit(COMPOSE_~A(~~A, ~~A, ~~A));" name) ra rb rs))
-      (defmatcher ,(intern (string-concat (string name) "_IMM"))
-	  (set ?rs ,(subst '(any-int ?i) 'b a-rhs))
+      (defmatcher ,(intern (string-concat (string name) "-IMM"))
+	(set ?rs ,(subst '(any-int ?i) 'b a-rhs))
 	(when (int-zero-p 8 (lshiftr 8 i 8))
 	  1)
 	(,(format nil "~~A = ~A;" c-format) rs ra i)
 	(,(format nil "emit(COMPOSE_~A_IMM(~~A, ~~A, ~~A));" name) ra i rs)))))
+
+(defmacro defldmatcher (name rhs c-format mnemonic)
+  `(progn
+     (defmatcher ,name
+       (set ?ra ,(subst '(register ?rb) 'ea rhs))
+       2
+       (,(format nil "~~A = ~A;" c-format) ra rb)
+       (,(format nil "emit(COMPOSE_~A(~~A, 0, ~~A));" mnemonic) ra rb))
+     (defmatcher ,(intern (string-concat (string name) "-DISP"))
+       (set ?ra ,(subst '(+i (register ?rb) (any-int ?disp)) 'ea rhs))
+       (when (zero-or-full-p 8 (ashiftr 8 disp 16))
+	 2)
+       (,(format nil "~~A = ~A;" (format nil c-format "~A + ~A")) ra disp rb)
+       (,(format nil "emit(COMPOSE_~A(~~A, ~~A & 0xffff, ~~A));" mnemonic) ra disp rb))))
 
 ; we don't add the immediate version of addq because it performs a subset of
 ; the functionality of lda
@@ -115,13 +129,36 @@
 (defopmatcher bis (bit-or a b) "~A | ~A")
 (defopmatcher bic (bit-and a (bit-neg b)) "~A | ~A")
 
+(defopmatcher mull (sex 4 (*i a b)) "sex_32(~A * ~A)")
+(defopmatcher mulq (*i a b) "~A * ~A")
+
 (defmatcher neg
   (set ?rs (bit-neg (register ?rb)))
   1
   ("~A = ~~~A;" rs rb)
-  ("emit(COMPOSE_NEG(~A, ~A));" rb rs))
+  ("emit(COMPOSE_NOT(~A, ~A));" rb rs))
+
+(defmatcher negl
+  (set ?rs (sex 4 (int-neg (register ?rb))))
+  1
+  ("~A = sex_32(~~~A);" rs rb)
+  ("emit(COMPOSE_NEGL(~A, ~A));" rb rs))
+
+(defmatcher negq
+  (set ?rs (int-neg (register ?rb)))
+  1
+  ("~A = ~~~A;" rs rb)
+  ("emit(COMPOSE_NEGQ(~A, ~A));" rb rs))
+
+(defmatcher ornot
+  (set ?rs (bit-or (register ?ra) (bit-neg (register ?rb))))
+  1
+  ("~A = ~A | ~~~A;" rs ra rb)
+  ("emit(COMPOSE_ORNOT(~A, ~A, ~A));" ra rb rs))
 
 (defopmatcher sll (shiftl a b) "~A << ~A")
+(defopmatcher sra (ashiftr 8 a b) "ashiftr_64(~A, ~A)")
+(defopmatcher srl (lshiftr 8 a b) "~A >> ~A")
 
 (defmatcher zapnot-imm-srl
   (set ?rs (lshiftr (?width (1 2 4)) (register ?ra) (register ?rb)))
@@ -169,31 +206,35 @@
   ("~A = (~A >> ~A) & 0xffff;" rs ra i)
   ("emit(COMPOSE_EXTWL_IMM(~A, ~A >> 3, ~A));" ra i rs))
 
-(defmatcher ldbu
-  (set ?ra (load-byte (register ?rb)))
-  2
-  ("~A = mem_load_8(~A);" ra rb)
-  ("emit(COMPOSE_LDBU(~A, 0, ~A));" ra rb))
+(defldmatcher ldbu
+  (load-byte ea)
+  "mem_load_8(~A)"
+  "LDBU")
 
-(defmatcher ldbu-disp
-  (set ?ra (load-byte (+i (register ?rb) (any-int ?disp))))
-  (when (zero-or-full-p 8 (ashiftr 8 disp 16))
-    2)
-  ("~A = mem_load_8(~A + ~A);" ra rb disp)
-  ("emit(COMPOSE_LDBU(~A, ~A & 0xffffLL, ~A));" ra disp rb))
+(defldmatcher ldbu-zex
+  (zex 1 (load-byte ea))
+  "mem_load_8(~A)"
+  "LDBU")
 
-(defmatcher ldbu-zex
-  (set ?ra (zex 1 (load-byte (register ?rb))))
-  2
-  ("~A = mem_load_8(~A);" ra rb)
-  ("emit(COMPOSE_LDBU(~A, 0, ~A));" ra rb))
+(defldmatcher ldwu
+  (load little-endian 2 ea)
+  "mem_load_16(~A)"
+  "LDWU")
 
-(defmatcher ldbu-zex-disp
-  (set ?ra (zex 1 (load-byte (+i (register ?rb) (any-int ?disp)))))
-  (when (zero-or-full-p 8 (ashiftr 8 disp 16))
-    2)
-  ("~A = mem_load_8(~A + ~A);" ra rb disp)
-  ("emit(COMPOSE_LDBU(~A, ~A & 0xffffLL, ~A));" ra disp rb))
+(defldmatcher ldwu-zex
+  (zex 2 (load little-endian 2 ea))
+  "mem_load_16(~A)"
+  "LDWU")
+
+(defldmatcher ldl
+  (load little-endian 4 ea)
+  "mem_load_32(~A)"
+  "LDL")
+
+(defldmatcher ldl-sex
+  (sex 4 (load little-endian 4 ea))
+  "sex_32(mem_load_32(~A))"
+  "LDL")
 
 (defmatcher sextb
   (set ?rs (sex 1 (register ?rb)))
