@@ -128,6 +128,14 @@
   ((set (reg rd gpr) (+ (reg ra gpr) (reg rb gpr))))
   ("~A r%u,r%u,r%u" rd ra rb))
 
+(define-rc-insn addc rd
+    ((opcd 31)
+     (xo9 10)
+     (oe 0))
+  ((set xer-ca (+carry (reg ra gpr) (reg rb gpr)))
+   (set (reg rd gpr) (+ (reg ra gpr) (reg rb gpr))))
+  ("~A r%u,r%u,r%u" rd ra rb))
+
 (define-rc-insn adde rd
     ((opcd 31)
      (xo9 138)
@@ -685,9 +693,19 @@
 
 (define-insn lbzu
     ((opcd 35))
-  ((set (reg rd gpr) (zex (width 8 (mem (+ (reg ra gpr) (sex d))))))
-   (set (reg ra gpr) (+ (reg ra gpr) (sex d))))	;FIXME: aliasing!!!!!
+  ((let ((ea (width 32 (+ (reg ra gpr) (sex d)))))
+     (set (reg rd gpr) (zex (width 8 (mem ea))))
+     (set (reg ra gpr) ea)))
   ("lbzu r%u,%d(r%u)" rd d ra))
+
+(define-insn lbzux
+    ((opcd 31)
+     (xo1 119)
+     (rc 0))
+  ((let ((ea (+ (reg ra gpr) (reg rb gpr))))
+     (set (reg rd gpr) (zex (width 8 (mem ea))))
+     (set (reg ra gpr) ea)))
+  ("lbzux r%u,r%u,r%u" rd ra rb))
 
 (define-insn lbzx
     ((opcd 31)
@@ -914,14 +932,13 @@
   ((set (reg ra gpr) (bitneg (logand (reg rs gpr) (reg rb gpr)))))
   ("~A r%u,r%u,r%u" ra rs rb))
 
-(define-insn neg
+(define-rc-insn neg rd
     ((opcd 31)
      (rb 0)
      (oe 0)
-     (xo9 104)
-     (rc 0))
+     (xo9 104))
   ((set (reg rd gpr) (neg (reg ra gpr))))
-  ("neg r%u,r%u" rd ra))
+  ("~A r%u,r%u" rd ra))
 
 (define-rc-insn nor ra
     ((opcd 31)

@@ -1,5 +1,7 @@
 #include <assert.h>
 #include <stdio.h>
+#include <sys/time.h>
+#include <unistd.h>
 
 #include "bintrans.h"
 
@@ -123,6 +125,30 @@ unsigned long num_translated_fragments = 0;
 unsigned long num_translated_insns = 0;
 unsigned long num_load_store_reg_insns = 0;
 unsigned long num_divisions = 0;
+#endif
+
+#ifdef MEASURE_TIME
+long compiler_time = 0;
+struct timeval measure_start;
+
+void
+start_timer (void)
+{
+    gettimeofday(&measure_start, 0);
+}
+
+void
+stop_timer (void)
+{
+    struct timeval stop;
+
+    gettimeofday(&stop, 0);
+
+    compiler_time += (stop.tv_sec - measure_start.tv_sec) * 1000000 + stop.tv_usec - measure_start.tv_usec;
+}
+#else
+#define start_timer()
+#define stop_timer()
 #endif
 
 void
@@ -881,6 +907,8 @@ compile_basic_block (word_32 addr)
     int i;
 #endif
 
+    start_timer();
+
     have_jumped = 0;
 
     while (!have_jumped)
@@ -940,6 +968,8 @@ compile_basic_block (word_32 addr)
     enter_fragment(addr, start);
 
     flush_icache();
+
+    stop_timer();
 
     return start;
 }
@@ -1072,6 +1102,10 @@ print_compiler_stats (void)
     for (i = 0; i < NUM_INSNS; ++i)
 	if (insn_infos[i].num_translated > 0)
 	    printf("  %-10s       %10d  %10d\n", insn_names[i], insn_infos[i].num_translated, insn_infos[i].num_generated_insns);
+#endif
+
+#ifdef MEASURE_TIME
+    printf("time spent in compiler: %lu\n", compiler_time);
 #endif
 }
 

@@ -122,7 +122,7 @@
 #endif
 
 
-#if 1
+#if COMPLANG
 #if defined(EMU_PPC)
 #define EMU_ROOT                "/a5/schani/ppc-root"
 #elif defined(EMU_I386)
@@ -182,9 +182,11 @@ int emu_errnos[] = { 0,
 #define SYSCALL_UNAME            122
 #define SYSCALL_MPROTECT         125
 #define SYSCALL_PERSONALITY      136
+#define SYSCALL_LLSEEK           140
 #define SYSCALL_SELECT           142
 #define SYSCALL_READV            145
 #define SYSCALL_WRITEV           146
+#define SYSCALL_RT_SIGACTION     173
 #elif defined(EMU_I386)
 int emu_errnos[] = { 0,
 		     EPERM, ENOENT, ESRCH, EINTR, EIO, ENXIO, E2BIG, ENOEXEC, EBADF,
@@ -234,6 +236,7 @@ int emu_errnos[] = { 0,
 #define SYSCALL_SELECT           142
 #define SYSCALL_READV            145
 #define SYSCALL_WRITEV           146
+#define SYSCALL_RT_SIGACTION     173
 #endif
 
 #undef SYSCALL_OUTPUT
@@ -1314,6 +1317,27 @@ process_system_call (interpreter_t *intp, word_32 number,
 	    result = 0;
 	    break;
 
+	case SYSCALL_LLSEEK :
+	    {
+		off_t offset = ((off_t)arg2 << 32) | (off_t)arg3;
+		off_t pos;
+
+		fd = lookup_fd(arg1);
+
+		pos = lseek(fd, offset, arg5);
+
+		if (pos == (off_t)-1)
+		    result = -1;
+		else
+		{
+		    mem_set_32(intp, arg4 + 0, pos >> 32);
+		    mem_set_32(intp, arg4 + 4, pos & 0xffffffff);
+
+		    result = 0;
+		}
+	    }
+	    break;
+
 	case SYSCALL_SELECT :
 	    ANNOUNCE_SYSCALL("select");
 	    {
@@ -1455,6 +1479,11 @@ process_system_call (interpreter_t *intp, word_32 number,
 	    }
 	    break;
 
+	case SYSCALL_RT_SIGACTION :
+	    ANNOUNCE_SYSCALL("rt_sigaction");
+	    result = 0;		/* FIXME: this is certainly a bit naive. */
+	    break;
+
 	default :
 	    printf("unhandled system call %d\n", number);
 	    intp->halt = 1;
@@ -1510,9 +1539,11 @@ handle_system_call (interpreter_t *intp)
 	{ SYSCALL_UNAME, 1 },
 	{ SYSCALL_MPROTECT, 3 },
 	{ SYSCALL_PERSONALITY, 1 },
+	{ SYSCALL_LLSEEK, 5 },
 	{ SYSCALL_SELECT, 5 },
 	{ SYSCALL_READV, 3 },
 	{ SYSCALL_WRITEV, 3 },
+	{ SYSCALL_RT_SIGACTION, 3 },
 	{ (word_32)-1, 0 }
     };
 
@@ -1530,6 +1561,13 @@ handle_system_call (interpreter_t *intp)
     for (i = 0; syscall_args[i].num != (word_32)-1; ++i)
 	if (syscall_args[i].num == num)
 	    break;
+
+    if (syscall_args[i].num == (word_32)-1)
+    {
+	printf("unhandled system call %d\n", num);
+	intp->halt = 1;
+	return;
+    }
 
     assert(syscall_args[i].num != (word_32)-1);
     num_args = syscall_args[i].num_args;
