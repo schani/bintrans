@@ -1,3 +1,24 @@
+;; i386.lisp
+
+;; bintrans
+
+;; Copyright (C) 2001 Mark Probst
+
+;; This program is free software; you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation; either version 2, or (at your option)
+;; any later version.
+
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU General Public License for more details.
+
+;; You should have received a copy of the GNU General Public License
+;; along with this program; if not, you can either send email to this
+;; program's maintainer or write to: The Free Software Foundation,
+;; Inc.; 675 Massachusetts Avenue; Cambridge, MA 02139, USA.
+
 (new-machine 'i386 'little t)
 
 (setf (machine-word-bits *this-machine*) 32)
@@ -365,16 +386,6 @@ static word_32 disp32, imm32;~%")
 
 (defvar *intel-generator-function-arguments* "pc, mod, reg, rm, scale, index, base, disp8, opcode_reg, imm8, imm16, disp32, imm32, to_be_killed")
 
-(defun print-generated-exprs-functions ()
-  (dolist (func *generated-exprs*)
-    (destructuring-bind (dummy1 dummy2 proto dummy3)
-	func
-      (format t "~A;~%" proto)))
-  (dolist (func *generated-exprs*)
-    (destructuring-bind ((dummy1 . expr) dummy2 proto code)
-	func
-      (format t "~A~%/*~%~A~%*/~%{~%~A}~%~%" proto (expr-to-sexp expr) code))))
-
 (defun generate-intel-compiler ()
   (with-open-file (out (format nil "i386_compiler.c") :direction :output :if-exists :supersede)
     (let ((*standard-output* out)
@@ -514,6 +525,7 @@ can_jump_indirectly = ~:[0~;1~];~%"
 	 (*generated-exprs* nil)
 	 (*analyzed-bits-register* (lookup-register 'eflags))
 	 (*generator-function-arguments* "")
+	 (*insn-field-accessor* #'(lambda (name begin end) (dcs name)))
 	 (main (with-output-to-string (out)
 		 (let ((*standard-output* out))
 		   (dolist (single-effect (intel-insn-effect insn))
@@ -525,8 +537,7 @@ can_jump_indirectly = ~:[0~;1~];~%"
 		       (t
 			(error "cannot handle ~A exprs~%" (expr-kind single-effect)))))))))
     (with-open-file (out (format nil "i386_~A_~A_compiler.c" (dcs insn-name) (dcs mode)) :direction :output :if-exists :supersede)
-      (let ((*standard-output* out)
-	    (*insn-field-accessor* #'(lambda (name begin end) (dcs name))))
+      (let ((*standard-output* out))
 	(format t "#include <assert.h>
 #include \"bintrans.h\"
 #include \"compiler.h\"

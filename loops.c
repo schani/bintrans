@@ -1,9 +1,32 @@
+/*
+ * loops.c
+ *
+ * bintrans
+ *
+ * Copyright (C) 2001 Mark Probst
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ */
+
 #include <stdio.h>
 #include <assert.h>
 
 #include "bintrans.h"
 #ifdef PROFILE_LOOPS
 #include "fragment_hash.h"
+#include "compiler.h"
 
 #define COUNT_POOL_SIZE             32768
 
@@ -52,78 +75,146 @@ inc_trace (int num_jumps)
     }
 }
 
-void
-loop_profiler (interpreter_t *intp)
+fragment_hash_entry_t*
+make_entry_for_addr (word_32 addr)
 {
-    fragment_hash_entry_t entry;
+    fragment_hash_entry_t new;
     int i;
 
 #ifdef PROFILE_FRAGMENTS
-    entry.times_executed = 1;
+    new.times_executed = 0;
 #endif
-    entry.trace0_count = 0;
+    new.trace0_count = 0;
     for (i = 0; i < MAX_TRACE_JUMPS; ++i)
-	entry.trace_pool_indexes[i] = -1;
-    fragment_hash_put(intp->pc, &entry);
+	new.trace_pool_indexes[i] = -1;
+    return fragment_hash_put(addr, &new);
+}
+
+#ifdef COMPILER_THRESHOLD
+word_64
+compile_block_or_trace (fragment_hash_entry_t *entry)
+{
+    trace_count_t best_count;
+    int best_length = -1;
+    int best_bits;
+    int i;
+
+    if (entry->trace0_count > 0)
+    {
+	best_length = 0;
+	best_count = entry->trace0_count;
+    }
+
+    for (i = 0; i < MAX_TRACE_JUMPS; ++i)
+	if (entry->trace_pool_indexes[i] != -1)
+	{
+	    int j;
+
+	    for (j = 0; j < (2 << i); ++j)
+	    {
+		trace_count_t count = count_pool[entry->trace_pool_indexes[i] + j];
+
+		if (count > 0 && (best_length < 0 || count > best_count))
+		{
+		    best_length = i + 1;
+		    best_count = count;
+		    best_bits = j;
+		}
+	    }
+	}
+
+    assert(best_length >= 0);
+
+    if (best_length == 0)
+	return entry->native_addr = compile_basic_block(entry->foreign_addr);
+    else
+	return entry->native_addr = compile_trace(entry->foreign_addr, best_length, best_bits);
+}
+#endif
+
+#ifdef COMPILER_THRESHOLD
+word_64
+loop_profiler (interpreter_t *intp, word_32 addr)
+#else
+void
+loop_profiler (interpreter_t *intp)
+#endif
+{
+    fragment_hash_entry_t *entry = 0;
+    int i;
+
+#ifdef COMPILER_THRESHOLD
+    move_regs_compiler_to_interpreter(compiler_intp);
+
+    compiler_intp->pc = addr;
+#endif
 
     for (;;)
     {
-	word_32 prev_pc = intp->pc;
+	word_32 prev_pc;
 	int branch;
 
-	intp->have_jumped = 0;
-
-	interpret_insn(intp);
-
-	if (intp->have_jumped)
+	if (entry == 0)
 	{
-	    fragment_hash_entry_t *old = fragment_hash_get(intp->pc);
-
-	    if (old != 0)
-	    {
-#ifdef PROFILE_FRAGMENTS
-		++old->times_executed;
-#endif
-	    }
-	    else
-	    {
-#ifdef PROFILE_FRAGMENTS
-		entry.times_executed = 1;
-#endif
-		entry.trace0_count = 0;
-		for (i = 0; i < MAX_TRACE_JUMPS; ++i)
-		    entry.trace_pool_indexes[i] = -1;
-		old = fragment_hash_put(intp->pc, &entry);
-	    }
-
-	    branch = (intp->pc == prev_pc + 4) ? 0 : 1;
-
-	    assert(old != 0);
-	    for (i = 0; i < MAX_TRACE_BLOCKS; ++i)
-		if (fragment_history[i] == old)
-		    break;
-	    if (i < MAX_TRACE_BLOCKS && prev_pc > intp->pc)
-	    {
-		/*
-		int j;
-
-		printf("loop:\n");
-		for (j = i; j >= 0; --j)
-		    printf("  0x%08x\n", fragment_history[j]->foreign_addr);
-		*/
-
-		inc_trace(i);
-	    }
-
-	    fragment_history[MAX_TRACE_BLOCKS - 1] = fragment_history[MAX_TRACE_BLOCKS - 2];
-	    for (i = MAX_TRACE_JUMPS - 1; i > 0; --i)
-	    {
-		branch_history[i] = branch_history[i - 1];
-		fragment_history[i] = fragment_history[i - 1];
-	    }
-	    fragment_history[0] = old;
-	    branch_history[0] = branch;
+	    entry = fragment_hash_get(intp->pc);
+	    if (entry == 0)
+		entry = make_entry_for_addr(intp->pc);
 	}
+
+	++entry->times_executed;
+
+#ifdef COMPILER_THRESHOLD
+	if (entry->times_executed > COMPILER_THRESHOLD)
+	{
+	    word_64 native_addr = compile_block_or_trace(entry);
+
+	    move_regs_interpreter_to_compiler(intp);
+
+	    return native_addr;
+	}
+#endif
+
+	do
+	{
+	    prev_pc = intp->pc;
+
+	    intp->have_jumped = 0;
+
+	    interpret_insn(intp);
+	} while (!intp->have_jumped);
+
+	entry = fragment_hash_get(intp->pc);
+
+	if (entry == 0)
+	    entry = make_entry_for_addr(intp->pc);
+
+	branch = (intp->pc == prev_pc + 4) ? 0 : 1;
+
+	assert(entry != 0);
+	for (i = 0; i < MAX_TRACE_BLOCKS; ++i)
+	    if (fragment_history[i] == entry)
+		break;
+	if (i < MAX_TRACE_BLOCKS && prev_pc > intp->pc)
+	{
+	    /*
+	      int j;
+
+	      printf("loop:\n");
+	      for (j = i; j >= 0; --j)
+	          printf("  0x%08x\n", fragment_history[j]->foreign_addr);
+	    */
+
+	    inc_trace(i);
+	}
+
+	fragment_history[MAX_TRACE_BLOCKS - 1] = fragment_history[MAX_TRACE_BLOCKS - 2];
+	for (i = MAX_TRACE_JUMPS - 1; i > 0; --i)
+	{
+	    branch_history[i] = branch_history[i - 1];
+	    fragment_history[i] = fragment_history[i - 1];
+	}
+	fragment_history[0] = entry;
+	branch_history[0] = branch;
     }
 }
 

@@ -1,3 +1,25 @@
+/*
+ * unaligned.c
+ *
+ * bintrans
+ *
+ * Copyright (C) 2001 Mark Probst
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ */
+
 #define __LIBRARY__
 #include <asm/unistd.h>
 #undef __LIBRARY__
@@ -40,6 +62,24 @@ load_unaligned_32_bigendian (unsigned long addr)
     int disp = addr & 3;
 
     return (val0 << (disp << 3)) | (val1 >> ((4 - disp) << 3));
+}
+
+void
+store_unaligned_32_bigendian (unsigned long addr, unsigned int val)
+{
+    unsigned long addr0 = addr & ~3;
+    unsigned long addr1 = addr0 + 4;
+    unsigned int val0 = *(unsigned int*)addr0;
+    unsigned int val1 = *(unsigned int*)addr1;
+    int disp = addr & 3;
+    int dispbits = disp * 8;
+    int ndispbits = (4 - disp) * 8;
+
+    val0 = ((val0 >> ndispbits) << ndispbits) | (val >> dispbits);
+    val1 = ((val1 << dispbits) >> dispbits) | (val << ndispbits);
+
+    *(unsigned int*)addr0 = val0;
+    *(unsigned int*)addr1 = val1;
 }
 
 short
@@ -88,6 +128,10 @@ sigbus_handler (int signo, siginfo_t *si, struct ucontext *uc)
 		f64 = (double)*(float*)&val32;
 		uc->uc_mcontext.sc_fpregs[target_reg] = *(long*)&f64;
 	    }
+	    break;
+
+	case 0x2c :		/* STL */
+	    store_unaligned_32_bigendian(uc->uc_mcontext.sc_traparg_a0, uc->uc_mcontext.sc_regs[target_reg]);
 	    break;
 
 	default :

@@ -2,25 +2,32 @@
 EMU = PPC
 #LOCATION = -DCOMPLANG
 
+#MODE = INTERPRETER
+MODE = COMPILER
+#MODE = DEBUGGER
+#MODE = CROSSDEBUGGER
+
 ARCH = -DARCH_ALPHA
 #ARCH = -DARCH_I386
 ASM_OBJS = alpha_asm.o
 COMPILER_OBJS = compiler.o
-#DEFINES = -DINTERPRETER
-DEFINES = -O -DINTERPRETER -DPROFILE_LOOPS -DPROFILE_FRAGMENTS
-#DEFINES = -DINTERPRETER -DEMULATED_MEM
-#DEFINES = -DCROSSDEBUGGER -DCOLLECT_STATS -DDUMP_CODE
-#DEFINES = -DCOMPILER -DCOLLECT_STATS -DDUMP_CODE
-#DEFINES = -DCOMPILER -DCOLLECT_STATS -DPERIODIC_STAT_DUMP
-#DEFINES = -DDEBUGGER -DEMULATED_MEM
-#DEFINES = -DCOMPILER -DDUMP_CODE
-#DEFINES = -O -DCOMPILER
-#DEFINES = -DCOMPILER -DCOMPILER_THRESHOLD=20 -DCOLLECT_STATS
-#DEFINES = -DCOMPILER -DCOLLECT_STATS
-# -DDUMP_CODE
+#DEFINES = -DUSE_HAND_TRANSLATOR -DDUMP_CODE -DCOLLECT_STATS
+DEFINES = -DUSE_HAND_TRANSLATOR -O -DFAST_PPC_FPR
+# -DCOLLECT_STATS -DCOLLECT_PPC_FPR_STATS
+#DEFINES =
+#DEFINES = -O -DPROFILE_LOOPS -DPROFILE_FRAGMENTS
+#DEFINES = -DEMULATED_MEM
+#DEFINES = -DCOLLECT_STATS -DDUMP_CODE
+#DEFINES = -DCOLLECT_STATS -DPERIODIC_STAT_DUMP
+#DEFINES = -DDUMP_CODE
+#DEFINES = -O
+#DEFINES = -DCOMPILER_THRESHOLD=20 -DCOLLECT_STATS
+#DEFINES = -O -DCOLLECT_STATS -DMEASURE_TIME
+#-DCOUNT_INSNS
+#-DDUMP_CODE
 # -DCOLLECT_STATS
-# -DMEASURE_TIME
-#DEFINES = -O -fno-inline -DCOMPILER
+# 
+#DEFINES = -O -fno-inline
 # -DMEASURE_TIME
 # -DCOLLECT_STATS
 #
@@ -34,8 +41,8 @@ EMU_OBJS = unaligned.o
 endif
 ifeq ($(EMU),I386)
 EMU_DEFS = -DEMU_I386 -DEMU_LITTLE_ENDIAN
-EMU_OBJS = i386.o \
-		i386_add_rm32_simm8_compiler.o i386_add_rm32_r32_compiler.o \
+EMU_OBJS = i386.o
+COMPILER_OBJS += i386_add_rm32_simm8_compiler.o i386_add_rm32_r32_compiler.o \
 		i386_inc_pr32_compiler.o i386_inc_rm32_compiler.o \
 		i386_lea_r32_rm32_compiler.o \
 		i386_mov_eax_moffs32_compiler.o i386_mov_moffs32_eax_compiler.o i386_mov_rm32_imm32_compiler.o i386_mov_rm32_r32_compiler.o \
@@ -47,10 +54,27 @@ EMU_OBJS = i386.o \
 			i386_xor_rm32_simm8_compiler.o i386_xor_rm32_r32_compiler.o i386_xor_r32_rm32_compiler.o
 endif
 
-CFLAGS = $(DEFINES) $(ARCH) $(EMU_DEFS) $(LOCATION)
+ifeq ($(MODE),INTERPRETER)
+MODE_DEFS = -DINTERPRETER
+OBJS = $(EMU_OBJS)
+endif
+ifeq ($(MODE),COMPILER)
+MODE_DEFS = -DCOMPILER
+OBJS = $(EMU_OBJS) $(COMPILER_OBJS) $(ASM_OBJS)
+endif
+ifeq ($(MODE),DEBUGGER)
+MODE_DEFS = -DDEBUGGER
+OBJS = $(EMU_OBJS)
+endif
+ifeq ($(MODE),CROSSDEBUGGER)
+MODE_DEFS = -DCROSSDEBUGGER
+OBJS = $(EMU_OBJS) $(COMPILER_OBJS) $(ASM_OBJS)
+endif
 
-bintrans : ppc.o mm.o fragment_hash.o loops.o $(EMU_OBJS) $(COMPILER_OBJS) $(ASM_OBJS) 
-	gcc -o bintrans ppc.o mm.o fragment_hash.o loops.o $(EMU_OBJS) $(COMPILER_OBJS) $(ASM_OBJS)
+CFLAGS = $(MODE_DEFS) $(DEFINES) $(ARCH) $(EMU_DEFS) $(LOCATION)
+
+bintrans : ppc.o mm.o fragment_hash.o loops.o liveness.o $(OBJS)
+	gcc -o bintrans ppc.o mm.o fragment_hash.o loops.o liveness.o $(OBJS)
 
 ppc.o : ppc.c ppc_interpreter.c ppc_disassembler.c alpha_types.h bintrans.h
 	gcc $(CFLAGS) -Wall -g -c ppc.c
@@ -58,7 +82,7 @@ ppc.o : ppc.c ppc_interpreter.c ppc_disassembler.c alpha_types.h bintrans.h
 i386.o : i386.c i386_interpreter.c i386_disassembler.c i386_livenesser.c bintrans.h
 	gcc $(CFLAGS) -Wall -g -c i386.c
 
-compiler.o : compiler.c alpha_composer.h ppc_compiler.c i386_compiler.c alpha_disassembler.c alpha_types.h bintrans.h fragment_hash.h
+compiler.o : compiler.c alpha_composer.h ppc_compiler.c ppc_to_alpha_compiler.c i386_compiler.c alpha_disassembler.c alpha_types.h bintrans.h fragment_hash.h
 	gcc $(CFLAGS) -Wall -g -c compiler.c
 
 mm.o : mm.c bintrans.h alpha_types.h ppc_defines.h
@@ -73,8 +97,11 @@ fragment_hash.o : fragment_hash.c fragment_hash.h bintrans.h
 loops.o : loops.c fragment_hash.h bintrans.h
 	gcc $(CFLAGS) -Wall -g -c loops.c
 
+liveness.o : liveness.c bintrans.h
+	gcc $(CFLAGS) -Wall -g -c liveness.c
+
 alpha_asm.o : alpha_asm.S Makefile
-	gcc $(DEFINES) $(EMU_DEFS) -g -c alpha_asm.S
+	gcc $(MODE_DEFS) $(DEFINES) $(EMU_DEFS) -g -c alpha_asm.S
 
 i386_%_compiler.o : i386_%_compiler.c bintrans.h alpha_composer.h
 	gcc $(CFLAGS) -g -c $<

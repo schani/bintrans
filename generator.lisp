@@ -1,3 +1,24 @@
+;; generator.lisp
+
+;; bintrans
+
+;; Copyright (C) 2001 Mark Probst
+
+;; This program is free software; you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation; either version 2, or (at your option)
+;; any later version.
+
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU General Public License for more details.
+
+;; You should have received a copy of the GNU General Public License
+;; along with this program; if not, you can either send email to this
+;; program's maintainer or write to: The Free Software Foundation,
+;; Inc.; 675 Massachusetts Avenue; Cambridge, MA 02139, USA.
+
 ;;;; settings
 
 (proclaim '(optimize (speed 0) (safety 3) (space 0) #+cmu (debug 3) (compilation-speed 0)))
@@ -130,7 +151,7 @@
   (apply #'append choices-lists))
 
 (defun dcs (x)
-  (substitute #\p #\+ (substitute #\_ #\- (string-downcase (symbol-name x)))))
+  (substitute #\d #\. (substitute #\p #\+ (substitute #\_ #\- (string-downcase (symbol-name x))))))
 
 (defstruct insn
   name
@@ -831,9 +852,9 @@
 		 (promote (value)
 			  (logand (calc value) expr-mask))
 		 (shiftl (value amount)
-			 (logand (ash (calc amount) (calc value)) expr-mask))
+			 (logand (ash (calc value) (calc amount)) expr-mask))
 		 (shiftr (value amount)
-			 (ash (calc amount) (- (calc value))))
+			 (ash (- (calc value)) (calc amount)))
 		 (ashiftr (value amount)
 			  (let* ((v (calc value))
 				 (a (calc amount))
@@ -1846,7 +1867,11 @@ void (*rhs_func) (reg_t*, int, void**) = ~A;
 				  (lookup-generator 'expr rhs)
 				  (generate-killed-for-set-expr *analyzed-bits-register* lvalue)
 				  lvalue-compiler)
-			  lvalue-compiler)))
+			  (format nil "{
+void (*rhs_func) (reg_t*, int, void**) = ~A;
+~A}~%"
+				  (lookup-generator 'expr rhs)
+				  lvalue-compiler))))
 	       (promote (value)
 			(let ((src-width (expr-width value))
 			      (dst-width (expr-width expr))
@@ -1859,7 +1884,15 @@ emit(COMPOSE_SRA_IMM(*target, ~A, *target));~%"
 				      target-code (- src-width dst-width)
 				      (- src-width dst-width)))))
 	       (jump (target)
-		     (format nil "store_all_foreign_regs();~%~A~%"
+		     (format nil "if (optimize_taken_jump) {
+~A
+} else {
+store_all_foreign_regs();
+~A
+}~%"
+			     (if (expr-constp target)
+				 "emit_branch(COMPOSE_BR(31, 0), taken_jump_label);"
+				 "assert(0);")
 			     (if (expr-constp target)
 				 (format nil "emit_direct_jump(~A);" (generate-interpreter target nil))
 				 (let ((target-reg (make-tmp-name)))
@@ -4462,6 +4495,16 @@ save_live = live;~%"
   (format t "}~%char *insn_names[] = { ~{\"~A\"~^, ~} };~%"
 	  (mapcar #'(lambda (x) (if (insn-p x) (insn-name x) (format nil "~A-~A" (intel-insn-name x) (intel-insn-mode x)))) (machine-insns machine))))
 
+(defun print-generated-exprs-functions ()
+  (dolist (func *generated-exprs*)
+    (destructuring-bind (dummy1 dummy2 proto dummy3)
+	func
+      (format t "~A;~%" proto)))
+  (dolist (func *generated-exprs*)
+    (destructuring-bind ((dummy1 . expr) dummy2 proto code)
+	func
+      (format t "~A~%/*~%~A~%*/~%{~%~A}~%~%" proto (expr-to-sexp expr) code))))
+
 (defun generate-compiler-file (machine)
   (let ((*this-machine* machine)
 	(*generated-effects* nil))
@@ -4469,24 +4512,35 @@ save_live = live;~%"
       (let ((*standard-output* out)
 	    (decision-tree (build-decision-tree (machine-insns machine))))
 	(generate-registers-and-insns-code machine)
-	(format t "void compile_~A_insn (~A insn, ~A pc) {~%"
-		(dcs (machine-name machine)) (c-type (machine-insn-bits machine) 'integer)
-		(c-type (machine-word-bits *this-machine*) 'integer))
-	(generate-insn-recognizer decision-tree #'(lambda (insn)
-						    (format *error-output* "~A~%" (insn-name insn))
-						    (multiple-value-bind (result error)
-							(ignore-errors
-							  (with-output-to-string (out)
-							    (let ((*standard-output* out))
-							      (generate-insn-compiler (insn-effect insn)))))
-						      (if error
-							  (progn
-							    (format *error-output* "error with matcher: ~A~%" error)
-							    (dolist (expr (insn-effect insn))
-							      (princ (generate-compiler nil expr nil))))
-							  (princ result)))
-						    (format t "generated_insn_index = ~A;~%" (position insn (machine-insns machine)))))
-	(format t "~%#ifdef COLLECT_STATS~%++num_translated_insns;~%#endif~%}~%"))
+	(format t "static ~A insn;
+static ~A pc;~%"
+		(c-type (machine-insn-bits machine) 'integer)
+		(c-type (machine-word-bits machine) 'integer))
+	(let ((main (with-output-to-string (out)
+		      (let ((*standard-output* out))
+			(generate-insn-recognizer decision-tree #'(lambda (insn)
+								    (format *error-output* "~A~%" (insn-name insn))
+								    (multiple-value-bind (result error)
+									(ignore-errors
+									  (with-output-to-string (out)
+									    (let ((*standard-output* out))
+									      (generate-insn-compiler (insn-effect insn)))))
+								      (if error
+									  (progn
+									    (format *error-output* "error with matcher: ~A~%" error)
+									    (dolist (expr (insn-effect insn))
+									      (princ (generate-compiler nil expr nil))))
+									  (princ result)))
+								    (format t "generated_insn_index = ~A;~%" (position insn (machine-insns machine)))))))))
+	  (print-generated-exprs-functions)
+	  (format t "void compile_~A_insn (~A _insn, ~A _pc, int optimize_taken_jump, label_t taken_jump_label) {
+void **env = 0;
+insn = _insn;
+pc = _pc;~%"
+		  (dcs (machine-name machine)) (c-type (machine-insn-bits machine) 'integer)
+		  (c-type (machine-word-bits *this-machine*) 'integer))
+	  (princ main)
+	  (format t "~%#ifdef COLLECT_STATS~%++num_translated_insns;~%#endif~%}~%")))
       (dolist (generated-effect *generated-effects*)
 	(destructuring-bind (effect function-name num-insns text)
 	    generated-effect
@@ -4503,6 +4557,22 @@ save_live = live;~%"
 		    return-val)))))
     (format t "~A generator functions~%" (length *generated-effects*))
     (values)))
+
+(defun generate-skeleton-file (machine)
+  (let ((*this-machine* machine)
+	(*generated-effects* nil))
+    (with-open-file (out (format nil "~A_skeleton.c" (dcs (machine-name machine))) :direction :output :if-exists :supersede)
+      (let ((*standard-output* out)
+	    (decision-tree (build-decision-tree (machine-insns machine))))
+	(dolist (field (machine-fields machine))
+	  (format t "#define FIELD_~A    ~A~%" (car field) (generate-interpreter (cdr field) nil)))
+	(format t "void xxx_~A_insn (~A insn, ~A pc) {~%"
+		(dcs (machine-name machine))
+		(c-type (machine-insn-bits machine) 'integer)
+		(c-type (machine-word-bits *this-machine*) 'integer))
+	(generate-insn-recognizer decision-tree #'(lambda (insn)
+						    (format t "handle_~A_insn(insn, pc);~%" (dcs (insn-name insn)))))
+	(format t "~%}~%")))))
 
 (defun generate-defines-file (machine)
   (let ((*this-machine* machine))

@@ -1,3 +1,25 @@
+/*
+ * compiler.c
+ *
+ * bintrans
+ *
+ * Copyright (C) 2001 Mark Probst
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ */
+
 #include <assert.h>
 #include <stdio.h>
 #include <sys/time.h>
@@ -48,6 +70,11 @@
 #define DIV_SIGNED_8_CONST         (NUM_REG_CONSTANTS + 36)
 #define MOD_UNSIGNED_8_CONST       (NUM_REG_CONSTANTS + 38)
 #define MOD_SIGNED_8_CONST         (NUM_REG_CONSTANTS + 40)
+#ifdef COUNT_INSNS
+#define EMULATED_INSNS_CONST       (NUM_REG_CONSTANTS + 42)
+#define NATIVE_INSNS_CONST         (NUM_REG_CONSTANTS + 44)
+#define FRAGMENTS_CONST            (NUM_REG_CONSTANTS + 46)
+#endif
 
 typedef struct
 {
@@ -56,19 +83,24 @@ typedef struct
 } reg_range_t;
 
 #if defined(EMU_PPC)
-reg_range_t integer_reg_range[] = { { 1, 16 }, { 0, 0 } };
-#define NUM_INTEGER_REGS                       15
+reg_range_t integer_reg_range[] = { { 1, 16 }, { 18, 26 }, { 0, 0 } };
+#define NUM_INTEGER_REGS                       23
 #elif defined(EMU_I386)
 reg_range_t integer_reg_range[] = { { 15, 16 }, { 18, 26 }, { 0, 0 } };
-#define NUM_INTEGER_REGS                        8
+#define NUM_INTEGER_REGS                        9
 #define FIRST_NATIVE_INTEGER_HOST_REG           1
 #define NUM_NATIVE_INTEGER_HOST_REGS           14 /* FIXME: this should be in the machine definition (NUM_INTEGER_EMU_REGISTERS) */
 #endif
 
-#define REG_TYPE_INTEGER        1
-
+#if defined(EMU_PPC) && defined(FAST_PPC_FPR)
+#define FIRST_FLOAT_REG        28
+#define NUM_FLOAT_REGS          3
+#else
 #define FIRST_FLOAT_REG         1
 #define NUM_FLOAT_REGS         15
+#endif
+
+#define REG_TYPE_INTEGER        1
 #define REG_TYPE_FLOAT          2
 
 #define MAX_ALLOC_DEPTH         4
@@ -103,6 +135,10 @@ typedef struct
 } insn_info_t;
 
 insn_info_t insn_infos[NUM_INSNS];
+
+#ifdef COLLECT_PPC_FPR_STATS
+unsigned int fpr_uses[32];
+#endif
 #endif
 
 label_info_t label_infos[MAX_LABELS];
@@ -129,21 +165,6 @@ interpreter_t *compiler_intp = 0;
 interpreter_t *debugger_intp = 0;
 #endif
 
-#ifdef EMU_I386
-typedef struct
-{
-    word_32 addr;
-    word_32 flags_live;
-    word_32 flags_killed;
-} i386_insn_t;
-
-#define MAX_BLOCK_INSNS          1024
-#define MAX_AFTER_BRANCH_INSNS     30
-
-i386_insn_t block_insns[MAX_BLOCK_INSNS + MAX_AFTER_BRANCH_INSNS];
-int num_block_insns = 0;
-#endif
-
 #ifdef COLLECT_STATS
 #ifdef COMPILER_THRESHOLD
 unsigned long num_patched_direct_jumps = 0;
@@ -154,7 +175,7 @@ unsigned long num_direct_and_indirect_jumps = 0;
 unsigned long num_translated_fragments = 0;
 unsigned long num_translated_insns = 0;
 unsigned long num_load_store_reg_insns = 0;
-unsigned long num_divisions = 0;
+unsigned long num_stub_calls = 0;
 #endif
 
 #ifdef MEASURE_TIME
@@ -488,6 +509,28 @@ ref_float_reg (int foreign_reg, int reading, int writing)
     if (reading)
 	assert(foreign_reg != -1);
 
+#if defined(COLLECT_STATS) && defined(COLLECT_PPC_FPR_STATS)
+    if (foreign_reg >= 0)
+    {
+	assert(foreign_reg >= 5 + 32 && foreign_reg < 5 + 32 + 32);
+	++fpr_uses[foreign_reg - 5 - 32];
+    }
+#endif
+
+#if defined(EMU_PPC) && defined(FAST_PPC_FPR)
+    if (foreign_reg >= 0)
+    {
+	int fpr_num = foreign_reg - 5 - 32;
+
+	assert(foreign_reg >= 5 + 32 && foreign_reg < 5 + 32 + 32);
+
+	if (fpr_num < 14)
+	    return fpr_num;
+	if (fpr_num >= 18)
+	    return fpr_num - 4;
+    }
+#endif
+
     reg = ref_reg(float_regs[alloc_sp], NUM_FLOAT_REGS, foreign_reg, writing, &newly_allocated);
     if (reading && newly_allocated)
 	load_reg(reg);
@@ -497,6 +540,11 @@ ref_float_reg (int foreign_reg, int reading, int writing)
 void
 unref_float_reg (reg_t reg)
 {
+#if defined(EMU_PPC) && defined(FAST_PPC_FPR)
+    if (reg < 28)
+	return;
+#endif
+
     unref_reg(float_regs[alloc_sp], NUM_FLOAT_REGS, reg);
 }
 
@@ -711,7 +759,7 @@ finish_fragment (void)
 	}
     }
 
-    for (i = 0; i < NUM_INTEGER_REGS; ++i)
+    for (i = 0; i < NUM_FLOAT_REGS; ++i)
     {
 	if (!float_regs[0][i].free)
 	{
@@ -796,7 +844,11 @@ emit_load_mem_64 (reg_t value_reg, reg_t addr_reg)
 }
 
 #if defined(EMU_PPC)
+#ifndef USE_HAND_TRANSLATOR
 #include "ppc_compiler.c"
+#else
+#include "ppc_to_alpha_compiler.c"
+#endif
 #elif defined(EMU_I386)
 #include "i386.h"
 #include "i386_compiler.c"
@@ -807,6 +859,13 @@ add_const_64 (word_64 val)
 {
     constant_area[num_constants++] = val & 0xffffffff;
     constant_area[num_constants++] = val >> 32;
+}
+
+word_64
+get_const_64 (int index)
+{
+    /* FIXME: this is endian dependent */
+    return (word_64)constant_area[index] + (((word_64)constant_area[index + 1]) << 32);
 }
 
 word_64
@@ -842,7 +901,7 @@ word_64
 div_unsigned_64 (word_64 a, word_64 b)
 {
 #ifdef COLLECT_STATS
-    ++num_divisions;
+    ++num_stub_calls;
 #endif
     return a / b;
 }
@@ -851,7 +910,7 @@ sword_64
 div_signed_64 (sword_64 a, sword_64 b)
 {
 #ifdef COLLECT_STATS
-    ++num_divisions;
+    ++num_stub_calls;
 #endif
     return a / b;
 }
@@ -860,7 +919,7 @@ word_64
 mod_unsigned_64 (word_64 a, word_64 b)
 {
 #ifdef COLLECT_STATS
-    ++num_divisions;
+    ++num_stub_calls;
 #endif
     return a % b;
 }
@@ -869,7 +928,7 @@ sword_64
 mod_signed_64 (sword_64 a, sword_64 b)
 {
 #ifdef COLLECT_STATS
-    ++num_divisions;
+    ++num_stub_calls;
 #endif
     return a % b;
 }
@@ -878,7 +937,7 @@ word_32
 div_unsigned_32 (word_32 a, word_32 b)
 {
 #ifdef COLLECT_STATS
-    ++num_divisions;
+    ++num_stub_calls;
 #endif
     return a / b;
 }
@@ -887,7 +946,7 @@ sword_32
 div_signed_32 (sword_32 a, sword_32 b)
 {
 #ifdef COLLECT_STATS
-    ++num_divisions;
+    ++num_stub_calls;
 #endif
     return a / b;
 }
@@ -896,7 +955,7 @@ word_32
 mod_unsigned_32 (word_32 a, word_32 b)
 {
 #ifdef COLLECT_STATS
-    ++num_divisions;
+    ++num_stub_calls;
 #endif
     return a % b;
 }
@@ -905,7 +964,7 @@ sword_32
 mod_signed_32 (sword_32 a, sword_32 b)
 {
 #ifdef COLLECT_STATS
-    ++num_divisions;
+    ++num_stub_calls;
 #endif
     return a % b;
 }
@@ -914,7 +973,7 @@ word_16
 div_unsigned_16 (word_16 a, word_16 b)
 {
 #ifdef COLLECT_STATS
-    ++num_divisions;
+    ++num_stub_calls;
 #endif
     return a / b;
 }
@@ -923,7 +982,7 @@ sword_16
 div_signed_16 (sword_16 a, sword_16 b)
 {
 #ifdef COLLECT_STATS
-    ++num_divisions;
+    ++num_stub_calls;
 #endif
     return a / b;
 }
@@ -932,7 +991,7 @@ word_16
 mod_unsigned_16 (word_16 a, word_16 b)
 {
 #ifdef COLLECT_STATS
-    ++num_divisions;
+    ++num_stub_calls;
 #endif
     return a % b;
 }
@@ -941,7 +1000,7 @@ sword_16
 mod_signed_16 (sword_16 a, sword_16 b)
 {
 #ifdef COLLECT_STATS
-    ++num_divisions;
+    ++num_stub_calls;
 #endif
     return a % b;
 }
@@ -950,7 +1009,7 @@ word_8
 div_unsigned_8 (word_8 a, word_8 b)
 {
 #ifdef COLLECT_STATS
-    ++num_divisions;
+    ++num_stub_calls;
 #endif
     return a / b;
 }
@@ -959,7 +1018,7 @@ sword_8
 div_signed_8 (sword_8 a, sword_8 b)
 {
 #ifdef COLLECT_STATS
-    ++num_divisions;
+    ++num_stub_calls;
 #endif
     return a / b;
 }
@@ -968,7 +1027,7 @@ word_8
 mod_unsigned_8 (word_8 a, word_8 b)
 {
 #ifdef COLLECT_STATS
-    ++num_divisions;
+    ++num_stub_calls;
 #endif
     return a % b;
 }
@@ -977,9 +1036,29 @@ sword_8
 mod_signed_8 (sword_8 a, sword_8 b)
 {
 #ifdef COLLECT_STATS
-    ++num_divisions;
+    ++num_stub_calls;
 #endif
     return a % b;
+}
+
+word_32
+count_leading_zeros (word_32 w)
+{
+    word_32 m = 0x80000000;
+    word_32 i;
+
+#ifdef COLLECT_STATS
+    ++num_stub_calls;
+#endif
+
+    for (i = 0; i < 32; ++i)
+    {
+	if (w & m)
+	    break;
+	m >>= 1;
+    }
+
+    return i;
 }
 
 void
@@ -1026,7 +1105,7 @@ init_compiler (interpreter_t *intp, interpreter_t *dbg_intp)
     add_const_64((word_64)indirect_dispatcher);
     add_const_64((word_64)system_call_entry);
     add_const_64((word_64)c_stub);
-    add_const_64((word_64)leading_zeros);
+    add_const_64((word_64)count_leading_zeros);
     add_const_64((word_64)div_unsigned_64);
     add_const_64((word_64)div_signed_64);
     add_const_64((word_64)mod_unsigned_64);
@@ -1044,7 +1123,11 @@ init_compiler (interpreter_t *intp, interpreter_t *dbg_intp)
     add_const_64((word_64)mod_unsigned_8);
     add_const_64((word_64)mod_signed_8);
 
-#ifdef COLLECT_STATS
+#ifdef COUNT_INSNS
+    add_const_64(0);		/* emulated insns executed */
+    add_const_64(0);		/* native insns executed */
+    add_const_64(0);		/* fragments executed */
+
     for (i = 0; i < NUM_INSNS; ++i)
     {
 	insn_infos[i].num_translated = 0;
@@ -1054,122 +1137,24 @@ init_compiler (interpreter_t *intp, interpreter_t *dbg_intp)
 #endif
 }
 
-#ifdef EMU_I386
-void
-compute_liveness (interpreter_t *intp, word_32 addr)
-{
-    word_32 old_pc = intp->pc;
-    word_32 live;
-    int i;
-    int num_targets;
-    word_32 targets[2];
-    int can_fall_through, can_jump_indirectly;
-
-    num_block_insns = 0;
-
-    intp->pc = addr;
-
-    while (num_block_insns < MAX_BLOCK_INSNS)
-    {
-	block_insns[num_block_insns++].addr = intp->pc;
-
-	jump_analyze_i386_insn(intp, &num_targets, targets, &can_fall_through, &can_jump_indirectly);
-
-	if (num_targets > 0 || can_jump_indirectly || !can_fall_through)
-	    break;
-    }
-
-    assert(num_targets > 0 || can_jump_indirectly || !can_fall_through);
-
-    if (!can_jump_indirectly)
-    {
-	int target;
-
-	/* printf("checking out after branch\n"); */
-
-	live = 0;
-
-	if (can_fall_through)
-	    targets[num_targets++] = intp->pc;
-
-	for (target = 0; target < num_targets; ++target)
-	{
-	    word_32 block_live = 0xffffffff;
-	    word_32 dummy;
-
-	    intp->pc = targets[target];
-
-	    for (i = num_block_insns; i < num_block_insns + MAX_AFTER_BRANCH_INSNS; ++i)
-	    {
-		int num_block_targets;
-		word_32 target;
-
-		block_insns[i].addr = intp->pc;
-
-		jump_analyze_i386_insn(intp, &num_block_targets, &target, &can_fall_through, &can_jump_indirectly);
-
-		if (!can_jump_indirectly && !can_fall_through && num_block_targets == 1 && target != 0)
-		    intp->pc = target;
-		else if (num_block_targets > 0 || can_jump_indirectly || !can_fall_through)
-		{
-		    ++i;
-		    break;
-		}
-	    }
-
-	    for (--i; i >= num_block_insns; --i)
-	    {
-		intp->pc = block_insns[i].addr;
-		liveness_i386_insn(intp, &block_live, &dummy);
-	    }
-
-	    live |= block_live;
-	}
-    }
-    else
-	live = 0xffffffff;
-
-    for (i = num_block_insns - 1; i >= 0; --i)
-    {
-	intp->pc = block_insns[i].addr;
-	liveness_i386_insn(intp, &live, &block_insns[i].flags_killed);
-	block_insns[i].flags_live = live;
-    }
-
-    intp->pc = old_pc;
-}
-
-void
-print_liveness (interpreter_t *intp)
-{
-    int i;
-
-    for (i = 0; i < num_block_insns; ++i)
-	printf("0x%08x   0x%08x 0x%08x\n", block_insns[i].addr, block_insns[i].flags_live, block_insns[i].flags_killed);
-}
-#endif
-
 word_64
-compile_basic_block (word_32 addr)
+compile_until_jump (word_32 *addr, int optimize_taken_jump, label_t taken_jump_label)
 {
     word_64 start = (word_64)emit_loc;
-    word_32 insnp = addr;
+    word_32 insnp = *addr;
 #if defined(DUMP_CODE) || defined(COLLECT_STATS)
     word_64 x = start;
-    int old_num_constants = num_constants;
 #endif
 #if defined(EMU_I386) || defined(DUMP_CODE)
     int i;
 #endif
 
-    start_timer();
-
 #ifdef EMU_I386
-    compute_liveness(compiler_intp, addr);
+    compute_liveness(compiler_intp, insnp);
 
     i = 0;
 
-    compiler_intp->pc = addr;
+    compiler_intp->pc = insnp;
 #endif
 
     have_jumped = 0;
@@ -1177,7 +1162,11 @@ compile_basic_block (word_32 addr)
     while (!have_jumped)
     {
 #if defined(EMU_PPC)
-	compile_ppc_insn(mem_get_32(compiler_intp, insnp), insnp);
+#ifndef USE_HAND_TRANSLATOR
+	compile_ppc_insn(mem_get_32(compiler_intp, insnp), insnp, 0, 0);
+#else
+	compile_to_alpha_ppc_insn(mem_get_32(compiler_intp, insnp), insnp, 0, 0);
+#endif
 #elif defined(EMU_I386)
 	word_32 insn_addr = compiler_intp->pc;
 
@@ -1220,8 +1209,7 @@ compile_basic_block (word_32 addr)
 #endif
     }
 
-    store_all_foreign_regs();
-    emit_direct_jump(insnp);	/* this is not necessary if the jump at the end of the basic block was unconditional */
+    *addr = insnp;
 
 #ifdef DUMP_CODE
     printf("++++++++++++++++\nepilogue\n- - - - - - - - \n");
@@ -1234,16 +1222,133 @@ compile_basic_block (word_32 addr)
     }
 #endif
 
-    finish_fragment();
+    return start;
+}
 
 #ifdef DUMP_CODE
+void
+dump_constants (int old_num_constants)
+{
+    int i;
+
     for (i = old_num_constants; i < num_constants; ++i)
 	printf("%4d    %08x\n", i * 4, constant_area[i]);
+}
 #endif
+
+word_32
+patch_mem_disp (word_32 insn, word_16 val)
+{
+    return (insn & 0xffff0000) | val;
+}
+
+word_64
+compile_basic_block (word_32 addr)
+{
+    word_64 native_addr;
+#ifdef DUMP_CODE
+    int old_num_constants = num_constants;
+#endif
+#ifdef COUNT_INSNS
+    word_32 *emulated_lda_insn, *native_lda_insn, *old_emit_loc;
+    unsigned long old_num_translated_insns = num_translated_insns;
+#endif
+
+    start_timer();
+
+    while (((emit_loc - code_area) & 3) != 0)
+	emit(0);
+
+    native_addr = (word_64)emit_loc;
+
+#ifdef COUNT_INSNS
+    emit(COMPOSE_LDQ(16, FRAGMENTS_CONST * 4, CONSTANT_AREA_REG));
+    emit(COMPOSE_ADDQ_IMM(16, 1, 16));
+    emit(COMPOSE_STQ(16, FRAGMENTS_CONST * 4, CONSTANT_AREA_REG));
+
+    emit(COMPOSE_LDQ(16, EMULATED_INSNS_CONST * 4, CONSTANT_AREA_REG));
+    emulated_lda_insn = emit_loc;
+    emit(COMPOSE_LDA(16, 0, 16));
+    emit(COMPOSE_STQ(16, EMULATED_INSNS_CONST * 4, CONSTANT_AREA_REG));
+
+    emit(COMPOSE_LDQ(16, NATIVE_INSNS_CONST * 4, CONSTANT_AREA_REG));
+    native_lda_insn = emit_loc;
+    emit(COMPOSE_LDA(16, 0, 16));
+    emit(COMPOSE_STQ(16, NATIVE_INSNS_CONST * 4, CONSTANT_AREA_REG));
+
+    old_emit_loc = emit_loc;
+#endif
+
+    compile_until_jump(&addr, 0, 0);
+
+    store_all_foreign_regs();
+    emit_direct_jump(addr);	/* this is not necessary if the jump at the end of the basic block was unconditional */
+
+    finish_fragment();
 
     flush_icache();
 
     stop_timer();
+
+#ifdef DUMP_CODE
+    dump_constants(old_num_constants);
+#endif
+
+#ifdef COLLECT_STATS
+    ++num_translated_fragments;
+#endif
+
+#ifdef COUNT_INSNS
+    *emulated_lda_insn = patch_mem_disp(*emulated_lda_insn, num_translated_insns - old_num_translated_insns);
+    *native_lda_insn = patch_mem_disp(*native_lda_insn, emit_loc - old_emit_loc);
+#endif
+
+    return native_addr;
+}
+
+word_64
+compile_trace (word_32 addr, int length, int bits)
+{
+    word_64 start = (word_64)emit_loc;
+    int bit;
+#ifdef DUMP_CODE
+    int old_num_constants = num_constants;
+#endif
+
+    start_timer();
+
+    for (bit = 1 << (length - 1); bit != 0; bit >>= 1)
+    {
+	if (bits & bit)
+	{
+	    label_t taken_jump_label = alloc_label();
+
+	    compile_until_jump(&addr, 1, taken_jump_label);
+
+	    store_all_foreign_regs();
+	    emit_direct_jump(addr);
+
+	    emit_label(taken_jump_label);
+	    free_label(taken_jump_label);
+	}
+	else
+	    compile_until_jump(&addr, 0, 0);
+    }
+
+    compile_until_jump(&addr, 0, 0);
+
+    store_all_foreign_regs();
+    emit_direct_jump(addr);	/* this is not necessary if the jump at the end of the basic block was unconditional */
+
+    finish_fragment();
+
+    flush_icache();
+
+    stop_timer();
+
+#ifdef DUMP_CODE
+    dump_constants(old_num_constants);
+#endif
 
 #ifdef COLLECT_STATS
     ++num_translated_fragments;
@@ -1463,23 +1568,42 @@ print_compiler_stats (void)
     int i;
 
 #ifdef COMPILER_THRESHOLD
-    printf("patched direct jumps:   %lu\n", num_patched_direct_jumps);
-    printf("indirect jumps:         %lu\n", num_direct_and_indirect_jumps);
+    printf("patched direct jumps:    %lu\n", num_patched_direct_jumps);
+    printf("indirect jumps:          %lu\n", num_direct_and_indirect_jumps);
 #else
-    printf("patched direct jumps:   %lu\n", num_direct_jumps);
-    printf("indirect jumps:         %lu\n", num_direct_and_indirect_jumps - num_direct_jumps);
+    printf("patched direct jumps:    %lu\n", num_direct_jumps);
+    printf("indirect jumps:          %lu\n", num_direct_and_indirect_jumps - num_direct_jumps);
 #endif
-    printf("fragment hash misses:   %lu\n", num_fragment_hash_misses);
-    printf("translated fragments:   %lu\n", num_translated_fragments);
-    printf("translated insns:       %lu\n", num_translated_insns);
-    printf("generated insns:        %lu\n", emit_loc - code_area);
-    printf("load/store reg insns:   %lu\n", num_load_store_reg_insns);
-    printf("constants:              %d\n", num_constants - (NUM_EMU_REGISTERS * 2 + 2));
-    printf("divisions:              %lu\n", num_divisions);
+    printf("fragment hash misses:    %lu\n", num_fragment_hash_misses);
+    printf("translated fragments:    %lu\n", num_translated_fragments);
+    printf("translated insns:        %lu\n", num_translated_insns);
+    printf("generated insns:         %lu\n", emit_loc - code_area
+#ifdef COUNT_INSNS
+                                             - 9 * num_translated_fragments
+#endif
+	   );
+    printf("load/store reg insns:    %lu\n", num_load_store_reg_insns);
+    printf("constants:               %d\n", num_constants - (NUM_EMU_REGISTERS * 2 + 2));
+    printf("stub calls:              %lu\n", num_stub_calls);
 
+#ifdef COLLECT_PPC_FPR_STATS
+    for (i = 0; i < 32; ++i)
+	printf("f%-2d: %u\n", i, fpr_uses[i]);
+#endif
+#endif
+
+#ifdef COUNT_INSNS
+    printf("fragments executed:      %lu\n", get_const_64(FRAGMENTS_CONST));
+    printf("emulated insns executed: %lu\n", get_const_64(EMULATED_INSNS_CONST));
+    printf("native insns executed:   %lu\n", get_const_64(NATIVE_INSNS_CONST));
+#endif
+
+#ifdef COLLECT_STATS
+#ifndef USE_HAND_TRANSLATOR
     for (i = 0; i < NUM_INSNS; ++i)
 	if (insn_infos[i].num_translated > 0)
 	    printf("  %-20s       %10d  %10d\n", insn_names[i], insn_infos[i].num_translated, insn_infos[i].num_generated_insns);
+#endif
 #endif
 
 #ifdef MEASURE_TIME

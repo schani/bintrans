@@ -1,3 +1,25 @@
+/*
+ * bintrans.h
+ *
+ * bintrans
+ *
+ * Copyright (C) 2001 Mark Probst
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ */
+
 #include <unistd.h>
 
 #include "config_defs.h"
@@ -74,6 +96,21 @@ typedef struct _breakpoint_t
     struct _breakpoint_t *next;
 } breakpoint_t;
 
+typedef struct _watchpoint_t
+{
+    word_32 addr;
+    word_32 len;
+    struct _watchpoint_t *next;
+} watchpoint_t;
+
+typedef struct
+{
+    int free;
+    int native_fd;
+} fd_mapping_t;
+
+#define MAX_FDS      1024
+
 typedef struct
 {
     int direct_memory;
@@ -83,21 +120,21 @@ typedef struct
     int have_jumped;
     int trace;
     breakpoint_t *breakpoints;
+    watchpoint_t *watchpoints;
     EMU_REGISTER_SET;
     word_32 pc;
     page_t *pagetable[LEVEL1_SIZE];
+    fd_mapping_t fd_map[MAX_FDS];
 } interpreter_t;
-
-typedef struct
-{
-    int free;
-    int native_fd;
-} fd_mapping_t;
 
 typedef unsigned int trace_count_t;
 
 #define MAX_TRACE_JUMPS     6
 #define MAX_TRACE_BLOCKS    (MAX_TRACE_JUMPS + 1)
+
+#if defined(NEED_COMPILER) && MAX_TRACE_JUMPS != 6
+#error max trace jumps must be 6 for assembler
+#endif
 
 #define DIRECT_MEM_BASE     0x000000000
 #define REAL_ADDR(a)        ((addr_t)(a) + DIRECT_MEM_BASE)
@@ -170,8 +207,25 @@ void init_compiler (interpreter_t *intp, interpreter_t *dbg_intp);
 void start_compiler (word_32 addr);
 void print_compiler_stats (void);
 
+/* liveness.c */
+
+#ifdef EMU_I386
+typedef struct
+{
+    word_32 addr;
+    word_32 flags_live;
+    word_32 flags_killed;
+} i386_insn_t;
+
+#define MAX_BLOCK_INSNS          1024
+#define MAX_AFTER_BRANCH_INSNS     30
+
+extern i386_insn_t block_insns[MAX_BLOCK_INSNS + MAX_AFTER_BRANCH_INSNS];
+extern int num_block_insns;
+
 void compute_liveness (interpreter_t *intp, word_32 addr);
 void print_liveness (interpreter_t *intp);
+#endif
 
 /* these come from ppc_compiler.c */
 void move_ppc_regs_interpreter_to_compiler (interpreter_t *intp);

@@ -1,3 +1,25 @@
+/*
+ * mm.c
+ *
+ * bintrans
+ *
+ * Copyright (C) 2001 Mark Probst
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ */
+
 #include <unistd.h>
 #include <sys/mman.h>
 #include <assert.h>
@@ -18,6 +40,12 @@ extern int debug;
 #define NATIVE_PAGE_SIZE      8192
 #define NATIVE_PAGE_SHIFT       13
 #define NATIVE_PAGE_MASK    0x1fff
+
+#ifdef DEBUGGER
+#define touch_mem(i,a,l)      check_watchpoints(i,a,l)
+#else
+#define touch_mem(i,a,l)
+#endif
 
 int
 prot_to_flags (int prot)
@@ -259,8 +287,23 @@ segfault (interpreter_t *intp, word_32 addr)
 }
 
 void
+check_watchpoints (interpreter_t *intp, word_32 addr, word_32 len)
+{
+    watchpoint_t *wp;
+
+    for (wp = intp->watchpoints; wp != 0; wp = wp->next)
+	if (!(addr + len <= wp->addr || wp->addr + wp->len < addr))
+	{
+	    printf("memory modified at 0x%08x (len %d)\n", addr, len);
+	    intp->halt = 1;
+	}
+}
+
+void
 emulated_mem_set_32 (interpreter_t *intp, word_32 addr, word_32 value)
 {
+    touch_mem(intp, addr, 4);
+
     if ((addr & 3) == 0)
     {
 	page_t *page = get_page(intp, addr);
@@ -300,6 +343,8 @@ emulated_mem_set_8 (interpreter_t *intp, word_32 addr, word_32 value)
 {
     page_t *page;
 
+    touch_mem(intp, addr, 1);
+
 #ifdef DIFFERENT_BYTEORDER
     addr ^= 3;
 #endif
@@ -321,6 +366,8 @@ void
 emulated_mem_set_16 (interpreter_t *intp, word_32 addr, word_16 value)
 {
     assert((addr & PPC_PAGE_MASK) + 2 <= PPC_PAGE_SIZE);
+
+    touch_mem(intp, addr, 2);
 
     if ((addr & 1) != 0)
 	printf("unaligned write 16 access at 0x%08x (pc=0x%08x)\n", addr, intp->pc);

@@ -1,3 +1,25 @@
+/*
+ * ppc.c
+ *
+ * bintrans
+ *
+ * Copyright (C) 2001 Mark Probst
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ */
+
 #include <elf.h>
 #include <stdio.h>
 #include <assert.h>
@@ -185,6 +207,7 @@ int emu_errnos[] = { 0,
 #define SYSCALL_MMAP              90
 #define SYSCALL_MUNMAP            91
 #define SYSCALL_SOCKETCALL       102
+#define SYSCALL_STAT             106
 #define SYSCALL_FSTAT            108
 #define SYSCALL_UNAME            122
 #define SYSCALL_MPROTECT         125
@@ -271,10 +294,6 @@ int emu_errnos[] = { 0,
 */
 
 int debug = 0;
-
-#define MAX_FDS      1024
-
-fd_mapping_t fd_map[MAX_FDS];
 
 word_32
 rotl (word_32 x, word_32 i)
@@ -558,49 +577,49 @@ translate_filename (char *file)
 }
 
 int
-open_fd (int fd)
+open_fd (interpreter_t *intp, int fd)
 {
     int i;
 
     for (i = 0; i < MAX_FDS; ++i)
-	if (fd_map[i].free)
+	if (intp->fd_map[i].free)
 	    break;
 
     assert(i < MAX_FDS);
 
-    fd_map[i].free = 0;
-    fd_map[i].native_fd = fd;
+    intp->fd_map[i].free = 0;
+    intp->fd_map[i].native_fd = fd;
 
     return i;
 }
 
 int
-lookup_fd (word_32 fd)
+lookup_fd (interpreter_t *intp, word_32 fd)
 {
     assert(fd < MAX_FDS);
-    if (fd_map[fd].free)
+    if (intp->fd_map[fd].free)
 	return -1;
-    return fd_map[fd].native_fd;
+    return intp->fd_map[fd].native_fd;
 }
 
 int
-reverse_lookup_fd (int fd)
+reverse_lookup_fd (interpreter_t *intp, int fd)
 {
     int i;
 
     for (i = 0; i < MAX_FDS; ++i)
-	if (!fd_map[i].free && fd_map[i].native_fd == fd)
+	if (!intp->fd_map[i].free && intp->fd_map[i].native_fd == fd)
 	    return i;
 
     return -1;
 }
 
 void
-close_fd (word_32 fd)
+close_fd (interpreter_t *intp, word_32 fd)
 {
     assert(fd < MAX_FDS);
-    assert(!fd_map[fd].free);
-    fd_map[fd].free = 1;
+    assert(!intp->fd_map[fd].free);
+    intp->fd_map[fd].free = 1;
 }
 
 void
@@ -642,7 +661,7 @@ convert_ppc_fdset_to_native (interpreter_t *intp, int maxfd, fd_set *fds, word_3
 	    bits = mem_get_32(intp, addr + (i >> 3));
 	if (bits & 1)
 	{
-	    int fd = lookup_fd(i);
+	    int fd = lookup_fd(intp, i);
 
 	    if (fd == -1)
 		return -1;
@@ -668,7 +687,7 @@ convert_native_fdset_to_ppc (interpreter_t *intp, int maxfd, word_32 addr, fd_se
 	if ((i & 31) == 0)
 	    bits = 0;
 
-	fd = reverse_lookup_fd(i);
+	fd = reverse_lookup_fd(intp, i);
 	if (fd != -1 && FD_ISSET(fd, fds))
 	    bits |= 1 << (i & 31);
 
@@ -700,9 +719,11 @@ convert_native_termios_to_emu (interpreter_t *intp, word_32 addr, struct termios
     mem_set_32(intp, addr + 8, tio->c_cflag);
     mem_set_32(intp, addr + 12, tio->c_lflag);
     mem_copy_to_user_8(intp, addr + 16, tio->c_cc, 19);
+    /*
     mem_set_8(intp, addr + 35, tio->c_line);
     mem_set_32(intp, addr + 36, tio->c_ispeed);
     mem_set_32(intp, addr + 40, tio->c_ospeed);
+    */
 }
 #elif defined(EMU_I386)
 void
@@ -712,10 +733,88 @@ convert_native_termios_to_emu (interpreter_t *intp, word_32 addr, struct termios
     mem_set_32(intp, addr + 4, tio->c_oflag);
     mem_set_32(intp, addr + 8, tio->c_cflag);
     mem_set_32(intp, addr + 12, tio->c_lflag);
-    mem_set_8(intp, addr + 16, tio->c_line);
+    /* mem_set_8(intp, addr + 16, tio->c_line); */
     mem_copy_to_user_8(intp, addr + 17, tio->c_cc, 19);
 }
 #endif
+
+void
+convert_native_stat_to_emu (interpreter_t *intp, word_32 addr, struct stat *buf)
+{
+#if defined(EMU_PPC)
+    mem_set_32(intp, addr + 0, buf->st_dev);
+    mem_set_32(intp, addr + 4, buf->st_ino);
+    mem_set_32(intp, addr + 8, buf->st_mode);
+    mem_set_16(intp, addr + 12, buf->st_nlink);
+    mem_set_32(intp, addr + 16, buf->st_uid);
+    mem_set_32(intp, addr + 20, buf->st_gid);
+    mem_set_32(intp, addr + 24, buf->st_rdev);
+    mem_set_32(intp, addr + 28, buf->st_size);
+    mem_set_32(intp, addr + 32, buf->st_blksize);
+    mem_set_32(intp, addr + 36, buf->st_blocks);
+    mem_set_32(intp, addr + 40, buf->st_atime);
+    mem_set_32(intp, addr + 48, buf->st_mtime);
+    mem_set_32(intp, addr + 56, buf->st_ctime);
+#elif defined(EMU_I386)
+#ifdef FAKE_FSTAT_DEV
+    mem_set_16(intp, addr + 0, FAKE_FSTAT_DEV);
+#else
+    mem_set_16(intp, addr + 0, buf->st_dev);
+#endif
+#ifdef FAKE_FSTAT_INO
+    mem_set_32(intp, addr + 4, FAKE_FSTAT_INO);
+#else
+    mem_set_32(intp, addr + 4, buf->st_ino);
+#endif
+#ifdef FAKE_FSTAT_MODE
+    mem_set_16(intp, addr + 8, FAKE_FSTAT_MODE);
+#else
+    mem_set_16(intp, addr + 8, buf->st_mode);
+#endif
+#ifdef FAKE_FSTAT_NLINK
+    mem_set_16(intp, addr + 10, FAKE_FSTAT_NLINK);
+#else
+    mem_set_16(intp, addr + 10, buf->st_nlink);
+#endif
+    mem_set_16(intp, addr + 12, buf->st_uid);
+    mem_set_16(intp, addr + 14, buf->st_gid);
+#ifdef FAKE_FSTAT_RDEV
+    mem_set_16(intp, addr + 16, FAKE_FSTAT_RDEV);
+#else
+    mem_set_16(intp, addr + 16, buf->st_rdev);
+#endif
+#ifdef FAKE_FSTAT_SIZE
+    mem_set_32(intp, addr + 20, FAKE_FSTAT_SIZE);
+#else
+    mem_set_32(intp, addr + 20, buf->st_size);
+#endif
+#ifdef FAKE_FSTAT_BLKSIZE
+    mem_set_32(intp, addr + 24, FAKE_FSTAT_BLKSIZE);
+#else
+    mem_set_32(intp, addr + 24, buf->st_blksize);
+#endif
+#ifdef FAKE_FSTAT_BLOCKS
+    mem_set_32(intp, addr + 28, FAKE_FSTAT_BLOCKS);
+#else
+    mem_set_32(intp, addr + 28, buf->st_blocks);
+#endif
+#ifdef FAKE_FSTAT_ATIME
+    mem_set_32(intp, addr + 32, FAKE_FSTAT_ATIME);
+#else
+    mem_set_32(intp, addr + 32, buf->st_atime);
+#endif
+#ifdef FAKE_FSTAT_MTIME
+    mem_set_32(intp, addr + 40, FAKE_FSTAT_MTIME);
+#else
+    mem_set_32(intp, addr + 40, buf->st_mtime);
+#endif
+#ifdef FAKE_FSTAT_CTIME
+    mem_set_32(intp, addr + 48, FAKE_FSTAT_CTIME);
+#else
+    mem_set_32(intp, addr + 48, buf->st_ctime);
+#endif
+#endif
+}
 
 int
 process_system_call (interpreter_t *intp, word_32 number,
@@ -740,7 +839,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 	case SYSCALL_READ :
 	    ANNOUNCE_SYSCALL("read");
-	    fd = lookup_fd(arg1);
+	    fd = lookup_fd(intp, arg1);
 	    if (fd == -1)
 	    {
 		result = -1;
@@ -768,7 +867,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 	case SYSCALL_WRITE :
 	    ANNOUNCE_SYSCALL("write");
-	    fd = lookup_fd(arg1);
+	    fd = lookup_fd(intp, arg1);
 	    if (fd == -1)
 	    {
 		result = -1;
@@ -828,9 +927,9 @@ process_system_call (interpreter_t *intp, word_32 number,
 		    flags |= O_NOFOLLOW;
 		*/
 
-		result = open(name, flags);
+		result = open(name, flags, arg3);
 		if (result != -1)
-		    result = open_fd(result);
+		    result = open_fd(intp, result);
 
 		free(real_name);
 	    }
@@ -838,7 +937,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 	case SYSCALL_CLOSE :
 	    ANNOUNCE_SYSCALL("close");
-	    fd = lookup_fd(arg1);
+	    fd = lookup_fd(intp, arg1);
 	    if (fd == -1)
 	    {
 		result = -1;
@@ -847,7 +946,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 	    else
 	    {
 		result = close(fd);
-		close_fd(arg1);
+		close_fd(intp, arg1);
 	    }
 	    break;
 
@@ -921,7 +1020,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 	case SYSCALL_IOCTL :
 	    ANNOUNCE_SYSCALL("ioctl");
-	    fd = lookup_fd(arg1);
+	    fd = lookup_fd(intp, arg1);
 	    if (fd == -1)
 	    {
 		result = -1;
@@ -961,7 +1060,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 	case SYSCALL_FCNTL :
 	    ANNOUNCE_SYSCALL("fcntl");
-	    fd = lookup_fd(arg1);
+	    fd = lookup_fd(intp, arg1);
 	    if (fd == -1)
 	    {
 		result = -1;
@@ -1065,7 +1164,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 		}
 		else
 		{
-		    fd = lookup_fd(arg5);
+		    fd = lookup_fd(intp, arg5);
 		    if (fd == -1)
 		    {
 			addr = 0;
@@ -1138,7 +1237,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 			result = socket(ARG(0), type, 0);
 			if (result != -1)
-			    result = open_fd(result);
+			    result = open_fd(intp, result);
 		    }
 		    break;
 
@@ -1148,7 +1247,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 			ANNOUNCE_SYSCALL("connect");
 
-			fd = lookup_fd(ARG(0));
+			fd = lookup_fd(intp, ARG(0));
 			if (fd == -1)
 			{
 			    result = -1;
@@ -1207,7 +1306,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 			ANNOUNCE_SYSCALL("getsockname");
 
-			fd = lookup_fd(ARG(0));
+			fd = lookup_fd(intp, ARG(0));
 			if (fd == -1)
 			{
 			    result = -1;
@@ -1236,7 +1335,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 			ANNOUNCE_SYSCALL("getpeername");
 
-			fd = lookup_fd(ARG(0));
+			fd = lookup_fd(intp, ARG(0));
 			if (fd == -1)
 			{
 			    result = -1;
@@ -1260,7 +1359,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 		case SYS_SHUTDOWN :
 		    ANNOUNCE_SYSCALL("shutdown");
-		    fd = lookup_fd(ARG(0));
+		    fd = lookup_fd(intp, ARG(0));
 		    if (fd == -1)
 		    {
 			result = -1;
@@ -1276,7 +1375,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 			ANNOUNCE_SYSCALL("setsockopt");
 
-			fd = lookup_fd(ARG(0));
+			fd = lookup_fd(intp, ARG(0));
 			if (fd == -1)
 			{
 			    result = -1;
@@ -1302,9 +1401,24 @@ process_system_call (interpreter_t *intp, word_32 number,
 #undef ARG
 	    break;
 
+	case SYSCALL_STAT :
+	    ANNOUNCE_SYSCALL("stat");
+	    {
+		char *real_name = strdup_from_user(intp, arg1);
+		char *name = translate_filename(real_name);
+		struct stat buf;
+
+		result = stat(name, &buf);
+		if (result == 0)
+		    convert_native_stat_to_emu(intp, arg2, &buf);
+
+		free(real_name);
+	    }
+	    break;
+
 	case SYSCALL_FSTAT :
 	    ANNOUNCE_SYSCALL("fstat");
-	    fd = lookup_fd(arg1);
+	    fd = lookup_fd(intp, arg1);
 	    if (fd == -1)
 	    {
 		result = -1;
@@ -1316,81 +1430,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 		result = fstat(fd, &buf);
 		if (result == 0)
-		{
-#if defined(EMU_PPC)
-		    mem_set_32(intp, arg2 + 0, buf.st_dev);
-		    mem_set_32(intp, arg2 + 4, buf.st_ino);
-		    mem_set_32(intp, arg2 + 8, buf.st_mode);
-		    mem_set_16(intp, arg2 + 12, buf.st_nlink);
-		    mem_set_32(intp, arg2 + 16, buf.st_uid);
-		    mem_set_32(intp, arg2 + 20, buf.st_gid);
-		    mem_set_32(intp, arg2 + 24, buf.st_rdev);
-		    mem_set_32(intp, arg2 + 28, buf.st_size);
-		    mem_set_32(intp, arg2 + 32, buf.st_blksize);
-		    mem_set_32(intp, arg2 + 36, buf.st_blocks);
-		    mem_set_32(intp, arg2 + 40, buf.st_atime);
-		    mem_set_32(intp, arg2 + 48, buf.st_mtime);
-		    mem_set_32(intp, arg2 + 56, buf.st_ctime);
-#elif defined(EMU_I386)
-#ifdef FAKE_FSTAT_DEV
-		    mem_set_16(intp, arg2 + 0, FAKE_FSTAT_DEV);
-#else
-		    mem_set_16(intp, arg2 + 0, buf.st_dev);
-#endif
-#ifdef FAKE_FSTAT_INO
-		    mem_set_32(intp, arg2 + 4, FAKE_FSTAT_INO);
-#else
-		    mem_set_32(intp, arg2 + 4, buf.st_ino);
-#endif
-#ifdef FAKE_FSTAT_MODE
-		    mem_set_16(intp, arg2 + 8, FAKE_FSTAT_MODE);
-#else
-		    mem_set_16(intp, arg2 + 8, buf.st_mode);
-#endif
-#ifdef FAKE_FSTAT_NLINK
-		    mem_set_16(intp, arg2 + 10, FAKE_FSTAT_NLINK);
-#else
-		    mem_set_16(intp, arg2 + 10, buf.st_nlink);
-#endif
-		    mem_set_16(intp, arg2 + 12, buf.st_uid);
-		    mem_set_16(intp, arg2 + 14, buf.st_gid);
-#ifdef FAKE_FSTAT_RDEV
-		    mem_set_16(intp, arg2 + 16, FAKE_FSTAT_RDEV);
-#else
-		    mem_set_16(intp, arg2 + 16, buf.st_rdev);
-#endif
-#ifdef FAKE_FSTAT_SIZE
-		    mem_set_32(intp, arg2 + 20, FAKE_FSTAT_SIZE);
-#else
-		    mem_set_32(intp, arg2 + 20, buf.st_size);
-#endif
-#ifdef FAKE_FSTAT_BLKSIZE
-		    mem_set_32(intp, arg2 + 24, FAKE_FSTAT_BLKSIZE);
-#else
-		    mem_set_32(intp, arg2 + 24, buf.st_blksize);
-#endif
-#ifdef FAKE_FSTAT_BLOCKS
-		    mem_set_32(intp, arg2 + 28, FAKE_FSTAT_BLOCKS);
-#else
-		    mem_set_32(intp, arg2 + 28, buf.st_blocks);
-#endif
-#ifdef FAKE_FSTAT_ATIME
-		    mem_set_32(intp, arg2 + 32, FAKE_FSTAT_ATIME);
-#else
-		    mem_set_32(intp, arg2 + 32, buf.st_atime);
-#endif
-#ifdef FAKE_FSTAT_MTIME
-		    mem_set_32(intp, arg2 + 40, FAKE_FSTAT_MTIME);
-#else
-		    mem_set_32(intp, arg2 + 40, buf.st_mtime);
-#endif
-#ifdef FAKE_FSTAT_CTIME
-		    mem_set_32(intp, arg2 + 48, FAKE_FSTAT_CTIME);
-#else
-		    mem_set_32(intp, arg2 + 48, buf.st_ctime);
-#endif
-#endif
-		}
+		    convert_native_stat_to_emu(intp, arg2, &buf);
 	    }
 	    break;
 
@@ -1442,7 +1482,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 		off_t offset = ((off_t)arg2 << 32) | (off_t)arg3;
 		off_t pos;
 
-		fd = lookup_fd(arg1);
+		fd = lookup_fd(intp, arg1);
 
 		pos = lseek(fd, offset, arg5);
 
@@ -1522,7 +1562,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 	case SYSCALL_READV :
 	    ANNOUNCE_SYSCALL("readv");
-	    fd = lookup_fd(arg1);
+	    fd = lookup_fd(intp, arg1);
 	    if (fd == -1)
 	    {
 		result = -1;
@@ -1563,7 +1603,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 	case SYSCALL_WRITEV :
 	    ANNOUNCE_SYSCALL("writev");
-	    fd = lookup_fd(arg1);
+	    fd = lookup_fd(intp, arg1);
 	    if (fd == -1)
 	    {
 		result = -1;
@@ -1655,6 +1695,7 @@ handle_system_call (interpreter_t *intp)
 	{ SYSCALL_MMAP, 6 },
 	{ SYSCALL_MUNMAP, 2 },
 	{ SYSCALL_SOCKETCALL, 2 },
+	{ SYSCALL_STAT, 2 },
 	{ SYSCALL_FSTAT, 2 },
 	{ SYSCALL_UNAME, 1 },
 	{ SYSCALL_MPROTECT, 3 },
@@ -2027,6 +2068,29 @@ delete_breakpoint (interpreter_t *intp, int num)
 }
 
 void
+show_watchpoints (interpreter_t *intp)
+{
+    printf("not implemented\n");
+}
+
+void
+add_watchpoint (interpreter_t *intp, word_32 addr, word_32 len)
+{
+    watchpoint_t *watchpoint = (watchpoint_t*)malloc(sizeof(watchpoint_t));
+
+    watchpoint->addr = addr;
+    watchpoint->len = len;
+    watchpoint->next = intp->watchpoints;
+    intp->watchpoints = watchpoint;
+}
+
+void
+delete_watchpoint (interpreter_t *intp, int num)
+{
+    printf("not implemented\n");
+}
+
+void
 dump_memory (interpreter_t *intp, word_32 addr, word_32 len)
 {
     word_32 w;
@@ -2153,7 +2217,12 @@ debugger (interpreter_t *intp)
 	else if (strcmp(token, "cont") == 0)
 	    run_debugged(intp);
 	else if (strcmp(token, "show") == 0)
+	{
+	    printf("breakpoints:\n");
 	    show_breakpoints(intp);
+	    printf("watchpoints:\n");
+	    show_watchpoints(intp);
+	}
 	else if (strcmp(token, "help") == 0)
 	    printf("rotfl!\n");
 	else if (strcmp(token, "segs") == 0)
@@ -2244,6 +2313,42 @@ debugger (interpreter_t *intp)
 
 	    delete_breakpoint(intp, num);
 	}
+	else if (strcmp(token, "watch") == 0)
+	{
+	    word_32 addr, len;
+
+	    p = get_token(p, token);
+	    if (p == 0)
+	    {
+		printf("error\n");
+		continue;
+	    }
+	    addr = strtol(token, 0, 16);
+
+	    p = get_token(p, token);
+	    if (p == 0)
+	    {
+		printf("error\n");
+		continue;
+	    }
+	    len = strtol(token, 0, 16);
+
+	    add_watchpoint(intp, addr, len);
+	}
+	else if (strcmp(token, "delwatch") == 0)
+	{
+	    int num;
+
+	    p = get_token(p, token);
+	    if (p == 0)
+	    {
+		printf("error\n");
+		continue;
+	    }
+	    num = atoi(token);
+
+	    delete_watchpoint(intp, num);
+	}
 #ifdef EMU_I386
 	else if (strcmp(token, "liveness") == 0)
 	{
@@ -2307,8 +2412,8 @@ debugger (interpreter_t *intp)
 		continue;
 	    }
 
-	    fd_map[fd].free = 0;
-	    fd_map[fd].native_fd = native_fd;
+	    intp->fd_map[fd].free = 0;
+	    intp->fd_map[fd].native_fd = native_fd;
 	}
 	else
 	    printf("error\n");
@@ -2330,6 +2435,7 @@ init_interpreter_struct (interpreter_t *intp, int direct_memory, int compiler)
     intp->trace = 0;
 #endif
     intp->breakpoints = 0;
+    intp->watchpoints = 0;
 
     for (i = 0; i < LEVEL1_SIZE; ++i)
 	intp->pagetable[i] = 0;
@@ -2352,6 +2458,18 @@ init_interpreter_struct (interpreter_t *intp, int direct_memory, int compiler)
     intp->regs_SPR[0] = 0;
     intp->regs_FSPR[0] = 0;
 #endif
+
+    intp->fd_map[0].free = 0;
+    intp->fd_map[0].native_fd = 0;
+
+    intp->fd_map[1].free = 0;
+    intp->fd_map[1].native_fd = 1;
+
+    intp->fd_map[2].free = 0;
+    intp->fd_map[2].native_fd = 2;
+
+    for (i = 3; i < MAX_FDS; ++i)
+	intp->fd_map[i].free = 1;
 }
 
 int
@@ -2383,18 +2501,6 @@ main (int argc, char *argv[])
 #endif
 
     assert(argc >= 2);
-
-    fd_map[0].free = 0;
-    fd_map[0].native_fd = 0;
-
-    fd_map[1].free = 0;
-    fd_map[1].native_fd = 1;
-
-    fd_map[2].free = 0;
-    fd_map[2].native_fd = 2;
-
-    for (i = 3; i < MAX_FDS; ++i)
-	fd_map[i].free = 1;
 
     ppc_argv = (char**)malloc(sizeof(char*) * argc);
 #if defined(EMU_PPC)
