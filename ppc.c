@@ -1950,6 +1950,10 @@ handle_system_call (interpreter_t *intp)
     else
 	intp->regs_GPR[0] = (word_32)result;
 #endif
+
+#ifdef CROSSDEBUGGER
+    intp->have_jumped = 1;
+#endif
 }
 
 void

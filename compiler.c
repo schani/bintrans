@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <sys/time.h>
 #include <unistd.h>
+#include <string.h>
 
 #include "bintrans.h"
 
@@ -37,11 +38,17 @@
 #include "alpha_composer.h"
 #include "alpha_disassembler.c"
 
-#define MAX_LABELS               8
+#define MAX_LABELS              32
 #define MAX_BACKPATCHES          8
 #define MAX_CONSTANTS        16384
 
 #define MAX_UNRESOLVED_JUMPS 16384 /* should be a lot less if we actually do resolve branches */
+
+#define MAX_FRAGMENT_EMU_INSNS          256
+#define MAX_FRAGMENT_INSNS              512
+#define MAX_REG_FIELDS                 1024
+#define MAX_REG_LOCKS                  2048
+#define MAX_FRAGMENT_UNRESOLVED_JUMPS    16
 
 #define JUMP_TARGET_REG        16
 #define RETURN_ADDR_REG        26
@@ -88,22 +95,30 @@ typedef struct
 } reg_range_t;
 
 #if defined(EMU_PPC)
-reg_range_t integer_reg_range[] = { { 1, 16 }, { 18, 26 }, { 0, 0 } };
-#define NUM_INTEGER_REGS                       23
+reg_range_t integer_reg_range[] = { { 4, 16 }, { 18, 26 }, { 0, 0 } };
+#define NUM_INTEGER_REGS                       20
 #elif defined(EMU_I386)
 reg_range_t integer_reg_range[] = { { 15, 16 }, { 18, 26 }, { 0, 0 } };
 #define NUM_INTEGER_REGS                        9
 #define FIRST_NATIVE_INTEGER_HOST_REG           1
 #define NUM_NATIVE_INTEGER_HOST_REGS           14 /* FIXME: this should be in the machine definition (NUM_INTEGER_EMU_REGISTERS) */
 #endif
+#define FIRST_TMP_INTEGER_REG   1
+#define NUM_TMP_INTEGER_REGS    3
 
 #if defined(EMU_PPC) && defined(FAST_PPC_FPR)
 #define FIRST_FLOAT_REG        28
 #define NUM_FLOAT_REGS          3
 #else
-#define FIRST_FLOAT_REG         1
-#define NUM_FLOAT_REGS         15
+#define FIRST_FLOAT_REG         2
+#define NUM_FLOAT_REGS         14
 #endif
+
+#define FIRST_TMP_FLOAT_REG     1
+#define NUM_TMP_FLOAT_REGS      1
+
+int native_integer_regs[NUM_INTEGER_REGS];
+int native_float_regs[NUM_FLOAT_REGS];
 
 #define REG_TYPE_INTEGER        1
 #define REG_TYPE_FLOAT          2
@@ -112,24 +127,68 @@ reg_range_t integer_reg_range[] = { { 15, 16 }, { 18, 26 }, { 0, 0 } };
 
 typedef struct
 {
-    int free;
     int emitted;
-    word_64 address;
+    int insn_num;
     int num_backpatches;
-    word_64 backpatches[MAX_BACKPATCHES];
+    int backpatches[MAX_BACKPATCHES];
 } label_info_t;
 
 typedef struct
 {
     reg_t native_reg;
-    int type;
-    int foreign_reg;		/* -1 if allocated to the code generator */
     int free;
-    int modified;		/* only relevant for foreign regs */
-    int refcount;		/* (refcount == 0 && !free) means native reg holds foreign reg,
-				   but is not currently needed by code generator */
-    unsigned long timestamp;	/* timestamp of last reference */
-} register_alloc_t;
+} tmp_register_t;
+
+typedef struct
+{
+    int type;
+    int used;
+    int locked;
+    int dirty;
+    int first_insn_num;
+    int last_insn_num;
+    int live_at_start;
+    int live_at_end;
+    reg_t native_reg;
+} emu_register_t;
+
+#define REG_LOCK_READ         1
+#define REG_LOCK_WRITE        2
+#define REG_LOCK_READ_WRITE   3
+#define REG_LOCK_UNLOCK       4
+
+typedef struct
+{
+    int type;
+    reg_t reg;
+    int insn_num;
+} reg_lock_t;
+
+typedef struct
+{
+    int insn_num;
+    reg_t reg;
+    int shift;
+} reg_field_t;
+
+#define EMU_INSN_INSN         1
+#define EMU_INSN_EPILOGUE     2
+#define EMU_INSN_INTERLUDE    3
+#define EMU_INSN_STORE_REGS   4
+#define EMU_INSN_CONTINUE     5
+
+typedef struct
+{
+    int type;
+    word_32 addr;
+    int native_index;
+} emu_insn_t;
+
+typedef struct
+{
+    int insn_num;
+    word_32 target;
+} unresolved_jump_t;
 
 #ifdef COLLECT_STATS
 typedef struct
@@ -141,29 +200,44 @@ typedef struct
 
 insn_info_t insn_infos[NUM_INSNS];
 
+word_32 fragment_insns[MAX_FRAGMENT_INSNS];
+int num_fragment_insns;
+
+emu_insn_t fragment_emu_insns[MAX_FRAGMENT_EMU_INSNS];
+int num_fragment_emu_insns;
+
+reg_lock_t reg_locks[MAX_REG_LOCKS];
+int num_reg_locks;
+
+reg_field_t reg_fields[MAX_REG_FIELDS];
+int num_reg_fields;
+
+label_info_t label_infos[MAX_LABELS];
+int num_labels;
+
+unresolved_jump_t fragment_unresolved_jumps[MAX_FRAGMENT_UNRESOLVED_JUMPS];
+int num_fragment_unresolved_jumps;
+
 #ifdef COLLECT_PPC_FPR_STATS
 unsigned int fpr_uses[32];
 #endif
-
-int regs_used_in_fragment[NUM_EMU_REGISTERS];
 #endif
 
-label_info_t label_infos[MAX_LABELS];
 word_32 code_area[MAX_CODE_INSNS];
 word_32 *emit_loc;
-word_64 fragment_start;
 
 int num_constants = NUM_EMU_REGISTERS * 2 + 2;
+int old_num_constants;
 int num_constants_init;
-word_32 constant_area[NUM_EMU_REGISTERS * 2 + 2 + MAX_CONSTANTS];
+word_32 constant_area[NUM_EMU_REGISTERS * 2 + 2 + MAX_CONSTANTS] __attribute__ ((aligned (8)));
 
 word_64 unresolved_jump_addrs[MAX_UNRESOLVED_JUMPS];
 word_32 unresolved_jump_targets[MAX_UNRESOLVED_JUMPS];
 
-register_alloc_t integer_regs[MAX_ALLOC_DEPTH][NUM_INTEGER_REGS];
-register_alloc_t float_regs[MAX_ALLOC_DEPTH][NUM_FLOAT_REGS];
-int alloc_sp = 0;
-unsigned long register_timestamp = 0;
+tmp_register_t tmp_integer_regs[NUM_TMP_INTEGER_REGS];
+tmp_register_t tmp_float_regs[NUM_TMP_FLOAT_REGS];
+
+emu_register_t emu_regs[NUM_EMU_REGISTERS];
 
 int have_jumped = 0;
 int generated_insn_index;
@@ -220,25 +294,137 @@ stop_timer (void)
 void
 emit (word_32 insn)
 {
+    assert(num_fragment_insns < MAX_FRAGMENT_INSNS);
+
+    fragment_insns[num_fragment_insns++] = insn;
+
+    /*
     assert(emit_loc < code_area + MAX_CODE_INSNS);
+    *emit_loc++ = insn;
+    */
+}
+
+void
+start_emu_insn (int type, word_32 addr)
+{
+    assert(num_fragment_emu_insns < MAX_FRAGMENT_EMU_INSNS);
+
+    fragment_emu_insns[num_fragment_emu_insns].type = type;
+    fragment_emu_insns[num_fragment_emu_insns].addr = addr;
+    fragment_emu_insns[num_fragment_emu_insns].native_index = num_fragment_insns;
+
+    ++num_fragment_emu_insns;
+}
+
+void
+emit_store_regs (int follow_type)
+{
+    start_emu_insn(EMU_INSN_STORE_REGS, 0);
+    emit(0);
+    start_emu_insn(follow_type, 0);
+}
+
+void
+note_insn_reg (reg_t reg, int shift)
+{
+    assert(num_reg_fields < MAX_REG_FIELDS);
+    assert(reg & FIELD_REG_BIT);
+
+    reg_fields[num_reg_fields].insn_num = num_fragment_insns;
+    reg_fields[num_reg_fields].reg = reg & ~FIELD_REG_BIT;
+    reg_fields[num_reg_fields].shift = shift;
+
+    ++num_reg_fields;
+}
+
+void
+disassemble_alpha_code (word_64 start, word_64 end)
+{
+    word_64 x;
+
+    for (x = start; x < end; x += 4)
+    {
+	printf("%016lx  ", x);
+	disassemble_alpha_insn(*(word_32*)x, x);
+	printf("\n");
+    }
+}
+
+void
+dump_fragment_code (word_64 start, word_64 end)
+{
+#ifdef DUMP_CODE
+    int i;
+    word_64 index = start;
+
+    for (i = 0; i < num_fragment_emu_insns; ++i)
+    {
+	word_64 last;
+
+	printf("++++++++++++++++\n");
+
+	switch (fragment_emu_insns[i].type)
+	{
+	    case EMU_INSN_INSN :
+		printf("%08x  ", fragment_emu_insns[i].addr);
+#if defined(EMU_PPC)
+		disassemble_ppc_insn(mem_get_32(compiler_intp, fragment_emu_insns[i].addr), fragment_emu_insns[i].addr);
+#elif defined(EMU_I386)
+		compiler_intp->pc = fragment_emu_insns[i].addr;
+		disassemble_i386_insn(compiler_intp);
+		printf("       0x%08x", block_insns[i - 1].flags_killed);
+#endif
+		break;
+
+	    case EMU_INSN_EPILOGUE :
+		printf("epilogue");
+		break;
+
+	    case EMU_INSN_STORE_REGS :
+		printf("store regs");
+		break;
+	}
+
+	printf("\n- - - - - - - - \n");
+
+	if (i < num_fragment_emu_insns - 1)
+	    last = start + fragment_emu_insns[i + 1].native_index * 4;
+	else
+	    last = end;
+
+	disassemble_alpha_code(index, last);
+
+	index = last;
+    }
+
+    for (i = old_num_constants; i < num_constants; ++i)
+	printf("%4d    %08x\n", i * 4, constant_area[i]);
+#endif
+}
+
+void
+direct_emit (word_32 insn)
+{
+    assert(emit_loc < code_area + MAX_CODE_INSNS);
+
     *emit_loc++ = insn;
 }
 
 void
-load_reg (register_alloc_t *reg)
+load_reg (int type, reg_t native_reg, reg_t foreign_reg)
 {
 #ifdef COLLECT_STATS
     ++num_load_store_reg_insns;
 #endif
 
-    switch (reg->type)
+    switch (type)
     {
 	case REG_TYPE_INTEGER :
-	    emit(COMPOSE_LDL(reg->native_reg, reg->foreign_reg * 8, CONSTANT_AREA_REG));
+	    direct_emit(COMPOSE_LDL(native_reg, foreign_reg * 8, CONSTANT_AREA_REG));
 	    break;
 
 	case REG_TYPE_FLOAT :
-	    emit(COMPOSE_LDT(reg->native_reg, reg->foreign_reg * 8, CONSTANT_AREA_REG));
+	    direct_emit(COMPOSE_LDT(native_reg, foreign_reg * 8, CONSTANT_AREA_REG));
 	    break;
 
 	default :
@@ -247,298 +433,129 @@ load_reg (register_alloc_t *reg)
 }
 
 void
-store_reg (register_alloc_t *reg)
+store_reg (int type, reg_t native_reg, reg_t foreign_reg)
 {
-    assert(reg->modified);
-
 #ifdef COLLECT_STATS
     ++num_load_store_reg_insns;
 #endif
 
-    switch (reg->type)
+    switch (type)
     {
 	case REG_TYPE_INTEGER :
-	    emit(COMPOSE_STL(reg->native_reg, reg->foreign_reg * 8, CONSTANT_AREA_REG));
+	    direct_emit(COMPOSE_STL(native_reg, foreign_reg * 8, CONSTANT_AREA_REG));
 	    break;
 
 	case REG_TYPE_FLOAT :
-	    emit(COMPOSE_STT(reg->native_reg, reg->foreign_reg * 8, CONSTANT_AREA_REG));
+	    direct_emit(COMPOSE_STT(native_reg, foreign_reg * 8, CONSTANT_AREA_REG));
 	    break;
 
 	default:
 	    assert(0);
     }
-
-    reg->modified = 0;
 }
 
-void
-store_and_free_reg (register_alloc_t *reg)
+reg_t
+ref_reg (int foreign_reg, int reading, int writing, int type)
 {
-    assert(!reg->free && reg->refcount == 0 && reg->foreign_reg != -1);
+    assert(foreign_reg >= 0 && foreign_reg < NUM_EMU_REGISTERS);
+    assert(emu_regs[foreign_reg].type == type);
+    assert(reading || writing);
 
-    if (reg->modified)
-	store_reg(reg);
-    reg->free = 1;
-}
-
-int
-free_some_reg (register_alloc_t *regs, int num_regs)
-{
-    int i, index = -1;
-
-    for (i = 0; i < num_regs; ++i)
-	if (regs[i].refcount == 0 && !regs[i].free && regs[i].foreign_reg != -1)
-	    if (index == -1 || regs[index].timestamp > regs[i].timestamp)
-		index = i;
-
-    assert(index != -1);
-
-    store_and_free_reg(&regs[index]);
-
-    return index;
-}
-
-void
-store_and_free_all_foreign_regs (void)
-{
-    int i;
-
-    for (i = 0; i < NUM_INTEGER_REGS; ++i)
-	if (!integer_regs[alloc_sp][i].free && integer_regs[alloc_sp][i].foreign_reg != -1)
-	    store_and_free_reg(&integer_regs[alloc_sp][i]);
-
-    for (i = 0; i < NUM_FLOAT_REGS; ++i)
-	if (!float_regs[alloc_sp][i].free && float_regs[alloc_sp][i].foreign_reg != -1)
-	    store_and_free_reg(&float_regs[alloc_sp][i]);
-}
-
-void
-store_all_foreign_regs (void)
-{
-    int i;
-
-    for (i = 0; i < NUM_INTEGER_REGS; ++i)
-	if (!integer_regs[alloc_sp][i].free && integer_regs[alloc_sp][i].foreign_reg != -1 && integer_regs[alloc_sp][i].modified)
-	    store_reg(&integer_regs[alloc_sp][i]);
-
-    for (i = 0; i < NUM_FLOAT_REGS; ++i)
-	if (!float_regs[alloc_sp][i].free && float_regs[alloc_sp][i].foreign_reg != -1 && float_regs[alloc_sp][i].modified)
-	    store_reg(&float_regs[alloc_sp][i]);
-}
-
-void
-push_alloc (void)
-{
-    int i;
-
-    ++alloc_sp;
-    assert(alloc_sp < MAX_ALLOC_DEPTH);
-
-    for (i = 0; i < NUM_INTEGER_REGS; ++i)
-	integer_regs[alloc_sp][i] = integer_regs[alloc_sp - 1][i];
-    for (i = 0; i < NUM_FLOAT_REGS; ++i)
-	float_regs[alloc_sp][i] = float_regs[alloc_sp - 1][i];
-}
-
-void
-revert_reg_state (register_alloc_t *reg, register_alloc_t *old_reg)
-{
-    if (reg->free)
+    if (!emu_regs[foreign_reg].used)
     {
-	if (!old_reg->free)
-	{
-	    assert(old_reg->foreign_reg != -1);
-	    load_reg(old_reg);
-	}
+	emu_regs[foreign_reg].used = 1;
+	emu_regs[foreign_reg].live_at_start = reading;
+	emu_regs[foreign_reg].live_at_end = 0;
+	emu_regs[foreign_reg].first_insn_num = num_fragment_insns;
+    }
+
+    if (emu_regs[foreign_reg].locked)
+    {
+	int i;
+
+	assert(num_reg_locks > 0);
+
+	for (i = num_reg_locks - 1; i >= 0; --i)
+	    if (reg_locks[i].reg == foreign_reg)
+	    {
+		if (!(reg_locks[i].type & REG_LOCK_READ))
+		    assert(!reading);
+		if (writing)
+		    reg_locks[i].type |= REG_LOCK_WRITE;
+		break;
+	    }
+
+	assert(i >= 0);
     }
     else
     {
-	if (reg->foreign_reg == -1)
-	{
-	    assert(!old_reg->free);
-	    assert(old_reg->foreign_reg == -1);
-	    assert(reg->refcount == old_reg->refcount);
-	    assert(reg->modified == old_reg->modified);
-	}
-	else
-	{
-	    if (!old_reg->free)
-	    {
-		if (reg->foreign_reg == old_reg->foreign_reg)
-		{
-		    if (reg->modified && !old_reg->modified)
-			store_reg(reg);
-		}
-		else
-		{
-		    if (reg->modified)
-			store_reg(reg);
-		    load_reg(old_reg);
-		}
-	    }
-	    else
-	    {
-		if (reg->modified)
-		    store_reg(reg);
-	    }
-	}
+	reg_locks[num_reg_locks].reg = foreign_reg;
+	reg_locks[num_reg_locks].type = (reading ? REG_LOCK_READ : 0) | (writing ? REG_LOCK_WRITE : 0);
+	reg_locks[num_reg_locks].insn_num = num_fragment_insns;
+
+	++num_reg_locks;
     }
+
+    ++emu_regs[foreign_reg].locked;
+
+    emu_regs[foreign_reg].live_at_end = emu_regs[foreign_reg].live_at_end || writing;
+
+    return foreign_reg | FIELD_REG_BIT;
 }
 
 void
-pop_alloc (void)
+unref_reg (reg_t reg)
 {
-    int i;
+    int foreign_reg;
 
-    assert(alloc_sp > 0);
+    assert(reg | FIELD_REG_BIT);
 
-    for (i = 0; i < NUM_INTEGER_REGS; ++i)
-	revert_reg_state(&integer_regs[alloc_sp][i], &integer_regs[alloc_sp - 1][i]);
+    foreign_reg = reg & ~FIELD_REG_BIT;
+    assert(foreign_reg >= 0 && foreign_reg < NUM_EMU_REGISTERS);
 
-    for (i = 0; i < NUM_FLOAT_REGS; ++i)
-	revert_reg_state(&float_regs[alloc_sp][i], &float_regs[alloc_sp - 1][i]);
+    assert(emu_regs[foreign_reg].used);
+    assert(emu_regs[foreign_reg].locked > 0);
 
-    --alloc_sp;
-}
+    emu_regs[foreign_reg].last_insn_num = num_fragment_insns;
 
-register_alloc_t*
-ref_reg (register_alloc_t *regs, int num_regs, int foreign_reg, int modify, int *newly_allocated)
-{
-    int free_reg = -1;
-    int index = -1;
-    int i;
-
-    for (i = 0; i < num_regs; ++i)
+    if (--emu_regs[foreign_reg].locked == 0)
     {
-	if (regs[i].free)
-	{
-	    free_reg = i;
-	    if (foreign_reg == -1) /* reg for the code generator */
-		break;
-	}
-	else if (regs[i].foreign_reg == foreign_reg)
-	{
-	    index = i;
-	    if (foreign_reg != -1)
-		break;
-	}
+	reg_locks[num_reg_locks].reg = foreign_reg;
+	reg_locks[num_reg_locks].type = REG_LOCK_UNLOCK;
+	reg_locks[num_reg_locks].insn_num = num_fragment_insns;
+
+	++num_reg_locks;
     }
-
-    if (foreign_reg == -1)
-    {
-	if (free_reg == -1)
-	    index = free_some_reg(regs, num_regs);
-	else
-	    index = free_reg;
-    }
-    else
-	if (index == -1)
-	{
-	    if (free_reg != -1)
-		index = free_reg;
-	    else
-		index = free_some_reg(regs, num_regs);
-	}
-
-    *newly_allocated = regs[index].free;
-
-    regs[index].foreign_reg = foreign_reg;
-    regs[index].free = 0;
-    regs[index].modified = regs[index].modified || modify;
-    ++regs[index].refcount;
-    regs[index].timestamp = register_timestamp++;
-
-    return &regs[index];
-}
-
-void
-unref_reg (register_alloc_t *regs, int num_regs, reg_t reg)
-{
-    int i;
-
-    for (i = 0; i < num_regs; ++i)
-	if (regs[i].native_reg == reg)
-	    break;
-
-    assert(i < num_regs);
-
-    assert(regs[i].refcount > 0);
-
-    if (--regs[i].refcount == 0 && regs[i].foreign_reg == -1)
-	regs[i].free = 1;
 }
 
 reg_t
 ref_integer_reg (int foreign_reg, int reading, int writing)
 {
-    int newly_allocated;
-    register_alloc_t *reg;
-
-    if (foreign_reg >= 0 && (foreign_reg & NEED_NATIVE))
-    {
-	assert(!reading);
-	return foreign_reg & ~NEED_NATIVE;
-    }
-
-    if (reading)
-	assert(foreign_reg != -1);
-
+    assert(foreign_reg >= 0 && foreign_reg < NUM_EMU_REGISTERS);
 #ifdef EMU_I386
-    if (foreign_reg >= 0)
-    {
-	assert(foreign_reg < NUM_NATIVE_INTEGER_HOST_REGS);
-	return foreign_reg + FIRST_NATIVE_INTEGER_HOST_REG;
-    }
+    assert(foreign_reg < NUM_NATIVE_INTEGER_HOST_REGS);
+    return foreign_reg + FIRST_NATIVE_INTEGER_HOST_REG;
+#else
+    return ref_reg(foreign_reg, reading, writing, REG_TYPE_INTEGER);
 #endif
-
-#ifdef COLLECT_STATS
-    if (foreign_reg >= 0)
-	regs_used_in_fragment[foreign_reg] = 1;
-#endif
-
-    reg = ref_reg(integer_regs[alloc_sp], NUM_INTEGER_REGS, foreign_reg, writing, &newly_allocated);
-    if (reading && newly_allocated)
-	load_reg(reg);
-    return reg->native_reg;
 }
 
 void
 unref_integer_reg (reg_t reg)
 {
 #ifdef EMU_I386
-    if (reg >= FIRST_NATIVE_INTEGER_HOST_REG && reg < FIRST_NATIVE_INTEGER_HOST_REG + NUM_NATIVE_INTEGER_HOST_REGS)
-	return;
+    assert(reg > FIRST_NATIVE_INTEGER_HOST_REG && reg < FIRST_NATIVE_INTEGER_HOST_REG + NUM_NATIVE_INTEGER_HOST_REGS);
+#else
+    unref_reg(reg);
 #endif
-
-    unref_reg(integer_regs[alloc_sp], NUM_INTEGER_REGS, reg);
 }
 
 reg_t
 ref_float_reg (int foreign_reg, int reading, int writing)
 {
-    int newly_allocated;
-    register_alloc_t *reg;
-
-    if (foreign_reg >= 0 && (foreign_reg & NEED_NATIVE))
-    {
-	assert(!reading);
-	return foreign_reg & ~NEED_NATIVE;
-    }
-
-    if (reading)
-	assert(foreign_reg != -1);
-
-#if defined(COLLECT_STATS) && defined(COLLECT_PPC_FPR_STATS)
-    if (foreign_reg >= 0)
-    {
-	assert(foreign_reg >= 5 + 32 && foreign_reg < 5 + 32 + 32);
-	++fpr_uses[foreign_reg - 5 - 32];
-    }
-#endif
+    assert(foreign_reg >= 0 && foreign_reg < NUM_EMU_REGISTERS);
 
 #if defined(EMU_PPC) && defined(FAST_PPC_FPR)
-    if (foreign_reg >= 0)
     {
 	int fpr_num = foreign_reg - 5 - 32;
 
@@ -549,12 +566,9 @@ ref_float_reg (int foreign_reg, int reading, int writing)
 	if (fpr_num >= 18)
 	    return fpr_num - 4;
     }
+#else
+    return ref_reg(foreign_reg, reading, writing, REG_TYPE_FLOAT);
 #endif
-
-    reg = ref_reg(float_regs[alloc_sp], NUM_FLOAT_REGS, foreign_reg, writing, &newly_allocated);
-    if (reading && newly_allocated)
-	load_reg(reg);
-    return reg->native_reg;
 }
 
 void
@@ -563,9 +577,66 @@ unref_float_reg (reg_t reg)
 #if defined(EMU_PPC) && defined(FAST_PPC_FPR)
     if (reg < 28)
 	return;
+#else
+    unref_reg(reg);
 #endif
+}
 
-    unref_reg(float_regs[alloc_sp], NUM_FLOAT_REGS, reg);
+reg_t
+alloc_tmp_reg (tmp_register_t *tmp_regs, int num_regs)
+{
+    int i;
+
+    for (i = 0; i < num_regs; ++i)
+	if (tmp_regs[i].free)
+	{
+	    tmp_regs[i].free = 0;
+	    return tmp_regs[i].native_reg;
+	}
+
+    assert(0);
+
+    return -1;
+}
+
+void
+free_tmp_reg (tmp_register_t *tmp_regs, int num_regs, reg_t native_reg)
+{
+    int i;
+
+    for (i = 0; i < num_regs; ++i)
+	if (tmp_regs[i].native_reg == native_reg)
+	{
+	    assert(!tmp_regs[i].free);
+	    tmp_regs[i].free = 1;
+	    return;
+	}
+
+    assert(0);
+}
+
+reg_t
+alloc_tmp_integer_reg (void)
+{
+    return alloc_tmp_reg(tmp_integer_regs, NUM_TMP_INTEGER_REGS);
+}
+
+void
+free_tmp_integer_reg (reg_t native_reg)
+{
+    free_tmp_reg(tmp_integer_regs, NUM_TMP_INTEGER_REGS, native_reg);
+}
+
+reg_t
+alloc_tmp_float_reg (void)
+{
+    return alloc_tmp_reg(tmp_float_regs, NUM_TMP_FLOAT_REGS);
+}
+
+void
+free_tmp_float_reg (reg_t native_reg)
+{
+    free_tmp_reg(tmp_float_regs, NUM_TMP_FLOAT_REGS, native_reg);
 }
 
 void
@@ -632,23 +703,25 @@ emit_load_integer_64 (reg_t reg, word_64 val)
 label_t
 alloc_label (void)
 {
-    label_t i;
+    assert(num_labels < MAX_LABELS);
 
-    for (i = 0; i < MAX_LABELS; ++i)
-	if (label_infos[i].free)
-	    break;
-    assert(i < MAX_LABELS);
+    label_infos[num_labels].emitted = 0;
+    label_infos[num_labels].num_backpatches = 0;
 
-    label_infos[i].free = 0;
-    label_infos[i].emitted = 0;
-    label_infos[i].num_backpatches = 0;
-
-    return i;
+    return num_labels++;
 }
 
 void
 free_label (label_t label)
 {
+    label_info_t *l;
+
+    assert(label >= 0 && label < MAX_LABELS);
+    l = &label_infos[label];
+
+    assert(l->emitted);
+
+    /*
     int i;
     label_info_t *l;
 
@@ -656,7 +729,6 @@ free_label (label_t label)
     l = &label_infos[label];
 
     assert(!l->free);
-    assert(l->emitted);
 
     for (i = 0; i < l->num_backpatches; ++i)
     {
@@ -670,6 +742,7 @@ free_label (label_t label)
     }
 
     label_infos[label].free = 1;
+    */
 }
 
 void
@@ -680,10 +753,9 @@ emit_label (label_t label)
     assert(label >= 0 && label < MAX_LABELS);
     l = &label_infos[label];
 
-    assert(!l->free);
     assert(!l->emitted);
 
-    l->address = (word_64)emit_loc;
+    l->insn_num = num_fragment_insns;
     l->emitted = 1;
 
     /* printf("label %d:\n", label); */
@@ -697,10 +769,8 @@ emit_branch (word_32 insn, label_t label)
     assert(label >= 0 && label < MAX_LABELS);
     l = &label_infos[label];
 
-    assert(!l->free);
-
     assert(l->num_backpatches < MAX_BACKPATCHES);
-    l->backpatches[l->num_backpatches++] = (word_64)emit_loc;
+    l->backpatches[l->num_backpatches++] = num_fragment_insns;
 
     emit(insn);
 }
@@ -708,22 +778,18 @@ emit_branch (word_32 insn, label_t label)
 void
 emit_direct_jump (word_32 target)
 {
-    int i;
-
     if (branch_profile_func != 0)
 	branch_profile_func();
 
     emit(COMPOSE_LDQ(PROCEDURE_VALUE_REG, DIRECT_DISPATCHER_CONST * 4, CONSTANT_AREA_REG));
     emit(COMPOSE_JMP(RETURN_ADDR_REG, PROCEDURE_VALUE_REG));
 
-    for (i = 0; i < MAX_UNRESOLVED_JUMPS; ++i)
-	if (unresolved_jump_addrs[i] == 0)
-	    break;
+    assert(num_fragment_unresolved_jumps < MAX_FRAGMENT_UNRESOLVED_JUMPS);
 
-    assert(i < MAX_UNRESOLVED_JUMPS);
+    fragment_unresolved_jumps[num_fragment_unresolved_jumps].insn_num = num_fragment_insns;
+    fragment_unresolved_jumps[num_fragment_unresolved_jumps].target = target;
 
-    unresolved_jump_addrs[i] = (word_64)emit_loc;
-    unresolved_jump_targets[i] = target;
+    ++num_fragment_unresolved_jumps;
 
     have_jumped = 1;
 }
@@ -759,54 +825,260 @@ emit_system_call (void)
 }
 
 void
-finish_fragment (void)
+start_fragment (void)
 {
     int i;
 
-    /*
-    for (i = 0; i < num_constants; ++i)
+    num_fragment_insns = 0;
+    num_fragment_emu_insns = 0;
+    num_reg_locks = 0;
+    num_reg_fields = 0;
+    num_labels = 0;
+    num_fragment_unresolved_jumps = 0;
+    old_num_constants = num_constants;
+
+    for (i = 0; i < NUM_EMU_REGISTERS; ++i)
     {
-	word_64 disp;
-
-	*emit_loc = constants[i];
-	disp = (word_64)emit_loc - fragment_start;
-	assert(disp < 32768);
-
-	*constant_loads[i] |= disp & 0xffff;
-
-	++emit_loc;
+	emu_regs[i].used = 0;
+	emu_regs[i].locked = 0;
+	emu_regs[i].native_reg = NO_REG;
     }
+}
 
-    num_constants = 0;
-    */
+void
+simple_reg_alloc (void)
+{
+    int i, ii = 0, fi = 0;
 
-    assert(alloc_sp == 0);
-
-    for (i = 0; i < NUM_INTEGER_REGS; ++i)
-    {
-	if (!integer_regs[0][i].free)
+    for (i = 0; i < NUM_EMU_REGISTERS; ++i)
+	if (emu_regs[i].used)
 	{
-	    assert(integer_regs[0][i].foreign_reg != -1);
-	    assert(!integer_regs[0][i].modified);
-	    assert(integer_regs[0][i].refcount == 0);
+	    if (emu_regs[i].type == REG_TYPE_INTEGER)
+		emu_regs[i].native_reg = native_integer_regs[ii++];
+	    else if (emu_regs[i].type == REG_TYPE_FLOAT)
+		emu_regs[i].native_reg = native_float_regs[fi++];
+	    else
+		assert(0);
+	}
+}
 
-	    integer_regs[0][i].free = 1;
+reg_t
+alloc_native_reg_for_emu_reg (reg_t emu_reg, int current_insn_num)
+{
+    int l;
+    reg_t native_reg;
+
+    for (l = 0; l < NUM_EMU_REGISTERS; ++l)
+	if (emu_regs[l].type == emu_regs[emu_reg].type && emu_regs[l].used
+	    && !emu_regs[l].locked && emu_regs[l].native_reg != NO_REG
+	    && emu_regs[l].last_insn_num <= current_insn_num)
+	    break;
+
+    if (l == NUM_EMU_REGISTERS)
+	for (l = 0; l < NUM_EMU_REGISTERS; ++l)
+	    if (emu_regs[l].type == emu_regs[emu_reg].type && emu_regs[l].used
+		&& !emu_regs[l].locked && emu_regs[l].native_reg != NO_REG)
+		break;
+
+    assert(l < NUM_EMU_REGISTERS);
+
+    if (emu_regs[l].dirty)
+	store_reg(emu_regs[l].type, emu_regs[l].native_reg, l);
+
+    native_reg = emu_regs[l].native_reg;
+
+    emu_regs[l].native_reg = NO_REG;
+
+    return native_reg;
+}
+
+void
+finish_fragment (void)
+{
+    int i;
+    int num_integer_regs = 0, num_float_regs = 0;
+#ifdef DUMP_CODE
+    word_64 start = (word_64)emit_loc, body_start;
+#endif
+    int jumps_index;
+    int rf, rl;
+
+    for (i = 0; i < NUM_EMU_REGISTERS; ++i)
+    {
+	if (emu_regs[i].used)
+	{
+	    if (emu_regs[i].type == REG_TYPE_INTEGER)
+		++num_integer_regs;
+	    else if (emu_regs[i].type == REG_TYPE_FLOAT)
+		++num_float_regs;
+	    else
+		assert(0);
 	}
     }
 
-    for (i = 0; i < NUM_FLOAT_REGS; ++i)
-    {
-	if (!float_regs[0][i].free)
-	{
-	    assert(float_regs[0][i].foreign_reg != -1);
-	    assert(!float_regs[0][i].modified);
-	    assert(float_regs[0][i].refcount == 0);
+#ifdef DUMP_CODE
+    printf("%d integer regs, %d float regs\n", num_integer_regs, num_float_regs);
+#endif
 
-	    float_regs[0][i].free = 1;
+    /* assert(num_float_regs == 0); */
+
+    if (num_integer_regs <= NUM_INTEGER_REGS && num_float_regs <= NUM_FLOAT_REGS)
+	simple_reg_alloc();
+    else
+    {
+	int ii = 0, fi = 0;
+
+	for (i = 0; i < num_reg_fields; ++i)
+	{
+	    if (emu_regs[reg_fields[i].reg].native_reg == NO_REG)
+	    {
+		if (emu_regs[reg_fields[i].reg].type == REG_TYPE_INTEGER)
+		{
+		    if (ii < NUM_INTEGER_REGS)
+			emu_regs[reg_fields[i].reg].native_reg = native_integer_regs[ii++];
+		}
+		else if (emu_regs[reg_fields[i].reg].type == REG_TYPE_FLOAT)
+		{
+		    if (fi < NUM_FLOAT_REGS)
+			emu_regs[reg_fields[i].reg].native_reg = native_float_regs[fi++];
+		}
+		else
+		    assert(0);
+
+		if (ii == NUM_INTEGER_REGS && fi == NUM_FLOAT_REGS)
+		    break;
+	    }
 	}
     }
 
-    fragment_start = (word_64)emit_loc;
+    for (i = 0; i < NUM_EMU_REGISTERS; ++i)
+    {
+	if (emu_regs[i].used && emu_regs[i].live_at_start && emu_regs[i].native_reg != NO_REG)
+	    load_reg(emu_regs[i].type, emu_regs[i].native_reg, i);
+    }
+
+    body_start = (word_64)emit_loc;
+    jumps_index = 0;
+    rf = 0;
+    rl = 0;
+
+    /* instructions are patched and emitted; register allocation happens simultaneously */
+    for (i = 0; i < num_fragment_emu_insns; ++i)
+    {
+	int len, first, last;
+	int j;
+
+	first = fragment_emu_insns[i].native_index;
+
+	if (i < num_fragment_emu_insns - 1)
+	    len = fragment_emu_insns[i + 1].native_index - first;
+	else
+	    len = num_fragment_insns - first;
+
+	last = first + len;
+
+	fragment_emu_insns[i].native_index = emit_loc - (word_32*)body_start;
+
+	if (fragment_emu_insns[i].type == EMU_INSN_STORE_REGS)
+	{
+	    assert(first + 1 == last);
+
+	    fragment_insns[first] = emit_loc - code_area;
+
+	    for (j = 0; j < NUM_EMU_REGISTERS; ++j)
+		if (emu_regs[j].used && emu_regs[j].live_at_end && emu_regs[j].native_reg != NO_REG)
+		    store_reg(emu_regs[j].type, emu_regs[j].native_reg, j);
+	}
+	else
+	{
+	    for (j = first; j < last; ++j)
+	    {
+		word_32 *first_insn = emit_loc;
+
+		while (rl < num_reg_locks && reg_locks[rl].insn_num == j)
+		{
+		    if (reg_locks[rl].type == REG_LOCK_UNLOCK)
+			emu_regs[reg_locks[rl].reg].locked = 0;
+		    else
+		    {
+			assert(!emu_regs[reg_locks[rl].reg].locked);
+
+			emu_regs[reg_locks[rl].reg].locked = 1;
+
+			if (emu_regs[reg_locks[rl].reg].native_reg == NO_REG)
+			{
+			    emu_regs[reg_locks[rl].reg].native_reg = alloc_native_reg_for_emu_reg(reg_locks[rl].reg, j);
+
+			    if (reg_locks[rl].type & REG_LOCK_READ)
+				load_reg(emu_regs[reg_locks[rl].reg].type, emu_regs[reg_locks[rl].reg].native_reg,
+					 reg_locks[rl].reg);
+			    emu_regs[reg_locks[rl].reg].dirty = (reg_locks[rl].type & REG_LOCK_WRITE) ? 1 : 0;
+			}
+			else
+			    emu_regs[reg_locks[rl].reg].dirty |= (reg_locks[rl].type & REG_LOCK_WRITE) ? 1 : 0;
+		    }
+
+		    ++rl;
+		}
+
+		while (rf < num_reg_fields && reg_fields[rf].insn_num == j)
+		{
+		    assert(emu_regs[reg_fields[rf].reg].locked);
+
+		    fragment_insns[j] |= emu_regs[reg_fields[rf].reg].native_reg << reg_fields[rf].shift;
+
+		    ++rf;
+		}
+
+		direct_emit(fragment_insns[j]);
+
+		/* the insn is replaced by its code_area index */
+		fragment_insns[j] = first_insn - code_area;
+
+		if (jumps_index < num_fragment_unresolved_jumps && j + 1 == fragment_unresolved_jumps[jumps_index].insn_num)
+		{
+		    int k;
+
+		    for (k = 0; k < MAX_UNRESOLVED_JUMPS; ++k)
+			if (unresolved_jump_addrs[k] == 0)
+			    break;
+
+		    assert(k < MAX_UNRESOLVED_JUMPS);
+
+		    unresolved_jump_addrs[k] = (word_64)emit_loc;
+		    unresolved_jump_targets[k] = fragment_unresolved_jumps[jumps_index].target;
+
+		    ++jumps_index;
+		}
+	    }
+	}
+    }
+
+    /* jumps are patched */
+    for (i = 0; i < num_labels; ++i)
+    {
+	label_info_t *l = &label_infos[i];
+	int j;
+
+	for (j = 0; j < l->num_backpatches; ++j)
+	{
+	    sword_64 disp = (fragment_insns[l->insn_num] - fragment_insns[l->backpatches[j]] - 1) * 4;
+	    word_32 field;
+
+	    assert(disp >= -(1 << 22) && disp < (1 << 22));
+	    field = (disp >> 2) & 0x1fffff;
+
+	    code_area[fragment_insns[l->backpatches[j]]] |= field;
+	}
+    }
+
+#ifdef DUMP_CODE
+    printf("++++++++++++++++\nprologue\n- - - - - - - - \n");
+
+    disassemble_alpha_code(start, body_start);
+
+    dump_fragment_code(body_start, (word_64)emit_loc);
+#endif
 }
 
 void
@@ -825,10 +1097,10 @@ emit_store_mem_64 (reg_t value_reg, reg_t addr_reg)
     reg_t tmp_reg;
 
     emit(COMPOSE_STL(value_reg, 4, addr_reg));
-    tmp_reg = ref_integer_reg_for_writing(-1);
+    tmp_reg = alloc_tmp_integer_reg();
     emit(COMPOSE_SRL_IMM(value_reg, 32, tmp_reg));
     emit(COMPOSE_STL(tmp_reg, 0, addr_reg));
-    unref_integer_reg(tmp_reg);
+    free_tmp_integer_reg(tmp_reg);
 #else
     emit(COMPOSE_STQ(value_reg, 0, addr_reg));
 #endif
@@ -865,14 +1137,14 @@ void
 emit_load_mem_64 (reg_t value_reg, reg_t addr_reg)
 {
 #ifdef DIFFERENT_BYTEORDER
-    reg_t tmp_reg = ref_integer_reg_for_writing(-1);
+    reg_t tmp_reg = alloc_tmp_integer_reg();
 
     emit(COMPOSE_LDL(tmp_reg, 0, addr_reg));
     emit(COMPOSE_SLL_IMM(tmp_reg, 32, tmp_reg));
     emit(COMPOSE_LDL(value_reg, 4, addr_reg));
     emit(COMPOSE_ZAPNOT_IMM(value_reg, 15, value_reg));
     emit(COMPOSE_BIS(value_reg, tmp_reg, value_reg));
-    unref_integer_reg(tmp_reg);
+    free_tmp_integer_reg(tmp_reg);
 #else
     emit(COMPOSE_LDQ(value_reg, 0, addr_reg));
 #endif
@@ -1100,7 +1372,8 @@ count_leading_zeros (word_32 w)
 void
 init_compiler (interpreter_t *intp, interpreter_t *dbg_intp)
 {
-    int i, j, k;
+    int i, j, k, range;
+    int native;
 
     compiler_intp = intp;
 #ifdef CROSSDEBUGGER
@@ -1108,34 +1381,38 @@ init_compiler (interpreter_t *intp, interpreter_t *dbg_intp)
 #endif
 
     i = 0;
-    for (j = 0; integer_reg_range[j].end > 0; ++j)
-	for (k = integer_reg_range[j].begin; k < integer_reg_range[j].end; ++k)
-	{
-	    integer_regs[0][i].native_reg = k;
-	    integer_regs[0][i].type = REG_TYPE_INTEGER;
-	    integer_regs[0][i].free = 1;
-	    integer_regs[0][i].modified = 0;
-	    integer_regs[0][i].refcount = 0;
-	    ++i;
-	}
-
-    for (i = 0; i < NUM_FLOAT_REGS; ++i)
+    for (range = 0; integer_reg_range[range].end > 0; ++range)
     {
-	float_regs[0][i].native_reg = FIRST_FLOAT_REG + i;
-	float_regs[0][i].type = REG_TYPE_FLOAT;
-	float_regs[0][i].free = 1;
-	float_regs[0][i].modified = 0;
-	float_regs[0][i].refcount = 0;
+	for (native = integer_reg_range[range].begin; native < integer_reg_range[range].end; ++native)
+	    native_integer_regs[i++] = native;
     }
 
-    for (i = 0; i < MAX_LABELS; ++i)
-	label_infos[i].free = 1;
+    i = 0;
+    for (native = FIRST_FLOAT_REG; native < FIRST_FLOAT_REG + NUM_FLOAT_REGS; ++native)
+	native_float_regs[i++] = native;
+
+    for (i = 0; i < NUM_TMP_INTEGER_REGS; ++i)
+    {
+	tmp_integer_regs[i].native_reg = FIRST_TMP_INTEGER_REG + i;
+	tmp_integer_regs[i].free = 1;
+    }
+
+    for (i = 0; i < NUM_TMP_FLOAT_REGS; ++i)
+    {
+	tmp_float_regs[i].native_reg = FIRST_TMP_FLOAT_REG + i;
+	tmp_float_regs[i].free = 1;
+    }
+
+    for (i = 0; i < NUM_EMU_REGISTERS; ++i)
+	if (i >= 5 + 32 && i < 5 + 32 + 32)
+	    emu_regs[i].type = REG_TYPE_FLOAT;
+	else
+	    emu_regs[i].type = REG_TYPE_INTEGER;
 
     for (i = 0; i < MAX_UNRESOLVED_JUMPS; ++i)
 	unresolved_jump_addrs[i] = 0;
 
     emit_loc = code_area;
-    fragment_start = (word_64)emit_loc;
 
     add_const_64((word_64)direct_dispatcher);
     add_const_64((word_64)indirect_dispatcher);
@@ -1179,28 +1456,15 @@ init_compiler (interpreter_t *intp, interpreter_t *dbg_intp)
     num_constants_init = num_constants;
 }
 
-void
-disassemble_alpha_code (word_64 start, word_64 end)
-{
-    word_64 x;
-
-    for (x = start; x < end; x += 4)
-    {
-	printf("%016lx  ", x);
-	disassemble_alpha_insn(*(word_32*)x, x);
-	printf("\n");
-    }
-}
-
 word_64
 compile_until_jump (word_32 *addr, int optimize_taken_jump, label_t taken_jump_label, word_32 *target_addr)
 {
     word_64 start = (word_64)emit_loc;
     word_32 insnp = *addr;
-#if defined(DUMP_CODE) || defined(COLLECT_STATS)
+#ifdef COLLECT_STATS
     word_64 x = start;
 #endif
-#if defined(EMU_I386) || defined(DUMP_CODE)
+#ifdef EMU_I386
     int i;
 #endif
 
@@ -1216,6 +1480,8 @@ compile_until_jump (word_32 *addr, int optimize_taken_jump, label_t taken_jump_l
 
     while (!have_jumped)
     {
+	start_emu_insn(EMU_INSN_INSN, insnp);
+
 #if defined(EMU_PPC)
 #ifndef USE_HAND_TRANSLATOR
 	compile_ppc_insn(mem_get_32(compiler_intp, insnp), insnp, optimize_taken_jump, taken_jump_label);
@@ -1229,7 +1495,7 @@ compile_until_jump (word_32 *addr, int optimize_taken_jump, label_t taken_jump_l
 #endif
 
 #ifdef NO_REGISTER_CACHING
-	store_and_free_all_foreign_regs();
+	store_and_free_all_foreign_regs(); /* FIXME */
 #endif
 
 #ifdef COLLECT_STATS
@@ -1238,21 +1504,7 @@ compile_until_jump (word_32 *addr, int optimize_taken_jump, label_t taken_jump_l
 	insn_infos[generated_insn_index].num_generated_insns += ((word_64)emit_loc - x) / 4;
 #endif
 
-#ifdef DUMP_CODE
-	printf("++++++++++++++++\n%08x  ", insnp);
-#if defined(EMU_PPC)
-	disassemble_ppc_insn(mem_get_32(compiler_intp, insnp), insnp);
-#elif defined(EMU_I386)
-	compiler_intp->pc = insn_addr;
-	disassemble_i386_insn(compiler_intp);
-	printf("       0x%08x", block_insns[i - 1].flags_killed);
-#endif
-	printf("\n- - - - - - - - \n");
-	disassemble_alpha_code(x, emit_loc);
-	x = (word_64)emit_loc;
-#endif
-
-#if defined(COLLECT_STATS) || defined(DUMP_CODE)
+#if defined(COLLECT_STATS)
 	x = (word_64)emit_loc;
 #endif
 
@@ -1262,12 +1514,6 @@ compile_until_jump (word_32 *addr, int optimize_taken_jump, label_t taken_jump_l
 	insnp = compiler_intp->pc;
 #endif
     }
-
-#ifdef DUMP_CODE
-    printf("++++++++++++++++\nepilogue\n- - - - - - - - \n");
-    disassemble_alpha_code(x, (word_64)emit_loc);
-    x = (word_64)emit_loc;
-#endif
 
 #ifdef EMU_PPC
     if (optimize_taken_jump)
@@ -1288,17 +1534,6 @@ compile_until_jump (word_32 *addr, int optimize_taken_jump, label_t taken_jump_l
 
     return start;
 }
-
-#ifdef DUMP_CODE
-void
-dump_constants (int old_num_constants)
-{
-    int i;
-
-    for (i = old_num_constants; i < num_constants; ++i)
-	printf("%4d    %08x\n", i * 4, constant_area[i]);
-}
-#endif
 
 void
 emit_const_add (int const_index, int amount, word_32 **lda_loc)
@@ -1330,29 +1565,20 @@ word_64
 compile_basic_block (word_32 addr, int as_trace)
 {
     word_64 native_addr;
-#ifdef DUMP_CODE
-    int old_num_constants = num_constants;
-    word_64 dump_start;
-#endif
 #ifdef COUNT_INSNS
     word_32 *emulated_lda_insn, *native_lda_insn, *old_emit_loc;
 
     old_num_translated_insns = num_translated_insns;
 #endif
 
-#ifdef COLLECT_STATS
-    {
-	int i;
-
-	for (i = 0; i < NUM_EMU_REGISTERS; ++i)
-	    regs_used_in_fragment[i] = 0;
-    }
-#endif
-
     start_timer();
 
+    start_fragment();
+
+    /*
     while (((emit_loc - code_area) & 3) != 0)
 	emit(0);
+    */
 
     native_addr = (word_64)emit_loc;
 
@@ -1372,26 +1598,15 @@ compile_basic_block (word_32 addr, int as_trace)
 
     compile_until_jump(&addr, 0, 0, 0);
 
-#ifdef DUMP_CODE
-    dump_start = (word_64)emit_loc;
-#endif
+    emit_store_regs(EMU_INSN_EPILOGUE);
 
-    store_all_foreign_regs();
     emit_direct_jump(addr);	/* this is not necessary if the jump at the end of the basic block was unconditional */
-
-#ifdef DUMP_CODE
-    disassemble_alpha_code(dump_start, (word_64)emit_loc);
-#endif
 
     finish_fragment();
 
     flush_icache();
 
     stop_timer();
-
-#ifdef DUMP_CODE
-    dump_constants(old_num_constants);
-#endif
 
 #ifdef COLLECT_STATS
     if (as_trace)
@@ -1443,16 +1658,14 @@ compile_trace (word_32 addr, int length, int bits)
 {
     word_64 start = (word_64)emit_loc;
     int bit;
-#ifdef DUMP_CODE
-    int old_num_constants = num_constants;
-    word_64 dump_start;
-#endif
 
 #ifdef COLLECT_STATS
     old_num_translated_insns = num_translated_insns;
 #endif
 
     start_timer();
+
+    start_fragment();
 
     branch_profile_func = branch_profile_within_trace;
 
@@ -1465,21 +1678,12 @@ compile_trace (word_32 addr, int length, int bits)
 
 	    compile_until_jump(&addr, 1, taken_jump_label, &target_addr);
 
-#ifdef DUMP_CODE
-	    dump_start = (word_64)emit_loc;
-#endif
+	    emit_store_regs(EMU_INSN_INTERLUDE);
 
-	    push_alloc();
-	    store_all_foreign_regs();
 	    emit_direct_jump(addr);
-	    pop_alloc();
 
 	    emit_label(taken_jump_label);
 	    free_label(taken_jump_label);
-
-#ifdef DUMP_CODE
-	    disassemble_alpha_code(dump_start, (word_64)emit_loc);
-#endif
 
 	    addr = target_addr;
 	}
@@ -1491,11 +1695,8 @@ compile_trace (word_32 addr, int length, int bits)
 
     compile_until_jump(&addr, 0, 0, 0);
 
-#ifdef DUMP_CODE
-    dump_start = (word_64)emit_loc;
-#endif
+    emit_store_regs(EMU_INSN_EPILOGUE);
 
-    store_all_foreign_regs();
     emit_direct_jump(addr);	/* this is not necessary if the jump at the end of the basic block was unconditional */
 
     branch_profile_func = 0;
@@ -1505,11 +1706,6 @@ compile_trace (word_32 addr, int length, int bits)
     flush_icache();
 
     stop_timer();
-
-#ifdef DUMP_CODE
-    disassemble_alpha_code(dump_start, (word_64)emit_loc);
-    dump_constants(old_num_constants);
-#endif
 
 #ifdef COLLECT_STATS
     ++num_translated_traces;

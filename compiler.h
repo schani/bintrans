@@ -27,6 +27,8 @@ extern word_32 code_area[MAX_CODE_INSNS];
 typedef word_32 reg_t;
 typedef int label_t;
 
+#define NO_REG         ((reg_t)-1)
+
 extern interpreter_t *compiler_intp;
 
 reg_t ref_integer_reg (int foreign_reg, int reading, int writing);
@@ -54,6 +56,8 @@ void emit (word_32 insn);
 #define emit_load_mem_32(val,addr)     emit(COMPOSE_LDL((val),0,(addr)))
 
 #define NEED_NATIVE        0x1000
+
+#define FIELD_REG_BIT      0x80000000
 
 /* ppc_compiler.c */
 void compile_ppc_insn (word_32 insn, word_32 pc, int optimize_taken_jump, label_t taken_jump_label);

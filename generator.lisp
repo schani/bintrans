@@ -802,6 +802,16 @@
 	(t
 	 t)))
 
+(defun expr-register-fields (expr)
+  (cond ((consp expr)
+	 (union (expr-register-fields (car expr)) (expr-register-fields (cdr expr))))
+	((expr-p expr)
+	 (if (member (expr-kind expr) '(register subregister numbered-subregister))
+	     (fields-in-expr (third (expr-operands expr)))
+	     (expr-register-fields (expr-operands expr))))
+	(t
+	 nil)))
+
 (defun expr-calculate (expr)
   (labels ((calc-float (expr)
 	     (expr-case expr
@@ -4624,22 +4634,30 @@ pc = _pc;~%"
 		 (known-bits (insn-known-bits insn))
 		 (dont-care-bits (insn-dont-care-bits insn))
 		 (non-operand-bits (bit-ior known-bits dont-care-bits))
-		 (operands (mapcar #'(lambda (o) (cons o (substitute #\_ #\- (symbol-name o)))) (insn-operands insn))))
+		 (operands (mapcar #'(lambda (o) (cons o (dcs o))) (insn-operands insn)))
+		 (reg-fields (expr-register-fields (insn-effect insn))))
 	    (format t "#define COMPOSE_~A(~{~A~^,~}) " name (mapcar #'cdr operands))
-	    (when safe
-	      (format t "({ ")
-	      (dolist (operand operands)
+	    (format t "({ ")
+	    (dolist (operand operands)
+	      (let ((name (car operand))
+		    (c-name (cdr operand)))
 		(multiple-value-bind (begin end)
-		    (lookup-field (car operand))
-		  (let ((c-name (cdr operand))
-			(width (1+ (- end begin))))
-		    (format t "assert((~A) >= 0 && (~A) < ~A); " c-name c-name (expt 2 width))))))
+		    (lookup-field name)
+		  (let ((width (1+ (- end begin))))
+		    (if (member name reg-fields)
+			(format t "if ((~A) & FIELD_REG_BIT) note_insn_reg(~A, ~A); else assert((~A) >= 0 && (~A) < ~A); "
+				c-name c-name begin c-name c-name (expt 2 width))
+			(format t "assert((~A) >= 0 && (~A) < ~A); " c-name c-name (expt 2 width)))))))
 	    (format t "0x~X" (bit-vector-to-integer (insn-known-bit-values insn)))
 	    (dolist (operand operands)
 	      (multiple-value-bind (begin end)
 		  (lookup-field (car operand))
-		(let ((c-name (cdr operand)))
-		  (format t " | ((~A) << ~A)" c-name begin))))
+		(let ((name (car operand))
+		      (c-name (cdr operand)))
+		  (if (member name reg-fields)
+		      (format t " | (((~A) & FIELD_REG_BIT) ? 0 : ((~A) << ~A))"
+			      c-name c-name begin)
+		      (format t " | ((~A) << ~A)" c-name begin)))))
 	    (dolist (equiv (insn-field-equivalences insn))
 	      (destructuring-bind (field-name . operand-name)
 		  equiv
@@ -4647,9 +4665,7 @@ pc = _pc;~%"
 		    (lookup-field field-name)
 		  (let ((c-name (cdr (assoc operand-name operands))))
 		    (format t " | ((~A) << ~A)" c-name begin)))))
-	    (if safe
-		(format t "; })~%")
-		(format t "~%"))))
+	    (format t "; })~%")))
 	(dolist (mnemonic (reverse (machine-mnemonics machine)))
 	  (format t "#define COMPOSE_~A(~{~A~^,~}) COMPOSE_~A(~{~A~^,~})~%"
 		  (mnemonic-name mnemonic) (mnemonic-args mnemonic)
