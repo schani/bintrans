@@ -4,6 +4,7 @@ cond_monad.ml
 explorer.ml
 expr.ml
 machine.ml
+mapping.ml
 matcher.ml
 memoize.ml
 monad.ml

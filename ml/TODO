@@ -1,2 +1,9 @@
+ask on comp.lang.functional about user op monad problem.
+
+check out why rlwinm with sex doesn't use the rotl alpha matcher
+
+include fields in source machine description.  bits known to be zero should be
+communicated to known and bits.
+
 sometimes we use width ops in bits and known.  the upper parts of the results
 of these are undefined, but known and bits need them defined!  apply a mask.

@@ -36,6 +36,12 @@
 	(,(format nil "~~A = ~A;" c-format) rs ra i)
 	(,(format nil "emit(COMPOSE_~A_IMM(~~A, ~~A, ~~A));" name) ra i rs)))))
 
+(defmatcher addl-31
+  (set ?rs (sex 4 (register ?ra)))
+  1
+  ("~A = sex_32(~A);" rs ra)
+  ("emit(COMPOSE_ADDL(~A, 31, ~A));" ra rs))
+
 (defmatcher lda
   (set ?rs (any-int ?i))
   (when (zero-or-full-p 8 (ashiftr 8 i 15))
@@ -65,6 +71,13 @@
 
 (defopmatcher and (bit-and a b) "~A & ~A")
 
+(defmatcher bic-imm-for-and
+  (set ?rs (bit-and (register ?ra) (any-int ?i)))
+  (when (full-mask-p 8 (ashiftr 8 i 8))
+    1)
+  ("~A = ~A & ~A;" rs ra i)
+  ("emit(COMPOSE_BIC_IMM(~A, unary_BitNeg(~A), ~A));" ra i rs))
+
 (defmatcher zapnot-imm
   (set ?rs (bit-and (register ?ra) (any-int ?i)))
   (when (user-op "IsMaskMask" i 8)
@@ -93,7 +106,7 @@
   (set ?rs (lshiftr (?width (1 2 4)) (register ?ra) (any-int ?i)))
   2
   ("~A = (~A & width_mask(~A)) >> ~A;" rs ra width i)
-  ("emit(compose_width_zapnot(~A, ~A, ~A)); emit(COMPOSE_SRL(~A, ~A, ~A));" ra width rs rs i rs))
+  ("emit(compose_width_zapnot(~A, ~A, ~A)); emit(COMPOSE_SRL_IMM(~A, ~A, ~A));" ra width rs rs i rs))
 
 (defopmatcher srl (lshiftr 8 a b) "~A >> ~A")
 

@@ -76,7 +76,7 @@ let sort_match_datas match_datas =
 	    | (Maybe (c1, _), Maybe (c2, _)) -> c1 - c2)
     match_datas
 
-let print_target_insns allocation best_matches_alist match_datas =
+let print_target_insns printers allocation best_matches_alist match_datas =
   let rec print_bindings exprs_printed bindings =
     match bindings with
 	[] -> exprs_printed
@@ -94,7 +94,7 @@ let print_target_insns allocation best_matches_alist match_datas =
     let expr_bindings  = filter (fun b -> match b with
 				     ExprBinding _ -> true
 				   | _ -> false) match_data.bindings
-    and printer = assoc match_data.target_insn.name alpha_printers
+    and printer = assoc match_data.target_insn.name printers
     in let expr_bindings = print_bindings exprs_printed expr_bindings
     in print_string (printer allocation match_data.bindings) ; print_newline () ;
       expr_bindings
@@ -123,7 +123,7 @@ let print_target_insns allocation best_matches_alist match_datas =
   in let _ = print_exprs [] best_matches_alist (sort_match_datas match_datas)
   in ()
 
-let print_test_func name stmt fields num_int_regs =
+let print_c_func reg_type reg_alloc_string free_reg_func result_passed printers name stmt fields num_int_regs =
   let rec print_fields fields =
     match fields with
 	[] -> ()
@@ -133,33 +133,64 @@ let print_test_func name stmt fields num_int_regs =
 	  print_string "word_64 field_" ; print_string name ; print_string ", ";
 	  print_fields rest
   in
-    print_string "word_64\ntest_" ; print_string name ; print_string " (" ; print_fields (stmt_fields stmt) ; print_string ", " ;
-    print_string (join_strings ", " (map0_int (fun i -> "word_64 guest_reg_" ^ (string_of_int i)) 2 num_int_regs)) ;
-    print_string ")\n{\nword_64 guest_reg_1;\n\n" ;
+    if result_passed then
+      print_string "void"
+    else
+      print_string reg_type ;
+    print_string "\nmlgen_" ; print_string name ; print_string " (" ; print_fields (stmt_fields stmt) ; print_string ", " ;
+    print_string (join_strings ", "
+		    (map0_int (fun i -> reg_type ^ " guest_reg_" ^ (string_of_int i))
+		       (if result_passed then 1 else 2) num_int_regs)) ;
+    print_string ")\n{\n" ;
+    if not result_passed then
+      print_string (reg_type ^ " guest_reg_1;\n\n")
+    else
+      () ;
     let stmt_forms = explore_all_fields stmt fields alpha_matchers
     in let switch = switch_cases (map (fun form -> (form.form_conditions, form)) stmt_forms)
-    in print_switch (fun form ->
-		       let switch = switch_cases (map (fun form_match -> (form_match.match_conditions, form_match)) form.matches)
-		       in print_switch (fun form_match ->
-					  let allocation = make_allocation form_match.best_sub_matches form_match.match_datas
-					  in print_string "{\n" ;
-					    if allocation <> [] then
-					      (print_string "word_64 " ;
-					       print_string (join_strings ", " (map0_int (fun i -> "interm_reg_" ^ (string_of_int i)) 1 (length allocation))) ;
-					       print_string ";\n\n" ;)
-					    else
-					      () ;
-					    print_target_insns allocation form_match.best_sub_matches form_match.match_datas ;
-					    print_string "}\n")
-			    switch)
+    in print_switch
+	 (fun form ->
+	    let switch = switch_cases (map (fun form_match -> (form_match.match_conditions, form_match)) form.matches)
+	    in print_switch
+		 (fun form_match ->
+		    let allocation = make_allocation form_match.best_sub_matches form_match.match_datas
+		    in let interm_reg_strings = (map0_int (fun i -> "interm_reg_" ^ (string_of_int i))
+						   1 (length allocation))
+		    in print_string "{\n" ;
+		      if allocation <> [] then
+			(print_string (reg_type ^ " ") ;
+			 print_string (join_strings ", " (map (fun r -> r ^ " = " ^ reg_alloc_string) interm_reg_strings)) ;
+			 print_string ";\n\n" ;)
+		      else
+			() ;
+		      print_target_insns printers allocation form_match.best_sub_matches form_match.match_datas ;
+		      print_string (join_strings "" (map free_reg_func interm_reg_strings)) ;
+		      print_string "}\n")
+		 switch)
 	 switch ;
-      print_string "\nreturn guest_reg_1;\n}\n\n"
+      if not result_passed then
+	print_string "\nreturn guest_reg_1;\n"
+      else
+	() ;
+      print_string "}\n\n"
+
+let print_test_func =
+  print_c_func "word_64" "0LL" (fun _ -> "") false
+
+let print_gen_func =
+  print_c_func "reg_t" "alloc_tmp_integer_reg()" (fun name -> "free_tmp_integer_reg(" ^ name ^ ");\n") true
 
 let make_registers () =
   let r1 = GuestRegister (1, Int)
   and r2 = GuestRegister (2, Int)
   and r3 = GuestRegister (3, Int)
   in (r1, r2, r3)
+
+let alpha_wrap stmt =
+  match stmt with
+      Assign (GuestRegister (i, Int), expr) -> Assign (GuestRegister (i, Int), sex_expr 4 expr)
+    | Assign _ -> stmt
+    | Store _ -> stmt
 
 let test_explore () =
   let (r1, r2, r3) = make_registers ()
@@ -172,29 +203,29 @@ let test_explore () =
   and stmt7 = make_ppc_rlwnm r1 (Register r2) (Register r3) (IntConst (IntField "mb")) (IntConst (IntField "me"))
   and stmt8 = make_ppc_rlwimi r1 (Register r2) (IntConst (IntField "sh")) (IntConst (IntField "mb")) (IntConst (IntField "me"))
   in
-    print_test_func "rlwinm" stmt6 [("sh", 0L, 32L); ("mb", 0L, 32L); ("me", 0L, 32L)] 2
+    print_gen_func alpha_gen_gens "rlwinm" (alpha_wrap stmt6) [("sh", 0L, 32L); ("mb", 0L, 32L); ("me", 0L, 32L)] 2
 (*
 ;
-    print_test_func "rlwnm" stmt7 [("mb", 0L, 32L); ("me", 0L, 32L)] 3 ;
-    print_test_func "rlwimi" stmt8 [("sh", 0L, 32L); ("mb", 0L, 32L); ("me", 0L, 32L)] 2
+    print_test_func "rlwnm" (alpha_wrap stmt7) [("mb", 0L, 32L); ("me", 0L, 32L)] 3 ;
+    print_test_func "rlwimi" (alpha_wrap stmt8) [("sh", 0L, 32L); ("mb", 0L, 32L); ("me", 0L, 32L)] 2
 *)
 
 let test_maybe () =
   let (r1, r2, r3) = make_registers ()
   in let stmt = Assign (r1, Binary (BitAnd, Register r2, IntConst (IntField "imm")))
-  in print_test_func "and" stmt [] 2
+  in print_gen_func alpha_gen_gens "and" stmt [] 2
 
 let test_zapnot () =
   let (r1, r2, r3) = make_registers ()
   in let stmt = make_ppc_rlwinm r1 (Register r2) (IntConst (IntField "sh")) (IntConst (IntField "mb")) (IntConst (IntField "me"))
   in
-    print_test_func "rlwinm" stmt [("sh", 0L, 1L); ("mb", 8L, 9L); ("me", 23L, 24L)] 2
+    print_test_func alpha_printers "rlwinm" stmt [("sh", 0L, 1L); ("mb", 8L, 9L); ("me", 23L, 24L)] 2
 
 let test_rotand () =
   let (r1, r2, r3) = make_registers ()
   in let stmt = Assign (r1, bitand_expr (shiftl_expr (Register r2) (IntConst (IntField "sh"))) (bitmask_expr (IntConst (IntField "mb")) (IntConst (IntField "me"))))
   in 
-    print_test_func "rotand" stmt [("sh", 9L, 10L); ("mb", 0L, 16L); ("me", 0L, 16L)] 2
+    print_test_func alpha_printers "rotand" stmt [("sh", 9L, 10L); ("mb", 0L, 16L); ("me", 0L, 16L)] 2
 
 let main () =
   let (r1, r2, r3) = make_registers ()

@@ -10,8 +10,8 @@ AEXT = cma
 ENGINE_OBJS = monad.$(OEXT) memoize.$(OEXT) bitmath.$(OEXT) utils.$(OEXT) \
 	      expr.$(OEXT) cond_monad.$(OEXT) uncertainty.$(OEXT) matcher.$(OEXT) \
 	      simplifiers.$(OEXT) simplify.$(OEXT) \
-	      machine.$(OEXT) pruner.$(OEXT) \
 	      irmacros.$(OEXT) \
+	      machine.$(OEXT) mapping.$(OEXT) pruner.$(OEXT) \
 	      explorer.$(OEXT) \
 	      cgen.$(OEXT) switcher.$(OEXT) \
 	      target_alpha.$(OEXT)

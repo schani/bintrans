@@ -369,6 +369,9 @@ let sub_expr a b =
 let mul_expr a b =
   Binary (IntMul, a, b)
 
+let sex_expr width e =
+  UnaryWidth (Sex, width, e)
+
 (* instantiation *)
 
 let instantiate_expr expr fields_alist =

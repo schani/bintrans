@@ -1,3 +1,14 @@
+how to implement sign extended guest registers:
+
+before processing a statement, preprocess it by wrapping every guest register
+access into a sex.  also, wrap all the rhss of assignments to guest registers
+into sexes.  generate all forms, prune them, etc, and before matching,
+remove the sex wrappers around registers, if there are any left.
+
+there should also be a simplify rule that says that sex is idempotent.
+
+---
+
 Ich hab' jetzt meine Monad etwas aufgepeppelt.  Das Problem ist, dass
 ich auch mit Failure umgehen muss, aber nicht nur das, ich muss auch
 zwischen Unconditional und Conditional Failure unterscheiden.

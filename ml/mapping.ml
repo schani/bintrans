@@ -1,5 +1,5 @@
 (*
- * machine.ml
+ * mapping.ml
  *
  * bintrans
  *
@@ -20,6 +20,4 @@
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  *)
 
-let machine_addr_width _ = 4
-
-let machine_register_width register = 4
+let mapping_needed_target_width register = 8

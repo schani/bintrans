@@ -1,31 +1,9 @@
 #include <stdio.h>
 #include <assert.h>
+#include "mlgen_macros.h"
 
 typedef unsigned int word_32;
 typedef unsigned long long word_64;
-
-#define unary_BitNeg(x)              (~(x))
-
-#define unary_ConditionNeg(x)        (!(x))
-#define binary_ConditionAnd(x,y)     ((x)&&(y))
-#define binary_ConditionOr(x,y)      ((x)||(y))
-
-#define unary_IntZero_8(x)           ((x)==0LL)
-#define binary_IntEqual_8(x,y)       ((x)==(y))
-#define binary_IntLessU_8(x,y)       ((x)<(y))
-
-#define binary_IntAdd(x,y)           ((x)+(y))
-#define binary_IntSub(x,y)           ((x)-(y))
-#define binary_IntMul(x,y)           ((x)*(y))
-
-#define binary_ShiftL(x,y)           ((x)<<(y))
-#define binary_LShiftR_4(x,y)        ((word_64)((word_32)(x)>>(word_32)(y)))
-#define binary_LShiftR_8(x,y)        ((word_64)(x)>>(y))
-#define binary_AShiftR_8(x,y)        (ashiftr8((x),(y)))
-
-#define binary_BitAnd(x,y)           ((x)&(y))
-#define binary_BitOr(x,y)            ((x)|(y))
-#define binary_BitMask(x,y)          (bitmask((x),(y)))
 
 word_64
 ashiftr8 (word_64 x, word_64 a)
@@ -109,6 +87,15 @@ unary_HighMask (word_64 x)
     return r;
 }
 
+word_64
+sex_32 (word_64 x)
+{
+    if (x & 0x80000000LL)
+	return x | 0xffffffff00000000LL;
+    else
+	return x & 0xffffffffLL;
+}
+
 #include "test.h"
 
 word_32
@@ -173,7 +160,7 @@ main (void)
 		word_64 gen_result = test_rlwinm(sh, mb, me, 0xdeadbeefcafebabeLL);
 		word_64 real_result = calc(sh, mb, me, 0xdeadbeefcafebabeLL);
 
-		assert((gen_result & 0xffffffff) == real_result);
+		assert(gen_result == sex_32(real_result));
 	    }
 
     /*

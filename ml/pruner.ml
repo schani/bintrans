@@ -1,3 +1,25 @@
+(*
+ * pruner.ml
+ *
+ * bintrans
+ *
+ * Copyright (C) 2004 Mark Probst
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *)
+
 open Int64
 
 open Monad
@@ -5,7 +27,9 @@ open Bitmath
 open Memoize
 open Expr
 open Machine
+open Mapping
 open Cond_monad
+open Irmacros
 
 let bool_to_int bool =
   if bool then one else zero
@@ -319,14 +343,28 @@ let unmemoized_prune_expr prune_one_arg fields expr needed =
 	       return (Unary (op, parg)))
     and prune_unary_width op width arg =
       match op with
-	IntZero | IntParityEven | Sex | Zex ->
-	  let1 (prune arg (int_literal_expr (width_mask width)))
+	  IntZero | IntParityEven | Zex ->
+	    let1 (prune arg (int_literal_expr (width_mask width)))
 	    (fun parg ->
-	      return (UnaryWidth (op, width, parg)))
-      | IntSign -> 
-	  let1 (prune arg (int_literal_expr (bitmask (of_int (width * 8 - 1)) 1L)))
-	    (fun parg ->
-	      return (UnaryWidth (op, width, parg)))
+	       return (UnaryWidth (op, width, parg)))
+	| Sex ->
+	    let karg = known arg
+	    and barg = bits arg
+	    and width_mask_expr = int_literal_expr (width_mask width)
+	    and upper_mask = int_literal_expr (shift_right (lognot (width_mask width)) 1)
+	    in if_prune (or_expr (bitsubset_expr needed width_mask_expr)
+			   (and_expr (bitsubset_expr upper_mask karg)
+			      (make_zero_or_full_p 8
+				 (BinaryWidth (AShiftR, 8, barg, int_literal_expr (sub (mul (of_int width) 8L) 1L))))))
+		 (fun _ -> prune arg needed)
+		 (fun _ ->
+		    (let1 (prune arg width_mask_expr)
+		       (fun parg ->
+			  return (UnaryWidth (op, width, parg)))))
+	| IntSign -> 
+	    let1 (prune arg (int_literal_expr (bitmask (of_int (width * 8 - 1)) 1L)))
+	      (fun parg ->
+		 return (UnaryWidth (op, width, parg)))
     and prune_binary op arg1 arg2 =
       match op with
 	FloatEqual | FloatLess | FloatAdd | FloatSub | FloatMul | FloatDiv ->
@@ -349,7 +387,7 @@ let unmemoized_prune_expr prune_one_arg fields expr needed =
 	       (fun _ -> (if_prune (Binary (ConditionAnd, (bitsubset_expr needed karg2),
 					    (bitsubset_expr (bitand_expr (bitneg_expr barg2) needed)
 					       (bitand_expr karg1 (bitneg_expr barg1)))))
-			    (fun _ -> (prune arg1 needed))
+			    (fun _ -> prune arg1 needed)
 			    (fun _ -> (let2
 					 (prune arg1 (bitand_expr needed (bitneg_expr (bitand_expr karg2 (bitneg_expr barg2)))))
 					 (prune arg2 (bitand_expr needed (bitneg_expr (bitand_expr karg1 (bitneg_expr barg1)))))
@@ -592,6 +630,6 @@ let prune_stmt fields stmt =
 	  cm_return (Store (byte_order, width, paddr, pvalue)))
   | Assign (register, value) ->
       cm_bind
-	(prune_expr fields value (width_mask (machine_register_width register)))
+	(prune_expr fields value (width_mask (mapping_needed_target_width register)))
 	(fun pvalue ->
 	  cm_return (Assign (register, pvalue)))
