@@ -1,10 +1,10 @@
 (new-machine 'ppc)
 
-(defparameter *insn-bits* 32)
-(defparameter *word-bits* 32)
+(setf (machine-insn-bits *this-machine*) 32)
+(setf (machine-word-bits *this-machine*) 32)
 
-(defparameter *single-bits* 32)
-(defparameter *double-bits* 64)
+(setf (machine-single-bits *this-machine*) 32)
+(setf (machine-double-bits *this-machine*) 64)
 
 (define-register-class 'spr 'integer 32
   '(lr cr xer ctr fpscr))
@@ -1139,3 +1139,18 @@
     ((opcd 27))
   ((set (reg ra gpr) (logxor (reg rs gpr) (shiftl (zex uimm) 16))))
   ("xoris r%u,r%u,%u" ra rs uimm))
+
+(defvar *ppc-to-alpha-register-mapping*
+  (let ((mapping '((lr gpr t)
+		   (cr gpr nil)
+		   (xer gpr nil)
+		   (ctr gpr t)
+		   (fpscr gpr nil)
+		   (gpr gpr t)
+		   (fpr fpr t))))
+    (dotimes (i 32)
+      (push (list (intern (format nil "GPR~A" i)) 'gpr t) mapping)
+      (push (list (intern (format nil "FPR~A" i)) 'fpr nil) mapping))
+    mapping))
+
+(defparameter *ppc* *this-machine*)

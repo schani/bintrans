@@ -1,10 +1,10 @@
 (new-machine 'alpha)
 
-(defparameter *insn-bits* 32)
-(defparameter *word-bits* 64)
+(setf (machine-insn-bits *this-machine*) 32)
+(setf (machine-word-bits *this-machine*) 64)
 
-(defparameter *single-bits* 32)
-(defparameter *double-bits* 64)
+(setf (machine-single-bits *this-machine*) 32)
+(setf (machine-double-bits *this-machine*) 64)
 
 (define-register-class 'cr 'integer 64
   '(fpcr))
@@ -790,4 +790,4 @@
   :pattern (mem (+ b (sex d)) 32)
   :code ((ldl res d b)))
 
-(defparameter *alpha-generators* *generators*)
+(defparameter *alpha* *this-machine*)
