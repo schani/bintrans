@@ -5026,7 +5026,7 @@ pc = _pc;~%"
   (labels ((sexp-to-c (x)
 	     (if (consp x)
 		 (format nil "(~A~A~A)" (sexp-to-c (second x)) (first x) (sexp-to-c (third x)))
-		 (format nil "~A" x))))
+		 (format nil "(~A)" x))))
     (let ((*this-machine* machine))
       (with-open-file (out (format nil "~A_composer.h" (dcs (machine-name machine))) :direction :output :if-exists :supersede)
 	(let ((*standard-output* out))
@@ -5069,5 +5069,6 @@ pc = _pc;~%"
 	      (format t "; })~%")))
 	  (dolist (mnemonic (reverse (machine-mnemonics machine)))
 	    (format t "#define COMPOSE_~A(~{~A~^,~}) COMPOSE_~A(~{~A~^,~})~%"
-		    (mnemonic-name mnemonic) (mnemonic-args mnemonic)
-		    (car (mnemonic-substitution mnemonic)) (mapcar #'sexp-to-c (cdr (mnemonic-substitution mnemonic))))))))))
+		    (ucs (mnemonic-name mnemonic)) (mnemonic-args mnemonic)
+		    (ucs (car (mnemonic-substitution mnemonic)))
+		    (mapcar #'sexp-to-c (cdr (mnemonic-substitution mnemonic))))))))))

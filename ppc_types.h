@@ -39,4 +39,5 @@ typedef unsigned int addr_t;
 
 #ifdef EMU_LITTLE_ENDIAN
 #define DIFFERENT_BYTEORDER
+#define SWAP_DIRECT_MEM
 #endif

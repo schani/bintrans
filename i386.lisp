@@ -464,7 +464,7 @@ word_32 disp32, imm32;~%")
 						   (let ((name (intel-insn-name insn))
 							 (mode (intel-insn-mode insn)))
 						     (if (eq mode 'no-args)
-							 (format t "fputs(\"~A\n\", stdout);~%" (dcs name))
+							 (format t "fputs(\"~A\", stdout);~%" (dcs name))
 							 (destructuring-bind (op1 op2 width size-prefix mem-only)
 							     (insn-mode-params mode)
 							   (let ((op1-disasm (op-disasm op1))
@@ -1034,8 +1034,8 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
 (define-std-unary-insn pop
     ((m32 (#x8f) 0)
      (+r32 (#x58)))
-  ((set dst (mem (reg esp)))
-   (set (reg esp) (+ (reg esp) op-byte-width))))
+  ((set (reg esp) (+ (reg esp) op-byte-width))
+   (set dst (mem (- (reg esp) op-byte-width)))))
 
 (define-std-unary-insn push
     ((rm32 (#xff) 6)

@@ -31,6 +31,7 @@
 
 /* #define NO_REGISTER_CACHING */
 /* #define NO_PATCHING */
+/* #define CHECK_TMP_REGS */
 #define PRESERVE_CONSTANTS
 
 #ifdef NEED_COMPILER
@@ -119,6 +120,8 @@
 #define SYSTEM_CALL_CONST          (NUM_REG_CONSTANTS + 2)
 #define ISYNC_CONST                (NUM_REG_CONSTANTS + 3)
 #define C_STUB_CONST               (NUM_REG_CONSTANTS + 4)
+#define REPNE_SCASB_CONST          (NUM_REG_CONSTANTS + 5)
+#define REP_MOVSD_CONST            (NUM_REG_CONSTANTS + 6)
 #else
 #error unsupported target architecture
 #endif
@@ -143,7 +146,7 @@ reg_range_t integer_reg_range[] = { { 4, 16 }, { 18, 26 }, { 0, 0 } };
 #elif defined(ARCH_PPC)
 #if defined(EMU_I386)
 #define FIRST_NATIVE_INTEGER_HOST_REG          14
-#define NUM_NATIVE_INTEGER_HOST_REGS            8
+#define NUM_NATIVE_INTEGER_HOST_REGS           10
 #else
 #error unsupported foreign architecture
 #endif
@@ -2191,7 +2194,7 @@ init_compiler (interpreter_t *intp, interpreter_t *dbg_intp)
     add_addr_const((addr_t)isync_entry);
     add_addr_const((addr_t)c_stub);
 
-#ifdef ARCH_ALPHA
+#if defined(ARCH_ALPHA)
     add_const_64((word_64)count_leading_zeros);
     add_const_64((word_64)div_unsigned_64);
     add_const_64((word_64)div_signed_64);
@@ -2230,6 +2233,11 @@ init_compiler (interpreter_t *intp, interpreter_t *dbg_intp)
 	insn_infos[i].num_generated_insns = 0;
 	insn_infos[i].num_generated_consts = 0;
     }
+#elif defined(ARCH_PPC)
+    add_addr_const((addr_t)repne_scasb_entry);
+    add_addr_const((addr_t)rep_movsd_entry);
+#else
+#error unsupported target architecture
 #endif
 
     num_constants_init = num_constants;
@@ -2646,6 +2654,11 @@ compile_trace (word_32 *addrs, int length, unsigned char *preferred_alloced_inte
     */
 #endif
 
+#ifdef CHECK_TMP_REGS
+    for (i = 0; i < NUM_TMP_INTEGER_REGS; ++i)
+	assert(tmp_integer_regs[i].free);
+#endif
+
     return native_addr;
 }
 
@@ -2812,7 +2825,12 @@ compile_fragment_if_needed (word_32 addr, unsigned char *preferred_alloced_integ
     move_regs_compiler_to_interpreter(compiler_intp);
     compare_register_sets(addr);
     compare_mem_writes(debugger_intp, compiler_intp);
-    assert(debugger_intp->pc == addr);
+    if (debugger_intp->pc != addr)
+    {
+	printf("different target: should be %08x, is %08x\n",
+	       debugger_intp->pc, addr);
+	assert(0);
+    }
 #endif
 
 #ifdef DYNAMO_TRACES
@@ -3018,7 +3036,7 @@ compose_branch (addr_t branch_addr, addr_t target_addr)
     sword_32 disp = target_addr - branch_addr;
     word_32 field;
 
-    printf("composing from %08x to %08x\n", branch_addr, target_addr);
+    /* printf("composing from %08x to %08x\n", branch_addr, target_addr); */
 
     assert(disp >= -(1 << 25) && disp < (1 << 25));
     field = (disp >> 2) & 0xffffff;
@@ -3050,6 +3068,7 @@ provide_fragment_and_patch (addr_t jump_addr)
     foreign_addr = unresolved_jumps[i].target;
 #else
     foreign_addr = *(word_32*)jump_addr;
+    /* printf("jumping to %08x\n", foreign_addr); */
 #endif
 
 #if defined(COMPILER_THRESHOLD) || defined(DYNAMO_TRACES)

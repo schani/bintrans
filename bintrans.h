@@ -54,6 +54,10 @@ void indirect_dispatcher (void);
 void system_call_entry (void);
 void c_stub (void);
 void isync_entry (void);
+#ifdef ARCH_PPC
+void repne_scasb_entry (void);
+void rep_movsd_entry (void);
+#endif
 
 #define PAGE_READABLE         1
 #define PAGE_WRITEABLE        2
@@ -161,17 +165,35 @@ int compare_mem_writes (interpreter_t *intp1, interpreter_t *intp2);
 #error max trace jumps must be 6 for assembler
 #endif
 
+#define swap_16(x)           (((word_16)(x) >> 8) | (((word_16)(x) & 0xff) << 8))
+#define swap_32(x)           (((word_32)swap_16((x)) << 16) | (word_32)swap_16((word_32)(x) >> 16))
+
+#define SEX16(x,w)  ((((x)&(1<<((w)-1))) ? ((0xffff<<(w))|(x)) : (x)) & 0xffff)
+#define SEX32(x,w)  (((x)&(1<<((w)-1))) ? ((0xffffffff<<(w))|(x)) : (x))
+
 #define DIRECT_MEM_BASE     0x000000000
 #define REAL_ADDR(a)        ((addr_t)(a) + DIRECT_MEM_BASE)
 
+#ifdef SWAP_DIRECT_MEM
+#define direct_mem_set_32(addr,value)  (*(word_32*)REAL_ADDR(addr) = swap_32(value))
+#define direct_mem_get_32(addr)        swap_32(*(word_32*)REAL_ADDR(addr))
+#else
 #define direct_mem_set_32(addr,value)  (*(word_32*)REAL_ADDR(addr) = (value))
 #define direct_mem_get_32(addr)        (*(word_32*)REAL_ADDR(addr))
+#endif
 
 #ifdef DIFFERENT_BYTEORDER
+#ifdef SWAP_DIRECT_MEM
+#define direct_mem_set_8(addr,value)   (*(byte*)REAL_ADDR(addr) = (value))
+#define direct_mem_set_16(addr,value)  (*(word_16*)REAL_ADDR(addr) = swap_16(value))
+#define direct_mem_get_8(addr)         (*(byte*)REAL_ADDR(addr))
+#define direct_mem_get_16(addr)        swap_16(*(word_16*)REAL_ADDR(addr))
+#else
 #define direct_mem_set_8(addr,value)   (*(byte*)REAL_ADDR((addr) ^ 3) = (value))
 #define direct_mem_set_16(addr,value)  (*(word_16*)REAL_ADDR((addr) ^ 2) = (value))
 #define direct_mem_get_8(addr)         (*(byte*)REAL_ADDR((addr) ^ 3))
 #define direct_mem_get_16(addr)        (*(word_16*)REAL_ADDR((addr) ^ 2))
+#endif
 #else
 #define direct_mem_set_8(addr,value)   (*(byte*)REAL_ADDR(addr) = (value))
 #define direct_mem_set_16(addr,value)  (*(word_16*)REAL_ADDR(addr) = (value))
@@ -301,9 +323,3 @@ void init_loops (void);
 #else
 #error unsupported target architecture
 #endif
-
-#define swap_16(x)           (((word_16)(x) >> 8) | (((word_16)(x) & 0xff) << 8))
-#define swap_32(x)           (((word_32)swap_16((x)) << 16) | (word_32)swap_16((word_32)(x) >> 16))
-
-#define SEX16(x,w)  ((((x)&(1<<((w)-1))) ? ((0xffff<<(w))|(x)) : (x)) & 0xffff)
-#define SEX32(x,w)  (((x)&(1<<((w)-1))) ? ((0xffffffff<<(w))|(x)) : (x))

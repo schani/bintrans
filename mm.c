@@ -70,6 +70,7 @@ int
 compare_mem_writes (interpreter_t *intp1, interpreter_t *intp2)
 {
     int i;
+    int diff = 0;
 
     for (i = 0; i < num_mem_trace_entries; ++i)
     {
@@ -77,8 +78,17 @@ compare_mem_writes (interpreter_t *intp1, interpreter_t *intp2)
 	word_32 j;
 
 	for (j = 0; j < mem_trace[i].len; ++j)
-	    assert(mem_get_8(intp1, addr + j) == mem_get_8(intp2, addr + j));
+	{
+	    if (mem_get_8(intp1, addr + j) != mem_get_8(intp2, addr + j))
+	    {
+		printf("diff at %08x: %02x != %02x\n", addr + j,
+		       mem_get_8(intp1, addr + j), mem_get_8(intp2, addr + j));
+		diff = 1;
+	    }
+	}
     }
+
+    assert(!diff);
 
     return 1;
 }
@@ -407,40 +417,17 @@ check_watchpoints (interpreter_t *intp, word_32 addr, word_32 len)
 void
 emulated_mem_set_32 (interpreter_t *intp, word_32 addr, word_32 value)
 {
-    touch_mem(intp, addr, 4);
-
-    if ((addr & 3) == 0)
-    {
-	page_t *page = get_page(intp, addr);
-
-	assert((addr & PPC_PAGE_MASK) + 4 <= PPC_PAGE_SIZE);
-
-	if (page == 0 || !(page->flags & PAGE_WRITEABLE))
-	    segfault(intp, addr);
-	else
-	{
-	    if (debug)
-		printf("mem[%x] = %x\n", addr, value);
-
-	    *(word_32*)(page->mem + (addr & PPC_PAGE_MASK)) = value;
-	}
-    }
-    else
-    {
-	printf("unaligned write 32 access at 0x%08x (pc=0x%08x)\n", addr, intp->pc);
-
 #ifdef EMU_BIG_ENDIAN
-	emulated_mem_set_8(intp, addr, value >> 24);
-	emulated_mem_set_8(intp, addr + 1, (value >> 16) & 0xff);
-	emulated_mem_set_8(intp, addr + 2, (value >> 8) & 0xff);
-	emulated_mem_set_8(intp, addr + 3, value & 0xff);
+    emulated_mem_set_8(intp, addr, value >> 24);
+    emulated_mem_set_8(intp, addr + 1, (value >> 16) & 0xff);
+    emulated_mem_set_8(intp, addr + 2, (value >> 8) & 0xff);
+    emulated_mem_set_8(intp, addr + 3, value & 0xff);
 #else
-	emulated_mem_set_8(intp, addr + 3, value >> 24);
-	emulated_mem_set_8(intp, addr + 2, (value >> 16) & 0xff);
-	emulated_mem_set_8(intp, addr + 1, (value >> 8) & 0xff);
-	emulated_mem_set_8(intp, addr, value & 0xff);
+    emulated_mem_set_8(intp, addr + 3, value >> 24);
+    emulated_mem_set_8(intp, addr + 2, (value >> 16) & 0xff);
+    emulated_mem_set_8(intp, addr + 1, (value >> 8) & 0xff);
+    emulated_mem_set_8(intp, addr, value & 0xff);
 #endif
-    }
 }
 
 void
@@ -449,10 +436,6 @@ emulated_mem_set_8 (interpreter_t *intp, word_32 addr, word_32 value)
     page_t *page;
 
     touch_mem(intp, addr, 1);
-
-#ifdef DIFFERENT_BYTEORDER
-    addr ^= 3;
-#endif
 
     page = get_page(intp, addr);
 
@@ -573,36 +556,17 @@ mem_copy_from_user_32 (interpreter_t *intp, byte *buf, word_32 addr, word_32 len
 word_32
 emulated_mem_get_32 (interpreter_t *intp, word_32 addr)
 {
-    if ((addr & 3) == 0)
-    {
-	page_t *page = get_page(intp, addr);
-
-	assert((addr & PPC_PAGE_MASK) + 4 <= PPC_PAGE_SIZE);
-
-	if (page == 0)
-	{
-	    segfault(intp, addr);
-	    return 0;
-	}
-	else
-	    return *(word_32*)(page->mem + (addr & PPC_PAGE_MASK));
-    }
-    else
-    {
-	printf("unaligned read 32 access at 0x%08x (pc=0x%08x)\n", addr, intp->pc);
-
 #ifdef EMU_BIG_ENDIAN
-	return ((word_32)emulated_mem_get_8(intp, addr) << 24)
-	    | ((word_32)emulated_mem_get_8(intp, addr + 1) << 16)
-	    | ((word_32)emulated_mem_get_8(intp, addr + 2) << 8)
-	    | (word_32)emulated_mem_get_8(intp, addr + 3);
+    return ((word_32)emulated_mem_get_8(intp, addr) << 24)
+	| ((word_32)emulated_mem_get_8(intp, addr + 1) << 16)
+	| ((word_32)emulated_mem_get_8(intp, addr + 2) << 8)
+	| (word_32)emulated_mem_get_8(intp, addr + 3);
 #else
-	return ((word_32)emulated_mem_get_8(intp, addr + 3) << 24)
-	    | ((word_32)emulated_mem_get_8(intp, addr + 2) << 16)
-	    | ((word_32)emulated_mem_get_8(intp, addr + 1) << 8)
-	    | (word_32)emulated_mem_get_8(intp, addr);
+    return ((word_32)emulated_mem_get_8(intp, addr + 3) << 24)
+	| ((word_32)emulated_mem_get_8(intp, addr + 2) << 16)
+	| ((word_32)emulated_mem_get_8(intp, addr + 1) << 8)
+	| (word_32)emulated_mem_get_8(intp, addr);
 #endif
-    }
 }
 
 word_8
@@ -610,18 +574,11 @@ emulated_mem_get_8 (interpreter_t *intp, word_32 addr)
 {
     page_t *page;
 
-#ifdef DIFFERENT_BYTEORDER
-    addr ^= 3;
-#endif
     page = get_page(intp, addr);
 
     if (page == 0)
     {
-	segfault(intp, addr
-#ifdef DIFFERENT_BYTEORDER
-		 ^ 3
-#endif
-		 );
+	segfault(intp, addr);
 	return 0;
     }
     else
@@ -822,8 +779,9 @@ copy_file_to_mem (interpreter_t *intp, int fd, word_32 addr, word_32 len, word_3
 			  MIN(MIN(PPC_PAGE_SIZE, len - num_read), PPC_PAGE_SIZE - ((addr + num_read) & PPC_PAGE_MASK)));
 	assert(result != -1);
 
-#ifdef DIFFERENT_BYTEORDER
-	swap_mem((word_32*)(page->mem + ((addr + num_read) & PPC_PAGE_MASK)), result);
+#if defined(DIFFERENT_BYTEORDER) && !defined(SWAP_DIRECT_MEM)
+	if (intp->direct_memory)
+	    swap_mem((word_32*)(page->mem + ((addr + num_read) & PPC_PAGE_MASK)), result);
 #endif
 
 	if (result == 0)

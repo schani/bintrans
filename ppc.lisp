@@ -496,8 +496,23 @@
   ((set (reg ra gpr) (leading-zeros (reg rs gpr))))
   ("cntlzw r%u,r%u" ra rs))
 
-;crand
-;crandc
+(define-insn crand
+    ((opcd 19)
+     (xo1 257)
+     (rc 0))
+  ((set (numbered-subreg 1 (- (width 5 31) crbd) cr)
+	(logand (numbered-subreg 1 (- (width 5 31) crba) cr)
+		(numbered-subreg 1 (- (width 5 31) crbb) cr))))
+  ("crand crb%u,crb%u,crb%u" crbd crba crbb))
+
+(define-insn crandc
+    ((opcd 19)
+     (xo1 129)
+     (rc 0))
+  ((set (numbered-subreg 1 (- (width 5 31) crbd) cr)
+	(logand (numbered-subreg 1 (- (width 5 31) crba) cr)
+		(logxor (numbered-subreg 1 (- (width 5 31) crbb) cr) 1))))
+  ("crandc crb%u,crb%u,crb%u" crbd crba crbb))
 
 (define-insn creqv
     ((opcd 19)
@@ -509,7 +524,15 @@
 		1)))
   ("creqv crb%u,crb%u,crb%u" crbd crba crbb))
 
-;crnand
+(define-insn crnand
+    ((opcd 19)
+     (xo1 225)
+     (rc 0))
+  ((set (numbered-subreg 1 (- (width 5 31) crbd) cr)
+	(logxor (logand (numbered-subreg 1 (- (width 5 31) crba) cr)
+			(numbered-subreg 1 (- (width 5 31) crbb) cr))
+		1)))
+  ("crnand crb%u,crb%u,crb%u" crbd crba crbb))
 
 (define-insn crnor
     ((opcd 19)
@@ -530,7 +553,14 @@
 	       (numbered-subreg 1 (- (width 5 31) crbb) cr))))
   ("cror crb%u,crb%u,crb%u" crbd crba crbb))
 
-;crorc
+(define-insn crorc
+    ((opcd 19)
+     (xo1 417)
+     (rc 0))
+  ((set (numbered-subreg 1 (- (width 5 31) crbd) cr)
+	(logor (numbered-subreg 1 (- (width 5 31) crba) cr)
+	       (logxor (numbered-subreg 1 (- (width 5 31) crbb) cr) 1))))
+  ("crorc crb%u,crb%u,crb%u" crbd crba crbb))
 
 (define-insn crxor
     ((opcd 19)
@@ -1108,6 +1138,14 @@
   ((set (reg lr) (reg rs gpr)))
   ("mtlr r%u" rs))
 
+(define-insn mtxer
+    ((opcd 31)
+     (xo1 467)
+     (rc 0)
+     (spr 32))
+  ((set (reg xer) (reg rs gpr)))
+  ("mtxer r%u" rs))
+
 (define-insn mulhw
     ((opcd 31)
      (oe 0)
@@ -1532,6 +1570,9 @@
 
 ;;;; mnemonics
 
+(define-mnemonic clrlwi (a s n)
+  (rlwinm a s 0 n 31))
+
 (define-mnemonic extrwi (a s n b)
   (rlwinm a s (+ b n) (- 32 n) 31))
 
@@ -1549,6 +1590,15 @@
 
 (define-mnemonic slwi (a s n)
   (rlwinm a s n 0 (- 31 n)))
+
+(define-mnemonic slwi. (a s n)
+  (rlwinm. a s n 0 (- 31 n)))
+
+(define-mnemonic srwi (a s n)
+  (rlwinm a s (- 32 n) n 31))
+
+(define-mnemonic srwi. (a s n)
+  (rlwinm. a s (- 32 n) n 31))
 
 (defvar *ppc-to-alpha-register-mapping* '((gpr gpr t) (fpr fpr nil) (spr gpr t)))
 

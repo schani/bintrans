@@ -2495,6 +2495,7 @@ debugger (interpreter_t *intp)
 	intp->halt = 0;
 
 	printf("%08x > ", intp->pc);
+	fflush(stdout);
 	if (fgets(cmdline, CMDLINE_LENGTH, stdin) == NULL)
 	    return;
 
