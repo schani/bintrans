@@ -20,7 +20,7 @@
 		    (format t "make -f benchmarks/~A clean~%make -f benchmarks/~:*~A all~%" makefile))
 		   ((exec . ?args)
 		    (let ((out-file (or (car args) (format nil "out.~~A.~A.~~A" (dcs config)))))
-		      (format t "cd benchrun~%~A >&../benchmarks/~A~%cd ..~%" cmdline (format nil out-file (dcs benchmark) current-run))))
+		      (format t "cd benchrun~%time ~A >&../benchmarks/~A~%cd ..~%" cmdline (format nil out-file (dcs benchmark) current-run))))
 		   ((run . ?new-run-commands)
 		    (setq run-commands new-run-commands))
 		   ((runs ?n)
@@ -31,7 +31,7 @@
 		   ((rm ?file)
 		    (format t "rm -f benchrun/~A~%" file))
 		   ((static-liveness)
-		    (format t "./alive benchrun/cfg.txt /tmp/liveness.txt~%./convert_liveness </tmp/liveness.cfg >benchrun/liveness.out~%"))
+		    (format t "./alive benchrun/cfg.txt /tmp/liveness.txt~%./convert_liveness </tmp/liveness.txt >benchrun/liveness.out~%"))
 		   (t
 		    (error "unknown command ~A" command)))))
 	(assert (and (not (null commands)) (not (null cmdline))))

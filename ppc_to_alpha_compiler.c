@@ -129,6 +129,14 @@
 #define NO_DYNAMO_TRACES         1
 #endif
 
+#ifdef COLLECT_STATS
+#define GEN_CRF0_BIT()             ++num_generated_crf0_bits
+#define GEN_CRFX_BIT()             ++num_generated_crfx_bits
+#else
+#define GEN_CRF0_BIT()
+#define GEN_CRFX_BIT()
+#endif
+
 void
 move_ppc_regs_interpreter_to_compiler (interpreter_t *intp)
 {
@@ -313,6 +321,8 @@ gen_rc_code (reg_t reg)
 	emit(COMPOSE_CMPLT(reg, 31, bit_reg));
 
 	unref_integer_reg(bit_reg);
+
+	GEN_CRF0_BIT();
     }
     if (KILL_CRFB(1))
     {
@@ -323,6 +333,8 @@ gen_rc_code (reg_t reg)
 	emit(COMPOSE_CMPLT(31, reg, bit_reg));
 
 	unref_integer_reg(bit_reg);
+
+	GEN_CRF0_BIT();
     }
     if (KILL_CRFB(2))
     {
@@ -333,6 +345,8 @@ gen_rc_code (reg_t reg)
 	emit(COMPOSE_CMPEQ(reg, 31, bit_reg));
 
 	unref_integer_reg(bit_reg);
+
+	GEN_CRF0_BIT();
     }
     if (KILL_CRFB(3))
     {
@@ -345,6 +359,8 @@ gen_rc_code (reg_t reg)
 
 	unref_integer_reg(bit_reg);
 	unref_integer_reg(so_reg);
+
+	GEN_CRF0_BIT();
     }
 }
 
@@ -1388,6 +1404,8 @@ gen_cmp_insn (reg_t ra_reg, reg_t rb_reg, int crfd, int is_unsigned, int with_im
 	    }
 
 	    unref_integer_reg(bit_reg);
+
+	    GEN_CRF0_BIT();
 	}
 	if (KILL_CRFB(1))
 	{
@@ -1413,6 +1431,8 @@ gen_cmp_insn (reg_t ra_reg, reg_t rb_reg, int crfd, int is_unsigned, int with_im
 		emit(COMPOSE_XOR_IMM(bit_reg, 1, bit_reg));
 
 	    unref_integer_reg(bit_reg);
+
+	    GEN_CRF0_BIT();
 	}
 	if (KILL_CRFB(2))
 	{
@@ -1426,6 +1446,8 @@ gen_cmp_insn (reg_t ra_reg, reg_t rb_reg, int crfd, int is_unsigned, int with_im
 		emit(COMPOSE_CMPEQ(ra_reg, rb_reg, bit_reg));
 
 	    unref_integer_reg(bit_reg);
+
+	    GEN_CRF0_BIT();
 	}
 	if (KILL_CRFB(3))
 	{
@@ -1438,6 +1460,8 @@ gen_cmp_insn (reg_t ra_reg, reg_t rb_reg, int crfd, int is_unsigned, int with_im
 
 	    unref_integer_reg(bit_reg);
 	    unref_integer_reg(so_reg);
+
+	    GEN_CRF0_BIT();
 	}
     }
     else
@@ -3029,6 +3053,8 @@ handle_mcrf_insn (word_32 insn, word_32 pc)
 		emit(COMPOSE_AND_IMM(bit_reg, 1, bit_reg));
 
 		unref_integer_reg(bit_reg);
+
+		GEN_CRF0_BIT();
 	    }
 	    if (KILL_CRFB(1))
 	    {
@@ -3040,6 +3066,8 @@ handle_mcrf_insn (word_32 insn, word_32 pc)
 		emit(COMPOSE_AND_IMM(bit_reg, 1, bit_reg));
 
 		unref_integer_reg(bit_reg);
+
+		GEN_CRF0_BIT();
 	    }
 	    if (KILL_CRFB(2))
 	    {
@@ -3051,6 +3079,8 @@ handle_mcrf_insn (word_32 insn, word_32 pc)
 		emit(COMPOSE_AND_IMM(bit_reg, 1, bit_reg));
 
 		unref_integer_reg(bit_reg);
+
+		GEN_CRF0_BIT();
 	    }
 	    if (KILL_CRFB(3))
 	    {
@@ -3062,6 +3092,8 @@ handle_mcrf_insn (word_32 insn, word_32 pc)
 		emit(COMPOSE_AND_IMM(bit_reg, 1, bit_reg));
 
 		unref_integer_reg(bit_reg);
+
+		GEN_CRF0_BIT();
 	    }
 
 	    unref_integer_reg(cr_reg);
@@ -3086,6 +3118,8 @@ handle_mcrf_insn (word_32 insn, word_32 pc)
 		    unref_integer_reg(bit_reg);
 
 		    have_set = 1;
+
+		    GEN_CRFX_BIT();
 		}
 		if (KILL_CRFB(4 * FIELD_CRFD + 1))
 		{
@@ -3114,6 +3148,8 @@ handle_mcrf_insn (word_32 insn, word_32 pc)
 		    unref_integer_reg(bit_reg);
 
 		    have_set = 1;
+
+		    GEN_CRFX_BIT();
 		}
 		if (KILL_CRFB(4 * FIELD_CRFD + 2))
 		{
@@ -3142,6 +3178,8 @@ handle_mcrf_insn (word_32 insn, word_32 pc)
 		    unref_integer_reg(bit_reg);
 
 		    have_set = 1;
+
+		    GEN_CRFX_BIT();
 		}
 		if (KILL_CRFB(4 * FIELD_CRFD + 3))
 		{
@@ -3155,6 +3193,8 @@ handle_mcrf_insn (word_32 insn, word_32 pc)
 			emit(COMPOSE_MOV(bit_reg, field_reg));
 
 		    unref_integer_reg(bit_reg);
+
+		    GEN_CRFX_BIT();
 		}
 
 		mask_reg = alloc_tmp_integer_reg();
@@ -3327,6 +3367,8 @@ handle_mtcrf_insn (word_32 insn, word_32 pc)
 		emit(COMPOSE_AND_IMM(bit_reg, 1, bit_reg));
 
 		unref_integer_reg(bit_reg);
+
+		GEN_CRF0_BIT();
 	    }
     }
 
@@ -3381,6 +3423,8 @@ handle_mtfsb0_insn (word_32 insn, word_32 pc)
 	    emit(COMPOSE_BIS(31, 31, bit_reg));
 
 	    unref_integer_reg(bit_reg);
+
+	    GEN_CRF0_BIT();
 	}
     }
     else

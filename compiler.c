@@ -365,6 +365,8 @@ unsigned long num_translated_traces = 0;
 unsigned long num_translated_insns = 0;
 unsigned long num_translated_trace_insns = 0;
 unsigned long num_load_store_reg_insns = 0;
+unsigned long num_generated_crf0_bits = 0;
+unsigned long num_generated_crfx_bits = 0;
 unsigned long num_stub_calls = 0;
 unsigned long num_loop_profiler_calls = 0;
 unsigned long num_const_adds = 0;
@@ -3409,6 +3411,8 @@ print_compiler_stats (void)
     printf("translated insns in traces:    %lu\n", num_translated_trace_insns);
     printf("generated insns:               %lu\n", emit_loc - code_area - 3 * num_const_adds);
     printf("load/store reg insns:          %lu\n", num_load_store_reg_insns);
+    printf("generated crf0 bits:           %lu\n", num_generated_crf0_bits);
+    printf("generated crfx bits:           %lu\n", num_generated_crfx_bits);
 #ifdef COLLECT_LIVENESS
     printf("patched store reg insns:       %lu\n", num_patched_stores);
 #endif
