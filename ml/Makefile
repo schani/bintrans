@@ -1,7 +1,7 @@
-OC = ocamlc
-OEXT = cmo
-#OC = ocamlopt
-#OEXT = cmx
+#OC = ocamlc
+#OEXT = cmo
+OC = ocamlopt
+OEXT = cmx
 AEXT = cma
 
 ENGINE_OBJS = bitmath.$(OEXT) expr.$(OEXT) instruction.$(OEXT) matcher.$(OEXT) simplifiers.$(OEXT) simplify.$(OEXT) \
@@ -10,6 +10,7 @@ ENGINE_OBJS = bitmath.$(OEXT) expr.$(OEXT) instruction.$(OEXT) matcher.$(OEXT) s
 TEST_OBJS = test.$(OEXT)
 
 all : test
+# engine
 
 test : $(ENGINE_OBJS) $(TEST_OBJS)
 	$(OC) -o test $(ENGINE_OBJS) $(TEST_OBJS)

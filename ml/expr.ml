@@ -205,6 +205,11 @@ let stmt_sub_exprs stmt =
     Store (byte_order, width, sub1, sub2) -> [ sub1 ; sub2 ]
   | Assign (register, sub) -> [ sub ]
 
+let is_const expr =
+  match expr with
+      IntConst _ | FloatConst _ | ConditionConst _ -> true
+    | _ -> false
+
 (* instantiation *)
 
 let instantiate_expr expr fields_alist =
@@ -265,7 +270,7 @@ let apply_to_stmt_subs modify stmt =
 
 (* constant folding *)
 
-let cfold_expr expr =
+let cfold_expr fields expr =
   let rec apply_int_unary op arg =
     match op with
 	LoadByte -> Unary (LoadByte, IntConst (IntLiteral arg))
@@ -360,7 +365,12 @@ let cfold_expr expr =
   and cfold expr =
     let fexpr = apply_to_expr_subs cfold expr
     in match fexpr with
-      IntConst _ -> expr
+      IntConst (IntField input_name) ->
+	(try
+	   IntConst (IntLiteral (assoc input_name fields))
+	 with
+	     Not_found -> expr)
+    | IntConst _ -> expr
     | FloatConst _ -> expr
     | ConditionConst _ -> expr
     | Register _ -> expr
@@ -409,8 +419,8 @@ let cfold_expr expr =
   in
     cfold expr
 
-let cfold_stmt =
-  apply_to_stmt_subs cfold_expr
+let cfold_stmt fields =
+  apply_to_stmt_subs (cfold_expr fields)
 
 (* printing *)
 

@@ -29,6 +29,30 @@ let make_ppc_rlwinm ra rs sh mb me =
 		      make_mask (Binary (IntSub, IntConst (IntLiteral 31L), me))
 			(Binary (IntSub, IntConst (IntLiteral 31L), mb))))
 
+let rec repeat_until_fixpoint fn data =
+  let ndata = fn data
+  in if ndata = data then
+    data
+  else
+    repeat_until_fixpoint fn ndata
+
+let explore_all_fields stmt fields =
+  let rec explore fields_so_far rest_fields stmts_so_far =
+    match rest_fields with
+      [] ->
+	let new_stmt = repeat_until_fixpoint (fun stmt -> prune_stmt fields_so_far (simplify_stmt fields_so_far stmt)) stmt
+	in if mem new_stmt stmts_so_far then
+	  stmts_so_far
+	else
+	  (print_stmt new_stmt ; (new_stmt :: stmts_so_far))
+    | (name, min, max) :: rest_fields when (compare min max) < 0 ->
+	let stmts_so_far = explore ((name, min) :: fields_so_far) rest_fields stmts_so_far
+	in explore fields_so_far ((name, (add min one), max) :: rest_fields) stmts_so_far
+    | _ -> stmts_so_far
+  in
+    explore [] fields []
+      
+
 let main () =
   let r1 = (1, Int)
   and r2 = (2, Int)
@@ -38,11 +62,14 @@ let main () =
   and stmt3 = Assign (r1, (make_rotl4 (Register r2) (IntConst (IntLiteral 8L))))
   and stmt4 = Assign (r1, IntConst (IntLiteral 8000000L))
   and stmt5 = Assign (r1, make_mask (IntConst (IntLiteral 8L)) (IntConst (IntLiteral 15L)))
-  and stmt6 = make_ppc_rlwinm r1 (Register r2) (IntConst (IntLiteral 16L)) (IntConst (IntLiteral 0L)) (IntConst (IntLiteral 31L))
-  in let stmt = prune_stmt (simplify_stmt (cfold_stmt stmt6))
+  and stmt6 = make_ppc_rlwinm r1 (Register r2) (IntConst (IntField "sh")) (IntConst (IntField "mb")) (IntConst (IntField "me"))
+  and fields = [("sh", 16L); ("mb", 16L); ("me", 31L)]
+  in let stmt = repeat_until_fixpoint (fun stmt -> prune_stmt fields (simplify_stmt fields stmt)) stmt6
   in print_stmt stmt ;
-  let (best_stmt_match, best_sub_matches_alist) = recursively_match_stmt stmt alpha_insns
-  in print_whole_match best_stmt_match best_sub_matches_alist;;
+  let (best_stmt_match, best_sub_matches_alist) = recursively_match_stmt fields stmt alpha_insns
+  in print_whole_match best_stmt_match best_sub_matches_alist ;
+  let stmts = explore_all_fields stmt6 [("sh", 0L, 32L); ("mb", 0L, 32L); ("me", 0L, 32L)]
+  in print_newline () ;;
 
 main ();;
 exit 0;;

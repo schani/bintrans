@@ -73,11 +73,12 @@ let rec known expr =
       | BitXor | ConditionXor -> logand (known arg1) (known arg2)
       | ShiftL ->
 	  (match arg2 with
-	    IntConst (IntLiteral amount) -> shiftl (known arg1) amount
+	    IntConst (IntLiteral amount) -> logor (shiftl (known arg1) amount) (bitmask zero amount)
 	  | _ -> zero)
       | FloatAdd | FloatSub | FloatMul | FloatDiv -> zero
   and known_binary_width op width arg1 arg2 =
-    let mask = width_mask width
+    let bit_width = width * 8
+    and mask = width_mask width
     in let karg1 = logand mask (known arg1)
        and karg2 = logand mask (known arg2)
     in let all_known = karg1 = mask && karg2 = mask
@@ -92,12 +93,13 @@ let rec known expr =
 	(match arg2 with
 	  IntConst (IntLiteral amount) ->
 	    (logor (lshiftr (known arg1) (logand amount mask))
-	       (bitmask (sub 64L amount) amount))
+	       (bitmask (sub (of_int bit_width) amount) (add (of_int (64 - bit_width)) amount)))
 	| _ -> zero)
     | AShiftR ->
 	(match arg2 with
 	  IntConst (IntLiteral amount) ->
-	    logand (ashiftr (sex (width * 8) (known arg1)) (logand amount mask)) mask
+	    (logor (logand (ashiftr (sex bit_width (known arg1)) (logand amount mask)) mask)
+	       (bitmask (of_int bit_width) (of_int (64 - bit_width))))
 	| _ -> zero)
     | IntMulHS | IntMulHU -> zero
   and known_ternary_width op width arg1 arg2 arg3 =
@@ -248,182 +250,197 @@ and bits expr =
   | If (condition, cons, alt) ->
       logand (bits cons) (bits alt)
 
-let rec prune expr needed =
-  if (logand (known expr) needed) = needed then
-    let bits = bits expr
-    in match expr_value_type expr with
-      Int -> IntConst (IntLiteral bits)
-    | Float -> raise Wrong_type
-    | Condition -> ConditionConst (is_bit_set bits 0)
-  else
-    let prune_unary op arg =
-      match op with
-	  LoadByte | IntToFloat | FloatToInt | FloatSqrt | FloatNeg | FloatAbs ->
-	    Unary (op, prune arg minus_one)
-	| ConditionToInt ->
-	    if not (is_bit_set needed 0) then
-	      IntConst (IntLiteral zero)
-	    else if is_bit_set (known arg) 0 then
-	      IntConst (IntLiteral (logand (bits arg) 1L))
-	    else
-	      Unary (ConditionToInt, prune arg 1L)
-	| IntEven ->
-	    if is_bit_set (known arg) 0 then
-	      ConditionConst (not (is_bit_set (bits arg) 0))
-	    else
-	      Unary (IntEven, prune arg 1L)
-	| IntNeg ->
-	    Unary (IntNeg, prune arg (low_mask needed))
-	| BitNeg | ConditionNeg ->
-	    Unary (op, prune arg needed)
-    and prune_unary_width op width arg =
-      match op with
-	IntZero | IntParityEven | Sex | Zex ->
-	  UnaryWidth (op, width, prune arg (width_mask width))
-      | IntSign -> 
-	  UnaryWidth (op, width, prune arg (bitmask (of_int (width * 8 - 1)) 1L))
-    and prune_binary op arg1 arg2 =
-      match op with
-	  FloatEqual | FloatLess | FloatAdd | FloatSub | FloatMul | FloatDiv ->
-	    Binary (op, prune arg1 minus_one, prune arg2 minus_one)
-	| IntAdd | IntSub | IntMul ->
-	    Binary (op, prune arg1 (low_mask needed), prune arg2 (low_mask needed))
-	| BitAnd | ConditionAnd ->
-	    let karg1 = known arg1
-	    and karg2 = known arg2
-	    and barg1 = bits arg1
-	    and barg2 = bits arg2
-	    in if (logand (logand karg1 barg1) needed) = needed then
-		prune arg2 needed
-	      else if (logand (logand karg2 barg2) needed) = needed then
-		prune arg1 needed
-	      else
-		Binary (op,
-			prune arg1 (logand needed (lognot (logand karg2 (lognot barg2)))),
-			prune arg2 (logand needed (lognot (logand karg1 (lognot barg1)))))
-	| BitOr | ConditionOr ->
-	    let karg1 = known arg1
-	    and karg2 = known arg2
-	    and barg1 = bits arg1
-	    and barg2 = bits arg2
-	    in if (logand karg1 needed) = needed && (logand barg1 needed) = zero then
-		prune arg2 needed
-	      else if (logand karg2 needed) = needed && (logand barg2 needed) = zero then
-		prune arg1 needed
-	      else
-		Binary (BitOr,
-			prune arg1 (logand needed (lognot (logand karg2 barg2))),
-			prune arg2 (logand needed (lognot (logand karg1 barg1))))
-	| BitXor | ConditionXor->
-	    let karg1 = known arg1
-	    and karg2 = known arg2
-	    and barg1 = bits arg1
-	    and barg2 = bits arg2
-	    in if ((logand karg1 needed) = needed && (logand barg1 needed) = zero) then
-		prune arg2 needed
-	      else if ((logand karg2 needed) = needed && (logand barg2 needed) = zero) then
-		prune arg1 needed
-	      else
-		Binary (BitXor, prune arg1 needed, prune arg2 needed)
-	| ShiftL ->
-	    let karg2 = known arg2
-	    and barg2 = bits arg2
-	    in if (logand karg2 0x3fL) = 0x3fL then
-		(if (logand barg2 0x3fL) = zero then
-		   prune arg1 needed
-		 else
-		   Binary (ShiftL, prune arg1 (lshiftr needed (logand barg2 0x3fL)), prune arg2 0x3fL))
-	      else
-		Binary (ShiftL, prune arg1 (low_mask needed), prune arg2 0x3fL)
-    and prune_binary_width op width arg1 arg2 =
-      let mask = width_mask width
-      and shift_mask = width_shift_mask width
-      in match op with
-	  IntEqual | LessU | LessS | AddCarry | SubCarry | Overflow ->
-	    if is_bit_set (known expr) 0 then
-	      ConditionConst (is_bit_set (bits expr) 0)
-	    else
-	      BinaryWidth (op, width, prune arg1 mask, prune arg2 mask)
-	| LShiftR ->
-	    let shift_mask = width_shift_mask width
-	    and barg2 = bits arg2
-	    in if (logand (known arg2) shift_mask) = shift_mask then
-		(if (logand barg2 shift_mask) = zero then
-		   prune arg1 (logand needed mask)
-		 else
-		   BinaryWidth (LShiftR, width,
-				prune arg1 (logand (shiftl needed (logand barg2 shift_mask)) mask),
-				prune arg2 shift_mask))
-	      else
-		BinaryWidth (LShiftR, width, prune arg1 (logand (high_mask needed) mask), prune arg2 shift_mask)
-	| AShiftR ->
-	    let shift_mask = width_shift_mask width
-	    and barg2 = bits arg2
-	    in if (logand (known arg2) shift_mask) = shift_mask then
-		(if (logand barg2 shift_mask) = zero then
-		   prune arg1 (logand needed mask)
-		 else
-		   let amount = logand barg2 shift_mask
-		   in let high_bit_mask = logand (lognot (lshiftr mask amount)) mask
-		   in let need_high_bit = (logand needed high_bit_mask) <> zero
-		   in let high_bit = if need_high_bit then (bitmask (of_int (width * 8 - 1)) one) else zero
-		   in BinaryWidth (AShiftR, width,
-				   prune arg1 (logor high_bit (logand (shiftl needed (logand barg2 shift_mask)) mask)),
-				   prune arg2 shift_mask))
-	      else
-		BinaryWidth (AShiftR, width, prune arg1 (logand (high_mask needed) mask), prune arg2 shift_mask)
-	| IntMulHS | IntMulHU ->
-	    BinaryWidth (op, width, prune arg1 mask, prune arg2 mask)
-    and prune_ternary_width op width arg1 arg2 arg3 =
-      TernaryWidth (op, width, prune arg1 minus_one, prune arg2 minus_one, prune arg3 minus_one)
-    in match expr with
-      IntConst (IntLiteral int) -> IntConst (IntLiteral (logand int needed))
-    | IntConst _ | FloatConst _ | ConditionConst _ | Register _ | LoadBO _ -> expr
-    | Unary (op, arg) -> prune_unary op arg
-    | UnaryWidth (op, width, arg) -> prune_unary_width op width arg
-    | Binary (op, arg1, arg2) -> prune_binary op arg1 arg2
-    | BinaryWidth (op, width, arg1, arg2) -> prune_binary_width op width arg1 arg2
-    | TernaryWidth (op, width, arg1, arg2, arg3) -> prune_ternary_width op width arg1 arg2 arg3
-    | Extract (arg, start, length) ->
-	(match (start, length) with
-	  (IntLiteral start_int, IntLiteral length_int) ->
-	    let parg = prune arg (logand (shiftl needed start_int) (bitmask start_int length_int))
-	    and upper_mask = shiftl minus_one (add start_int length_int)
-	    in if ((logxor upper_mask (known arg)) = 0L
-                   && (logand upper_mask (bits arg)) = 0L) then
-		BinaryWidth (LShiftR, 8, parg, IntConst start)
-	      else
-		Extract (parg, start, length)
-	| (IntLiteral start_int, _) ->
-	    let parg = prune arg (shiftl needed start_int)
-	    in Extract (parg, start, length)
-	| _ -> Extract ((prune arg minus_one), start, length))
-    | Insert (arg1, arg2, start, length) ->
-	(match (start, length) with
-	  (IntLiteral start_int, IntLiteral length_int) ->
-	    let parg1 = prune arg1 (insert_bits needed zero start_int length_int)
-	    and parg2 = prune arg2 (extract_bits needed start_int length_int)
-	    in if (extract_bits needed start_int length_int) = 0L then
-	      parg1
-	    else if (logand needed (lognot (bitmask start_int length_int))) = zero then
-	      Binary (ShiftL, parg2, IntConst (IntLiteral start_int))
-	    else
-	      Insert (parg1, parg2, start, length)
-	| (IntLiteral start_int, _) ->
-	    let parg1 = prune arg1 needed
-	    and parg2 = prune arg2 (lshiftr needed start_int)
-	    in if (lshiftr needed start_int) = 0L then
-	      parg1
-	    else
-	      Insert (parg1, parg2, start, length)
-	| _ ->
-	    Insert (prune arg1 needed, prune arg2 minus_one, start, length))
-    | If (condition, cons, alt) ->
-	If (prune condition one, prune cons needed, prune alt needed)
+let prune_expr fields expr needed =
+  let cfbits expr =
+    bits (cfold_expr fields expr)
+  and cfknown expr =
+    known (cfold_expr fields expr)
+  in let rec prune expr needed =
+      if (logand (cfknown expr) needed) = needed then
+	(if is_const (cfold_expr fields expr) then
+	   expr
+	 else
+	   let bits = cfbits expr
+	   in match expr_value_type expr with
+	       Int -> IntConst (IntLiteral bits)
+	     | Float -> raise Wrong_type
+	     | Condition -> ConditionConst (is_bit_set bits 0))
+      else
+	let prune_unary op arg =
+	  match op with
+	      LoadByte | IntToFloat | FloatToInt | FloatSqrt | FloatNeg | FloatAbs ->
+		Unary (op, prune arg minus_one)
+	    | ConditionToInt ->
+		if not (is_bit_set needed 0) then
+		  IntConst (IntLiteral zero)
+		else if is_bit_set (cfknown arg) 0 then
+		  IntConst (IntLiteral (logand (cfbits arg) 1L))
+		else
+		  Unary (ConditionToInt, prune arg 1L)
+	    | IntEven ->
+		if is_bit_set (cfknown arg) 0 then
+		  ConditionConst (not (is_bit_set (cfbits arg) 0))
+		else
+		  Unary (IntEven, prune arg 1L)
+	    | IntNeg ->
+		Unary (IntNeg, prune arg (low_mask needed))
+	    | BitNeg | ConditionNeg ->
+		Unary (op, prune arg needed)
+	and prune_unary_width op width arg =
+	  match op with
+	      IntZero | IntParityEven | Sex | Zex ->
+		UnaryWidth (op, width, prune arg (width_mask width))
+	    | IntSign -> 
+		UnaryWidth (op, width, prune arg (bitmask (of_int (width * 8 - 1)) 1L))
+	and prune_binary op arg1 arg2 =
+	  match op with
+	      FloatEqual | FloatLess | FloatAdd | FloatSub | FloatMul | FloatDiv ->
+		Binary (op, prune arg1 minus_one, prune arg2 minus_one)
+	    | IntAdd | IntSub | IntMul ->
+		Binary (op, prune arg1 (low_mask needed), prune arg2 (low_mask needed))
+	    | BitAnd | ConditionAnd ->
+		let karg1 = cfknown arg1
+		and karg2 = cfknown arg2
+		and barg1 = cfbits arg1
+		and barg2 = cfbits arg2
+		in if (bitsubset needed karg1)
+		    && (bitsubset (logand (lognot barg1) needed)
+			  (logand karg2 (lognot barg2))) then
+		  arg2
+		else if (bitsubset needed karg2)
+		    && (bitsubset (logand (lognot barg2) needed)
+			  (logand karg1 (lognot barg1))) then
+		  arg1
+		else
+		  Binary (op,
+			  prune arg1 (logand needed (lognot (logand karg2 (lognot barg2)))),
+			  prune arg2 (logand needed (lognot (logand karg1 (lognot barg1)))))
+	    | BitOr | ConditionOr ->
+		let karg1 = cfknown arg1
+		and karg2 = cfknown arg2
+		and barg1 = cfbits arg1
+		and barg2 = cfbits arg2
+		in if (logand karg1 needed) = needed && (logand barg1 needed) = zero then
+		    prune arg2 needed
+		  else if (logand karg2 needed) = needed && (logand barg2 needed) = zero then
+		    prune arg1 needed
+		  else
+		    Binary (BitOr,
+			    prune arg1 (logand needed (lognot (logand karg2 barg2))),
+			    prune arg2 (logand needed (lognot (logand karg1 barg1))))
+	    | BitXor | ConditionXor->
+		let karg1 = cfknown arg1
+		and karg2 = cfknown arg2
+		and barg1 = cfbits arg1
+		and barg2 = cfbits arg2
+		in if ((logand karg1 needed) = needed && (logand barg1 needed) = zero) then
+		    prune arg2 needed
+		  else if ((logand karg2 needed) = needed && (logand barg2 needed) = zero) then
+		    prune arg1 needed
+		  else
+		    Binary (BitXor, prune arg1 needed, prune arg2 needed)
+	    | ShiftL ->
+		let karg2 = cfknown arg2
+		and barg2 = cfbits arg2
+		in if (logand karg2 0x3fL) = 0x3fL then
+		    (if (logand barg2 0x3fL) = zero then
+		       prune arg1 needed
+		     else
+		       Binary (ShiftL, prune arg1 (lshiftr needed (logand barg2 0x3fL)), prune arg2 0x3fL))
+		  else
+		    Binary (ShiftL, prune arg1 (low_mask needed), prune arg2 0x3fL)
+	and prune_binary_width op width arg1 arg2 =
+	  let mask = width_mask width
+	  and shift_mask = width_shift_mask width
+	  in match op with
+	      IntEqual | LessU | LessS | AddCarry | SubCarry | Overflow ->
+		if is_bit_set (cfknown expr) 0 then
+		  ConditionConst (is_bit_set (cfbits expr) 0)
+		else
+		  BinaryWidth (op, width, prune arg1 mask, prune arg2 mask)
+	    | LShiftR ->
+		let shift_mask = width_shift_mask width
+		and barg2 = cfbits arg2
+		in if (logand (cfknown arg2) shift_mask) = shift_mask then
+		    (if (logand barg2 shift_mask) = zero then
+		       prune arg1 (logand needed mask)
+		     else
+		       BinaryWidth (LShiftR, width,
+				    prune arg1 (logand (shiftl needed (logand barg2 shift_mask)) mask),
+				    prune arg2 shift_mask))
+		  else
+		    BinaryWidth (LShiftR, width, prune arg1 (logand (high_mask needed) mask), prune arg2 shift_mask)
+	    | AShiftR ->
+		let shift_mask = width_shift_mask width
+		and barg2 = cfbits arg2
+		in if (logand (cfknown arg2) shift_mask) = shift_mask then
+		    (if (logand barg2 shift_mask) = zero then
+		       prune arg1 (logand needed mask)
+		     else
+		       let amount = logand barg2 shift_mask
+		       in let high_bit_mask = logand (lognot (lshiftr mask amount)) mask
+		       in let need_high_bit = (logand needed high_bit_mask) <> zero
+		       in let high_bit = if need_high_bit then (bitmask (of_int (width * 8 - 1)) one) else zero
+		       in BinaryWidth (AShiftR, width,
+				       prune arg1 (logor high_bit (logand (shiftl needed (logand barg2 shift_mask)) mask)),
+				       prune arg2 shift_mask))
+		  else
+		    BinaryWidth (AShiftR, width, prune arg1 (logand (high_mask needed) mask), prune arg2 shift_mask)
+	    | IntMulHS | IntMulHU ->
+		BinaryWidth (op, width, prune arg1 mask, prune arg2 mask)
+	and prune_ternary_width op width arg1 arg2 arg3 =
+	  TernaryWidth (op, width, prune arg1 minus_one, prune arg2 minus_one, prune arg3 minus_one)
+	in match expr with
+	    IntConst (IntLiteral int) -> IntConst (IntLiteral (logand int needed))
+	  | IntConst _ | FloatConst _ | ConditionConst _ | Register _ | LoadBO _ -> expr
+	  | Unary (op, arg) -> prune_unary op arg
+	  | UnaryWidth (op, width, arg) -> prune_unary_width op width arg
+	  | Binary (op, arg1, arg2) -> prune_binary op arg1 arg2
+	  | BinaryWidth (op, width, arg1, arg2) -> prune_binary_width op width arg1 arg2
+	  | TernaryWidth (op, width, arg1, arg2, arg3) -> prune_ternary_width op width arg1 arg2 arg3
+	  | Extract (arg, start, length) ->
+	      (match (start, length) with
+		   (IntLiteral start_int, IntLiteral length_int) ->
+		     let parg = prune arg (logand (shiftl needed start_int) (bitmask start_int length_int))
+		     and upper_mask = shiftl minus_one (add start_int length_int)
+		     in if ((logxor upper_mask (cfknown arg)) = 0L
+			    && (logand upper_mask (cfbits arg)) = 0L) then
+			 BinaryWidth (LShiftR, 8, parg, IntConst start)
+		       else
+			 Extract (parg, start, length)
+		 | (IntLiteral start_int, _) ->
+		     let parg = prune arg (shiftl needed start_int)
+		     in Extract (parg, start, length)
+		 | _ -> Extract ((prune arg minus_one), start, length))
+	  | Insert (arg1, arg2, start, length) ->
+	      (match (start, length) with
+		   (IntLiteral start_int, IntLiteral length_int) ->
+		     let parg1 = prune arg1 (insert_bits needed zero start_int length_int)
+		     and parg2 = prune arg2 (extract_bits needed start_int length_int)
+		     in if (extract_bits needed start_int length_int) = 0L then
+			 parg1
+		       else if (logand needed (lognot (bitmask start_int length_int))) = zero then
+			 Binary (ShiftL, parg2, IntConst (IntLiteral start_int))
+		       else
+			 Insert (parg1, parg2, start, length)
+		 | (IntLiteral start_int, _) ->
+		     let parg1 = prune arg1 needed
+		     and parg2 = prune arg2 (lshiftr needed start_int)
+		     in if (lshiftr needed start_int) = 0L then
+			 parg1
+		       else
+			 Insert (parg1, parg2, start, length)
+		 | _ ->
+		     Insert (prune arg1 needed, prune arg2 minus_one, start, length))
+	  | If (condition, cons, alt) ->
+	      If (prune condition one, prune cons needed, prune alt needed)
+  in prune expr needed
 
-let prune_stmt stmt =
+let prune_stmt fields stmt =
   match stmt with
       Store (byte_order, width, addr, value) ->
-	Store (byte_order, width, prune addr (width_mask (machine_addr_width ())), prune value (width_mask width))
+	Store (byte_order, width,
+	       prune_expr fields addr (width_mask (machine_addr_width ())),
+	       prune_expr fields value (width_mask width))
     | Assign (register, value) ->
-	Assign (register, prune value (width_mask (machine_register_width register)))
+	Assign (register, prune_expr fields value (width_mask (machine_register_width register)))

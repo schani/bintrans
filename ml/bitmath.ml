@@ -56,6 +56,11 @@ let rec int_parity int =
   if int = 0L then 0L
   else logxor (logand int 1L) (int_parity (shift_right_logical int 1))
 
+(*** bitsets ***)
+
+let bitsubset sub super =
+  (logand sub super) = sub
+
 (*** comparisons ***)
 
 let less_u arg1 arg2 =
