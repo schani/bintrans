@@ -62,7 +62,7 @@ void emit (word_32 insn);
 /* ppc_compiler.c */
 void compile_ppc_insn (word_32 insn, word_32 pc, int optimize_taken_jump, label_t taken_jump_label);
 
-word_64 compile_basic_block (word_32 addr, int as_trace);
+word_64 compile_basic_block (word_32 addr, int as_trace, unsigned char *preferred_alloced_integer_regs);
 word_64 compile_trace (word_32 addr, int length, int bits);
 
 /* ppc_to_alpha_compiler.c */

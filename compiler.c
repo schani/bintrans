@@ -86,6 +86,11 @@
 #define PREMATURE_EXITS_CONST      (NUM_REG_CONSTANTS + 50)
 #define END_EXITS_CONST            (NUM_REG_CONSTANTS + 52)
 #define EMULATED_TRACE_INSNS_CONST (NUM_REG_CONSTANTS + 54)
+#ifdef SYNC_BLOCKS
+#define EMPTY_SYNC_CONST           (NUM_REG_CONSTANTS + 56)
+#define STANDARD_SYNC_CONST        (NUM_REG_CONSTANTS + 58)
+#define CUSTOM_SYNC_CONST          (NUM_REG_CONSTANTS + 60)
+#endif
 #endif
 
 typedef struct
@@ -905,7 +910,7 @@ simple_reg_alloc (void)
     int i, ii = 0, fi = 0;
 
     for (i = 0; i < NUM_EMU_REGISTERS; ++i)
-	if (emu_regs[i].used)
+	if (emu_regs[i].used && emu_regs[i].native_reg == NO_REG)
 	{
 	    if (emu_regs[i].type == REG_TYPE_INTEGER)
 	    {
@@ -925,6 +930,7 @@ simple_reg_alloc (void)
 	    else if (emu_regs[i].type == REG_TYPE_FLOAT)
 	    {
 		emu_regs[i].native_reg = native_float_regs[fi++];
+		assert(alloced_float_regs[emu_regs[i].native_reg] == NO_REG);
 		alloced_float_regs[emu_regs[i].native_reg] = i;
 	    }
 	    else
@@ -941,6 +947,15 @@ alloc_native_reg_for_emu_reg (reg_t emu_reg, int current_insn_num)
     if (emu_regs[emu_reg].type == REG_TYPE_INTEGER)
     {
 	l = alloced_integer_regs[emu_regs[emu_reg].preferred_native_reg];
+
+	if (l == NO_REG)
+	{
+	    emu_regs[emu_reg].native_reg = emu_regs[emu_reg].preferred_native_reg;
+	    alloced_integer_regs[emu_regs[emu_reg].preferred_native_reg] = emu_reg;
+
+	    return;
+	}
+
 	assert(emu_regs[l].type == emu_regs[emu_reg].type);
 	assert(emu_regs[l].native_reg == emu_regs[emu_reg].preferred_native_reg);
 	if (emu_regs[l].locked || emu_regs[l].last_insn_num > current_insn_num)
@@ -993,7 +1008,7 @@ alloc_native_reg_for_emu_reg (reg_t emu_reg, int current_insn_num)
 }
 
 void
-finish_fragment (void)
+finish_fragment (unsigned char *preferred_alloced_integer_regs)
 {
     int i;
     int num_integer_regs = 0, num_float_regs = 0;
@@ -1030,8 +1045,25 @@ finish_fragment (void)
 
 	    emu_regs[i].dirty = 0;
 	    emu_regs[i].is_saved = DONT_KNOW;
+	    assert(emu_regs[i].native_reg == NO_REG);
 	}
     }
+
+    /*
+    if (preferred_alloced_integer_regs != 0)
+	for (i = 0; i < NUM_FREE_INTEGER_REGS; ++i)
+	    if (preferred_alloced_integer_regs[i] != ALLOCED_REG_NONE)
+	    {
+		reg_t reg = preferred_alloced_integer_regs[i] & ALLOCED_REG_REG_MASK;
+
+		assert(emu_regs[reg].type == REG_TYPE_INTEGER);
+		if (emu_regs[reg].used && emu_regs[reg].live_at_start)
+		{
+		    emu_regs[reg].native_reg = native_integer_regs[i];
+		    alloced_integer_regs[native_integer_regs[i]] = reg;
+		}
+	    }
+    */
 
 #ifdef DUMP_CODE
     printf("%d integer regs, %d float regs\n", num_integer_regs, num_float_regs);
@@ -1655,6 +1687,11 @@ init_compiler (interpreter_t *intp, interpreter_t *dbg_intp)
     add_const_64(0);		/* premature exits */
     add_const_64(0);		/* end exits */
     add_const_64(0);		/* emulated trace insns executed */
+#ifdef SYNC_BLOCKS
+    add_const_64(0);		/* empty sync blocks */
+    add_const_64(0);		/* standard sync blocks */
+    add_const_64(0);		/* custom sync blocks */
+#endif
 
     for (i = 0; i < NUM_INSNS; ++i)
     {
@@ -1753,9 +1790,25 @@ emit_const_add (int const_index, int amount, word_32 **lda_loc)
 
     emit(COMPOSE_LDQ(16, const_index * 4, CONSTANT_AREA_REG));
     if (lda_loc != 0)
-	*lda_loc = emit_loc;
+	*lda_loc = &fragment_insns[num_fragment_insns];
     emit(COMPOSE_LDA(16, amount, 16));
     emit(COMPOSE_STQ(16, const_index * 4, CONSTANT_AREA_REG));
+
+#ifdef COLLECT_STATS
+    ++num_const_adds;
+#endif
+}
+
+void
+direct_emit_const_add (int const_index, int amount, word_32 **lda_loc)
+{
+    assert(amount >= -32768 && amount < 32768);
+
+    direct_emit(COMPOSE_LDQ(16, const_index * 4, CONSTANT_AREA_REG));
+    if (lda_loc != 0)
+	*lda_loc = emit_loc;
+    direct_emit(COMPOSE_LDA(16, amount, 16));
+    direct_emit(COMPOSE_STQ(16, const_index * 4, CONSTANT_AREA_REG));
 
 #ifdef COLLECT_STATS
     ++num_const_adds;
@@ -1773,7 +1826,7 @@ unsigned long old_num_translated_insns;
 #endif
 
 word_64
-compile_basic_block (word_32 addr, int as_trace)
+compile_basic_block (word_32 addr, int as_trace, unsigned char *preferred_alloced_integer_regs)
 {
     word_64 native_addr;
 #ifdef COUNT_INSNS
@@ -1815,7 +1868,7 @@ compile_basic_block (word_32 addr, int as_trace)
 
     emit_direct_jump(addr);	/* this is not necessary if the jump at the end of the basic block was unconditional */
 
-    finish_fragment();
+    finish_fragment(preferred_alloced_integer_regs);
 
     flush_icache();
 
@@ -1918,7 +1971,7 @@ compile_trace (word_32 addr, int length, int bits)
 
     branch_profile_func = 0;
 
-    finish_fragment();
+    finish_fragment(0);
 
     flush_icache();
 
@@ -2011,7 +2064,7 @@ interpret_until_threshold (word_32 addr)
 	    ++entry->times_executed;
 	    if (entry->times_executed > COMPILER_THRESHOLD)
 	    {
-		entry->native_addr = compile_basic_block(compiler_intp->pc, 0);
+		entry->native_addr = compile_basic_block(compiler_intp->pc, 0, 0);
 		move_regs_interpreter_to_compiler(compiler_intp);
 		return entry->native_addr;
 	    }
@@ -2029,7 +2082,7 @@ interpret_until_threshold (word_32 addr)
 #endif
 
 word_64
-provide_fragment (word_32 addr)
+compile_fragment_if_needed (word_32 addr, unsigned char *preferred_alloced_integer_regs)
 {
     word_64 native_addr = lookup_fragment(addr);
 
@@ -2066,11 +2119,17 @@ provide_fragment (word_32 addr)
     return interpret_until_threshold(addr);
 #endif
 #else
-    native_addr = compile_basic_block(addr, 0);
+    native_addr = compile_basic_block(addr, 0, preferred_alloced_integer_regs);
     enter_fragment(addr, native_addr);
 
     return native_addr;
 #endif
+}
+
+word_64
+provide_fragment (word_32 addr)
+{
+    return compile_fragment_if_needed(addr, 0);
 }
 
 #ifdef SYNC_BLOCKS
@@ -2278,7 +2337,11 @@ provide_fragment_and_patch (word_64 jump_addr)
 #endif
 
 #ifndef COMPILER_THRESHOLD
+#ifdef SYNC_BLOCKS
+	native_addr = compile_fragment_if_needed(foreign_addr, unresolved_jumps[i].alloced_integer_regs);
+#else
 	native_addr = provide_fragment(foreign_addr);
+#endif
 #endif
 
 #ifdef SYNC_BLOCKS
@@ -2309,9 +2372,7 @@ provide_fragment_and_patch (word_64 jump_addr)
 		    break;
 
 	    if (j == NUM_FREE_FLOAT_REGS)
-	    {
 		sync = generate_sync_block(unresolved_jumps[i].alloced_integer_regs, entry->alloced_integer_regs, foreign_addr, native_addr);
-	    }
 	    else
 	    {
 		/* printf("float regs involved\n"); */
@@ -2319,16 +2380,36 @@ provide_fragment_and_patch (word_64 jump_addr)
 	    }
 
 	    if (sync == SYNC_BLOCK_NONE)
+	    {
+#ifdef COUNT_INSNS
+		direct_emit_const_add(EMPTY_SYNC_CONST, 1, 0);
+
+		*(word_32*)unresolved_jumps[i].start = compose_branch(unresolved_jumps[i].start, sync_block_start);
+		direct_emit(compose_branch((word_64)emit_loc, entry->synced_native_addr));
+#else
 		*(word_32*)unresolved_jumps[i].start = compose_branch(unresolved_jumps[i].start, entry->synced_native_addr);
+#endif
+	    }
 	    else if (sync == SYNC_BLOCK_STANDARD)
 	    {
 		jump_addr -= 8;
 
+#ifdef COUNT_INSNS
+		direct_emit_const_add(STANDARD_SYNC_CONST, 1, 0);
+
+		*(word_32*)jump_addr = compose_branch(jump_addr, sync_block_start);
+		direct_emit(compose_branch((word_64)emit_loc, entry->native_addr));
+#else
 		*(word_32*)jump_addr = compose_branch(jump_addr, native_addr);
+#endif
 	    }
 	    else
 	    {
 		assert(sync == SYNC_BLOCK_CUSTOM);
+
+#ifdef COUNT_INSNS
+		direct_emit_const_add(CUSTOM_SYNC_CONST, 1, 0);
+#endif
 
 		*(word_32*)unresolved_jumps[i].start = compose_branch(unresolved_jumps[i].start, sync_block_start);
 		direct_emit(compose_branch((word_64)emit_loc, entry->synced_native_addr));
@@ -2371,7 +2452,7 @@ compile_and_return_first_native_addr (word_32 addr, int regs_in_compiler)
     native_addr = interpret_until_threshold(addr);
 #endif
 #else
-    native_addr = compile_basic_block(addr, 0);
+    native_addr = compile_basic_block(addr, 0, 0);
 #endif
 
     return native_addr;
@@ -2441,6 +2522,11 @@ print_compiler_stats (void)
     printf("emulated block insns executed: %lu\n", get_const_64(EMULATED_INSNS_CONST));
     printf("emulated trace insns executed: %lu\n", get_const_64(EMULATED_TRACE_INSNS_CONST));
     printf("native block insns executed:   %lu\n", get_const_64(NATIVE_INSNS_CONST));
+#ifdef SYNC_BLOCKS
+    printf("empty sync blocks:             %lu\n", get_const_64(EMPTY_SYNC_CONST));
+    printf("standard sync blocks:          %lu\n", get_const_64(STANDARD_SYNC_CONST));
+    printf("custom sync blocks:            %lu\n", get_const_64(CUSTOM_SYNC_CONST));
+#endif
 #endif
 
 #ifdef COLLECT_STATS
