@@ -1135,7 +1135,6 @@ compute_liveness (interpreter_t *intp, word_32 addr)
     if (!can_jump_indirectly)
     {
 	int target;
-	word_32 dummy_target;
 
 	/* printf("checking out after branch\n"); */
 
@@ -1154,12 +1153,15 @@ compute_liveness (interpreter_t *intp, word_32 addr)
 	    for (i = num_block_insns; i < num_block_insns + MAX_AFTER_BRANCH_INSNS; ++i)
 	    {
 		int num_block_targets;
+		word_32 target;
 
 		block_insns[i].addr = intp->pc;
 
-		jump_analyze_i386_insn(intp, &num_block_targets, &dummy_target, &can_fall_through, &can_jump_indirectly);
+		jump_analyze_i386_insn(intp, &num_block_targets, &target, &can_fall_through, &can_jump_indirectly);
 
-		if (num_block_targets > 0 || can_jump_indirectly || !can_fall_through)
+		if (!can_jump_indirectly && !can_fall_through && num_block_targets == 1 && target != 0)
+		    intp->pc = target;
+		else if (num_block_targets > 0 || can_jump_indirectly || !can_fall_through)
 		{
 		    ++i;
 		    break;
