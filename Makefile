@@ -1,20 +1,27 @@
-EMU = I386
-#EMU = PPC
+#EMU = I386
+EMU = PPC
 #LOCATION = -DCOMPLANG
 
 #MODE = INTERPRETER
-#MODE = COMPILER
-MODE = DEBUGGER
+MODE = COMPILER
+#MODE = DEBUGGER
 #MODE = CROSSDEBUGGER
 
-#ARCH = -DARCH_ALPHA
+ARCH = -DARCH_ALPHA
 #ARCH = -DARCH_I386
-ARCH = -DARCH_PPC
-#ASM_OBJS = alpha_asm.o
-#COMPILER_OBJS = compiler.o
+#ARCH = -DARCH_PPC
+
+ASM_OBJS = alpha_asm.o
+#ASM_OBJS = ppc_asm.o
+
+COMPILER_OBJS = compiler.o
+
+#DIET = diet
+#LDOPTS = -Wl,-Ttext,0x60000000
+
 #DEFINES = -DUSE_HAND_TRANSLATOR -DCOLLECT_STATS -DDYNAMO_TRACES -DDYNAMO_THRESHOLD=50 -DSYNC_BLOCKS
 #-DDUMP_CODE
-#DEFINES = -DUSE_HAND_TRANSLATOR -DCOLLECT_STATS -DCOLLECT_LIVENESS
+DEFINES = -DUSE_HAND_TRANSLATOR -DCOLLECT_STATS -DCOLLECT_LIVENESS
 #-DDUMP_CODE
 #-DSYNC_BLOCKS
 #-DCOUNT_INSNS
@@ -25,9 +32,10 @@ ARCH = -DARCH_PPC
 # 
 #  -DFAST_PPC_FPR
 #  -DCOLLECT_PPC_FPR_STATS
+#DEFINES = -DUSE_HAND_TRANSLATOR -DDUMP_CODE
 #DEFINES =
 #DEFINES = -O -DPROFILE_LOOPS -DPROFILE_FRAGMENTS -DCOLLECT_STATS
-DEFINES = -DEMULATED_MEM
+#DEFINES = -DEMULATED_MEM
 #DEFINES = -DCOLLECT_STATS -DDUMP_CODE
 #DEFINES = -DCOLLECT_STATS -DPERIODIC_STAT_DUMP
 #DEFINES = -DDUMP_CODE
@@ -54,7 +62,7 @@ endif
 ifeq ($(EMU),I386)
 EMU_DEFS = -DEMU_I386 -DEMU_LITTLE_ENDIAN
 EMU_OBJS = i386.o
-COMPILER_OBJS += i386_add_rm32_simm8_compiler.o i386_add_rm32_r32_compiler.o \
+XXX_COMPILER_OBJS += i386_add_rm32_simm8_compiler.o i386_add_rm32_r32_compiler.o \
 		i386_inc_pr32_compiler.o i386_inc_rm32_compiler.o \
 		i386_lea_r32_rm32_compiler.o \
 		i386_mov_eax_moffs32_compiler.o i386_mov_moffs32_eax_compiler.o i386_mov_rm32_imm32_compiler.o i386_mov_rm32_r32_compiler.o \
@@ -88,43 +96,47 @@ CFLAGS = $(MODE_DEFS) $(DEFINES) $(ARCH) $(EMU_DEFS) $(LOCATION)
 all : bintrans dump_liveness
 
 bintrans : ppc.o mm.o fragment_hash.o loops.o liveness.o lispreader.o $(OBJS)
-	gcc -o bintrans ppc.o mm.o fragment_hash.o loops.o liveness.o lispreader.o $(OBJS)
+	$(DIET) gcc $(LDOPTS) -o bintrans ppc.o mm.o fragment_hash.o loops.o liveness.o lispreader.o $(OBJS)
+#	gcc -o bintrans ppc.o mm.o fragment_hash.o loops.o liveness.o lispreader.o $(OBJS)
 
 dump_liveness : dump_liveness.c bintrans.h compiler.h
-	gcc $(CFLAGS) -Wall -o dump_liveness dump_liveness.c
+	$(DIET) gcc $(CFLAGS) -Wall -o dump_liveness dump_liveness.c
 
 ppc.o : ppc.c ppc_interpreter.c ppc_disassembler.c alpha_types.h bintrans.h
-	gcc $(CFLAGS) -Wall -g -c ppc.c
+	$(DIET) gcc $(CFLAGS) -Wall -g -c ppc.c
 
 i386.o : i386.c i386_interpreter.c i386_disassembler.c i386_livenesser.c bintrans.h
-	gcc $(CFLAGS) -Wall -g -c i386.c
+	$(DIET) gcc $(CFLAGS) -Wall -g -c i386.c
 
-compiler.o : compiler.c alpha_composer.h ppc_compiler.c ppc_to_alpha_compiler.c ppc_jump_analyzer.c i386_compiler.c alpha_disassembler.c alpha_types.h bintrans.h fragment_hash.h compiler.h
-	gcc $(CFLAGS) -Wall -g -c compiler.c
+compiler.o : compiler.c alpha_composer.h ppc_to_alpha_compiler.c ppc_jump_analyzer.c i386_compiler.c i386_to_ppc_compiler.c alpha_disassembler.c alpha_types.h bintrans.h fragment_hash.h compiler.h
+	$(DIET) gcc $(CFLAGS) -Wall -g -c compiler.c
 
 mm.o : mm.c bintrans.h alpha_types.h ppc_defines.h
-	gcc $(CFLAGS) -Wall -g -c mm.c
+	$(DIET) gcc $(CFLAGS) -Wall -g -c mm.c
 
 unaligned.o : unaligned.c bintrans.h compiler.h
-	gcc $(CFLAGS) -Wall -g -c unaligned.c
+	$(DIET) gcc $(CFLAGS) -Wall -g -c unaligned.c
 
 fragment_hash.o : fragment_hash.c fragment_hash.h bintrans.h
-	gcc $(CFLAGS) -Wall -g -c fragment_hash.c
+	$(DIET) gcc $(CFLAGS) -Wall -g -c fragment_hash.c
 
 loops.o : loops.c fragment_hash.h bintrans.h compiler.h
-	gcc $(CFLAGS) -Wall -g -c loops.c
+	$(DIET) gcc $(CFLAGS) -Wall -g -c loops.c
 
 liveness.o : liveness.c bintrans.h
-	gcc $(CFLAGS) -Wall -g -c liveness.c
+	$(DIET) gcc $(CFLAGS) -Wall -g -c liveness.c
 
 lispreader.o : lispreader.c lispreader.h
-	gcc $(CFLAGS) -I. -Wall -g -c lispreader.c
+	$(DIET) gcc $(CFLAGS) -I. -Wall -g -c lispreader.c
 
 alpha_asm.o : alpha_asm.S Makefile
-	gcc $(MODE_DEFS) $(DEFINES) $(EMU_DEFS) -g -c alpha_asm.S
+	$(DIET) gcc $(MODE_DEFS) $(DEFINES) $(EMU_DEFS) -g -c alpha_asm.S
+
+ppc_asm.o : ppc_asm.S Makefile
+	$(DIET) gcc $(MODE_DEFS) $(DEFINES) $(EMU_DEFS) -g -c ppc_asm.S
 
 i386_%_compiler.o : i386_%_compiler.c bintrans.h alpha_composer.h
-	gcc $(CFLAGS) -g -c $<
+	$(DIET) gcc $(CFLAGS) -g -c $<
 
 elfer : elfer.c
 	gcc -o elfer elfer.c

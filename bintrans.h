@@ -293,5 +293,16 @@ void init_loops (void);
 #error no interpreter specified
 #endif
 
+#if defined(ARCH_ALPHA)
+#define disassemble_target_insn               disassemble_alpha_insn
+#elif defined(ARCH_PPC)
+#define disassemble_target_insn               disassemble_ppc_insn
+#else
+#error unsupported target architecture
+#endif
+
 #define swap_16(x)           (((word_16)(x) >> 8) | (((word_16)(x) & 0xff) << 8))
 #define swap_32(x)           (((word_32)swap_16((x)) << 16) | (word_32)swap_16((word_32)(x) >> 16))
+
+#define SEX16(x,w)  ((((x)&(1<<((w)-1))) ? ((0xffff<<(w))|(x)) : (x)) & 0xffff)
+#define SEX32(x,w)  (((x)&(1<<((w)-1))) ? ((0xffffffff<<(w))|(x)) : (x))

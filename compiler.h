@@ -3,7 +3,7 @@
  *
  * bintrans
  *
- * Copyright (C) 2001 Mark Probst
+ * Copyright (C) 2001,2002 Mark Probst
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -21,9 +21,9 @@
  */
 
 #define MAX_CODE_INSNS        700000
+#define MAX_TRACE_INSNS          512
 #ifdef DYNAMO_TRACES
 #define MAX_ALT_CODE_INSNS    300000
-#define MAX_DYNAMO_TRACE         128
 #else
 #define MAX_ALT_CODE_INSNS         0
 #endif
@@ -77,7 +77,6 @@ void compare_register_sets (void);
 #ifdef EMU_I386
 typedef struct
 {
-    word_32 addr;
     word_32 flags_live;
     word_32 flags_killed;
 } i386_insn_t;
@@ -85,38 +84,42 @@ typedef struct
 #define MAX_BLOCK_INSNS          1024
 #define MAX_AFTER_BRANCH_INSNS     30
 
-extern i386_insn_t block_insns[MAX_BLOCK_INSNS + MAX_AFTER_BRANCH_INSNS];
-extern int num_block_insns;
+extern i386_insn_t block_insns[MAX_TRACE_INSNS + MAX_AFTER_BRANCH_INSNS];
 
-void compute_liveness (interpreter_t *intp, word_32 addr);
-void print_liveness (interpreter_t *intp);
+int compute_liveness (interpreter_t *intp, word_32 addr, word_32 *addrs);
+void print_liveness (interpreter_t *intp, word_32 *addrs, int num_block_insns);
 #endif
 
-#if defined(EMU_PPC) && defined(DYNAMO_TRACES)
+#if defined(EMU_PPC)
 typedef struct
 {
     word_32 live_cr;
     word_32 live_xer;
+    word_32 live_gpr;
     word_32 killed_cr;
     word_32 killed_xer;
+    word_32 killed_gpr;
 } ppc_insn_t;
 
-extern ppc_insn_t block_insns[MAX_DYNAMO_TRACE];
+extern ppc_insn_t block_insns[MAX_TRACE_INSNS];
 
+int compute_iterative_liveness (interpreter_t *intp, word_32 addr, word_32 *addrs, word_32 *live_cr, word_32 *live_xer, word_32 *live_gpr);
+
+#if defined(DYNAMO_TRACES)
 void compute_liveness_for_trace (interpreter_t *intp, word_32 *addrs, int length);
 #endif
-#if defined(EMU_PPC) && defined(COLLECT_LIVENESS)
-void compute_iterative_liveness (interpreter_t *intp, word_32 addr, word_32 *live_cr, word_32 *live_xer, word_32 *live_gpr);
+#if defined(COLLECT_LIVENESS)
 void load_liveness_info (void);
 void save_liveness_info (void);
+#endif
 #endif
 
 /* ppc_compiler.c */
 void compile_ppc_insn (word_32 insn, word_32 pc, int optimize_taken_jump, label_t taken_jump_label);
 
-word_64 compile_basic_block (word_32 addr, int as_trace, unsigned char *preferred_alloced_integer_regs);
-word_64 compile_trace (word_32 addr, int length, int bits);
-word_64 compile_dynamo_trace (word_32 *addrs, int length);
+addr_t compile_basic_block (word_32 addr, int as_trace, unsigned char *preferred_alloced_integer_regs);
+addr_t compile_loop_trace (word_32 addr, int length, int bits);
+addr_t compile_trace (word_32 *addrs, int length, unsigned char *preferred_alloced_integer_regs);
 
 /* ppc_to_alpha_compiler.c */
 void compile_to_alpha_ppc_insn (word_32 insn, word_32 pc, int optimize_taken_jump, label_t taken_jump_label, word_32 next_pc,
@@ -132,4 +135,7 @@ void liveness_ppc_insn (word_32 insn, word_32 pc,
 			word_32 *_live_GPR, word_32 *_killed_GPR);
 
 /* ppc_killer.c */
-void kill_ppc_insn (word_32 insn, word_32 pc, word_32 *_killed_CR, word_32 *_killed_XER);
+void kill_ppc_insn (word_32 insn, word_32 pc, word_32 *_killed_CR, word_32 *_killed_XER, word_32 *_killed_GPR);
+
+/* ppc_consumer.c */
+void consume_ppc_insn (word_32 insn, word_32 pc, word_32 *_consumed_CR, word_32 *_consumed_XER, word_32 *_consumed_GPR);

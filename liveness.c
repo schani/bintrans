@@ -28,11 +28,10 @@
 #include "fragment_hash.h"
 
 #ifdef EMU_I386
-i386_insn_t block_insns[MAX_BLOCK_INSNS + MAX_AFTER_BRANCH_INSNS];
-int num_block_insns = 0;
+i386_insn_t block_insns[MAX_TRACE_INSNS + MAX_AFTER_BRANCH_INSNS];
 
-void
-compute_liveness (interpreter_t *intp, word_32 addr)
+int
+compute_liveness (interpreter_t *intp, word_32 addr, word_32 *addrs)
 {
     word_32 old_pc = intp->pc;
     word_32 live;
@@ -40,6 +39,7 @@ compute_liveness (interpreter_t *intp, word_32 addr)
     int num_targets;
     word_32 targets[2];
     int can_fall_through, can_jump_indirectly;
+    int num_block_insns;
 
     num_block_insns = 0;
 
@@ -47,7 +47,7 @@ compute_liveness (interpreter_t *intp, word_32 addr)
 
     while (num_block_insns < MAX_BLOCK_INSNS)
     {
-	block_insns[num_block_insns++].addr = intp->pc;
+	addrs[num_block_insns++] = intp->pc;
 
 	jump_analyze_i386_insn(intp, &num_targets, targets, &can_fall_through, &can_jump_indirectly);
 
@@ -80,7 +80,7 @@ compute_liveness (interpreter_t *intp, word_32 addr)
 		int num_block_targets;
 		word_32 target;
 
-		block_insns[i].addr = intp->pc;
+		addrs[i] = intp->pc;
 
 		jump_analyze_i386_insn(intp, &num_block_targets, &target, &can_fall_through, &can_jump_indirectly);
 
@@ -95,7 +95,7 @@ compute_liveness (interpreter_t *intp, word_32 addr)
 
 	    for (--i; i >= num_block_insns; --i)
 	    {
-		intp->pc = block_insns[i].addr;
+		intp->pc = addrs[i];
 		liveness_i386_insn(intp, &block_live, &dummy);
 	    }
 
@@ -107,21 +107,113 @@ compute_liveness (interpreter_t *intp, word_32 addr)
 
     for (i = num_block_insns - 1; i >= 0; --i)
     {
-	intp->pc = block_insns[i].addr;
+	intp->pc = addrs[i];
 	liveness_i386_insn(intp, &live, &block_insns[i].flags_killed);
 	block_insns[i].flags_live = live;
     }
 
     intp->pc = old_pc;
+
+    return num_block_insns;
 }
 
 void
-print_liveness (interpreter_t *intp)
+print_liveness (interpreter_t *intp, word_32 *addrs, int num_block_insns)
 {
     int i;
 
     for (i = 0; i < num_block_insns; ++i)
-	printf("0x%08x   0x%08x 0x%08x\n", block_insns[i].addr, block_insns[i].flags_live, block_insns[i].flags_killed);
+	printf("0x%08x   0x%08x 0x%08x\n", addrs[i], block_insns[i].flags_live, block_insns[i].flags_killed);
+}
+#endif
+
+#ifdef EMU_PPC
+#include "ppc_livenesser.c"
+
+ppc_insn_t block_insns[MAX_TRACE_INSNS];
+
+int
+compute_iterative_liveness (interpreter_t *intp, word_32 addr, word_32 *addrs, word_32 *live_cr, word_32 *live_xer, word_32 *live_gpr)
+{
+    word_32 last_addr;
+    int can_fall_through, can_jump_indirectly;
+    int num_targets;
+    word_32 target;
+    int length, i;
+
+    last_addr = addr;
+    length = 0;
+    for (;;)
+    {
+	jump_analyze_ppc_insn(mem_get_32(intp, last_addr), last_addr, &num_targets, &target, &can_fall_through, &can_jump_indirectly);
+
+	assert(length < MAX_TRACE_INSNS);
+
+	addrs[length++] = last_addr;
+	last_addr += 4;
+
+	if (num_targets > 0 || !can_fall_through || can_jump_indirectly)
+	    break;
+    }
+
+#ifdef COLLECT_LIVENESS
+    if (can_jump_indirectly)
+	*live_cr = *live_xer = *live_gpr = 0xffffffff;
+    else
+    {
+	fragment_hash_entry_t *entry;
+	fragment_hash_supplement_t *supplement;
+
+	if (can_fall_through)
+	{
+	    entry = fragment_hash_get(last_addr + 4, &supplement);
+	    if (entry == 0)
+		*live_cr = *live_xer = *live_gpr = 0xffffffff;
+	    else
+	    {
+		*live_cr = supplement->live_cr;
+		*live_xer = supplement->live_xer;
+		*live_gpr = supplement->live_gpr;
+	    }
+	}
+	else
+	{
+	    *live_cr = *live_xer = *live_gpr = 0;
+
+	    assert(num_targets > 0);
+	}
+
+	if (num_targets > 0)
+	{
+	    assert(num_targets == 1);
+
+	    entry = fragment_hash_get(target, &supplement);
+
+	    if (entry == 0)
+		*live_cr = *live_xer = *live_gpr = 0xffffffff;
+	    else
+	    {
+		*live_cr |= supplement->live_cr;
+		*live_xer |= supplement->live_xer;
+		*live_gpr |= supplement->live_gpr;
+	    }
+	}
+    }
+
+    for (i = length - 1; i >= 0; --i)
+    {
+	liveness_ppc_insn(mem_get_32(intp, addrs[i]), addrs[i],
+			  live_cr, &block_insns[i].killed_cr,
+			  live_xer, &block_insns[i].killed_xer,
+			  live_gpr, &block_insns[i].killed_gpr);
+
+	block_insns[i].live_cr = *live_cr;
+	block_insns[i].live_xer = *live_xer;
+	block_insns[i].live_gpr = *live_gpr;
+    }
+#endif
+
+    return length;
 }
 #endif
 
@@ -129,8 +221,6 @@ print_liveness (interpreter_t *intp)
 #include "ppc_consumer.c"
 
 #define MAX_ALT_DEPTH          40
-
-ppc_insn_t block_insns[MAX_DYNAMO_TRACE];
 
 void
 compute_limited_liveness (interpreter_t *intp, word_32 pc, int max_depth, word_32 *live_cr, word_32 *live_xer)
@@ -262,80 +352,6 @@ compute_liveness_for_trace (interpreter_t *intp, word_32 *addrs, int length)
 #endif
 
 #if defined(EMU_PPC) && defined(COLLECT_LIVENESS)
-void
-compute_iterative_liveness (interpreter_t *intp, word_32 addr, word_32 *live_cr, word_32 *live_xer, word_32 *live_gpr)
-{
-    word_32 last_addr;
-    int can_fall_through, can_jump_indirectly;
-    int num_targets;
-    word_32 target;
-
-    last_addr = addr;
-    for (;;)
-    {
-	jump_analyze_ppc_insn(mem_get_32(intp, last_addr), last_addr, &num_targets, &target, &can_fall_through, &can_jump_indirectly);
-
-	if (num_targets > 0 || !can_fall_through || can_jump_indirectly)
-	    break;
-
-	last_addr += 4;
-    }
-
-    if (can_jump_indirectly)
-	*live_cr = *live_xer = *live_gpr = 0xffffffff;
-    else
-    {
-	fragment_hash_entry_t *entry;
-	fragment_hash_supplement_t *supplement;
-
-	if (can_fall_through)
-	{
-	    entry = fragment_hash_get(last_addr + 4, &supplement);
-	    if (entry == 0)
-		*live_cr = *live_xer = *live_gpr = 0xffffffff;
-	    else
-	    {
-		*live_cr = supplement->live_cr;
-		*live_xer = supplement->live_xer;
-		*live_gpr = supplement->live_gpr;
-	    }
-	}
-	else
-	{
-	    *live_cr = *live_xer = *live_gpr = 0;
-
-	    assert(num_targets > 0);
-	}
-
-	if (num_targets > 0)
-	{
-	    assert(num_targets == 1);
-
-	    entry = fragment_hash_get(target, &supplement);
-
-	    if (entry == 0)
-		*live_cr = *live_xer = *live_gpr = 0xffffffff;
-	    else
-	    {
-		*live_cr |= supplement->live_cr;
-		*live_xer |= supplement->live_xer;
-		*live_gpr |= supplement->live_gpr;
-	    }
-	}
-    }
-
-    for (;;)
-    {
-	word_32 killed_cr, killed_xer, killed_gpr;
-
-	liveness_ppc_insn(mem_get_32(intp, last_addr), last_addr, live_cr, &killed_cr, live_xer, &killed_xer, live_gpr, &killed_gpr);
-
-	if (last_addr == addr)	/* why don't we first decrement last_addr and then check last_addr < addr?  answer: addr might be 0.  */
-	    break;
-
-	last_addr -= 4;
-    }
-}
 
 typedef struct
 {

@@ -34,7 +34,7 @@
 
 #ifdef DYNAMO_TRACES
 int current_dynamo_trace_length;
-word_32 current_dynamo_trace[MAX_DYNAMO_TRACE];
+word_32 current_dynamo_trace[MAX_TRACE_INSNS];
 extern fragment_hash_supplement_t fragment_entry_supplement;
 #endif
 
@@ -152,7 +152,7 @@ compile_block_or_trace (fragment_hash_entry_t *entry)
     else
     {
 	printf("compiling trace at %08x with length %d, bits %x\n", entry->foreign_addr, best_length, best_bits);
-	return entry->native_addr = compile_trace(entry->foreign_addr, best_length, best_bits);
+	return entry->native_addr = compile_loop_trace(entry->foreign_addr, best_length, best_bits);
     }
 }
 #endif
@@ -483,7 +483,7 @@ dynamo_runner (word_32 addr)
 
 		    collect_dynamo_trace(compiler_intp);
 
-		    native_addr = compile_dynamo_trace(current_dynamo_trace, current_dynamo_trace_length);
+		    native_addr = compile_trace(current_dynamo_trace, current_dynamo_trace_length);
 
 		    if (fragment_hash_get(foreign_addr, &dummy) == 0) /* cache flush */
 		    {

@@ -86,8 +86,6 @@
 #define SPR_CTR     3
 #define SPR_FPSCR   4
 
-#define SEX32(x,w)  (((x)&(1<<((w)-1))) ? ((0xffffffff<<(w))|(x)) : (x))
-
 #define ref_ppc_spr_r(x)        ref_integer_reg_for_reading(x)
 #define ref_ppc_spr_w(x)        ref_integer_reg_for_writing(x)
 #define ref_ppc_spr_rw(x)       ref_integer_reg_for_reading_and_writing(x)
@@ -112,10 +110,10 @@
 #define ref_ppc_xer_ca_w()      ref_integer_reg_for_writing(1 + 5 + 32 + 32 + 4)
 #define ref_ppc_xer_ca_rw()     ref_integer_reg_for_reading_and_writing(1 + 5 + 32 + 32 + 4)
 
-#define KILL_GPR(x)             1
+#define KILL_GPR(x)             (kill_gpr & (1 << (x)))
 #define KILL_FPR(x)             1
-#define KILL_CRFB(x)            1 /* (kill_cr & (1 << (31 - (x)))) */
-#define KILL_XER_CA             1 /* (kill_xer & (1 << 29)) */
+#define KILL_CRFB(x)            (kill_cr & (1 << (31 - (x))))
+#define KILL_XER_CA             (kill_xer & (1 << 29))
 
 #define SCRATCH_OFFSET   ((5+32+32+4+2)*8)
 
@@ -4936,10 +4934,6 @@ compile_to_alpha_ppc_insn (word_32 insn, word_32 pc, int _optimize_taken_jump, l
 
 #ifdef COLLECT_STATS
     ++num_translated_insns;
-#endif
-
-#ifndef DYNAMO_TRACES
-    assert(next_pc == NO_FOREIGN_ADDR);
 #endif
 
     switch (((insn >> 26) & 0x3F)) {

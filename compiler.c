@@ -37,8 +37,15 @@
 #include "compiler.h"
 #include "fragment_hash.h"
 
+#if defined(ARCH_ALPHA)
 #include "alpha_composer.h"
 #include "alpha_disassembler.c"
+#elif defined(ARCH_PPC)
+#include "ppc_composer.h"
+#include "ppc_disassembler.c"
+#else
+#error unsupported target architecture
+#endif
 
 #define MAX_LABELS             128
 #define MAX_BACKPATCHES          8
@@ -54,10 +61,17 @@
 
 #define NUM_AFTER_JUMP_INSN_SLOTS         0
 
+#if defined(ARCH_ALPHA)
 #define JUMP_TARGET_REG        16
 #define RETURN_ADDR_REG        26
 #define CONSTANT_AREA_REG      27
 #define PROCEDURE_VALUE_REG    27
+#elif defined(ARCH_PPC)
+#define JUMP_TARGET_REG         3
+#define CONSTANT_AREA_REG      31
+#else
+#error unsupported target architecture
+#endif
 
 #define NUM_REG_CONSTANTS          (NUM_EMU_REGISTERS * 2 + 2) /* registers + scratch area */
 
@@ -103,15 +117,33 @@ typedef struct
     int end;
 } reg_range_t;
 
+#if defined(ARCH_ALPHA)
 #if defined(EMU_PPC)
+#define NEED_REGISTER_ALLOCATOR
 reg_range_t integer_reg_range[] = { { 4, 16 }, { 18, 26 }, { 0, 0 } };
 #elif defined(EMU_I386)
-reg_range_t integer_reg_range[] = { { 15, 16 }, { 18, 26 }, { 0, 0 } };
+/* reg_range_t integer_reg_range[] = { { 15, 16 }, { 18, 26 }, { 0, 0 } }; */
 #define FIRST_NATIVE_INTEGER_HOST_REG           1
 #define NUM_NATIVE_INTEGER_HOST_REGS           14 /* FIXME: this should be in the machine definition (NUM_INTEGER_EMU_REGISTERS) */
 #endif
 #define FIRST_TMP_INTEGER_REG   1
 #define NUM_TMP_INTEGER_REGS    3
+#elif defined(ARCH_PPC)
+#if defined(EMU_I386)
+#define FIRST_NATIVE_INTEGER_HOST_REG          14
+#define NUM_NATIVE_INTEGER_HOST_REGS            8
+#else
+#error unsupported foreign architecture
+#endif
+#define FIRST_TMP_INTEGER_REG                  10
+#define NUM_TMP_INTEGER_REGS                    3
+#else
+#error unsupported target architecture
+#endif
+
+#ifndef NEED_REGISTER_ALLOCATOR
+#define note_insn_reg(a,b)
+#endif
 
 #if defined(EMU_PPC) && defined(FAST_PPC_FPR)
 #define FIRST_FLOAT_REG        28
@@ -122,8 +154,10 @@ reg_range_t integer_reg_range[] = { { 15, 16 }, { 18, 26 }, { 0, 0 } };
 #define FIRST_TMP_FLOAT_REG     1
 #define NUM_TMP_FLOAT_REGS      1
 
+#ifdef NEED_REGISTER_ALLOCATOR
 int native_integer_regs[NUM_FREE_INTEGER_REGS];
 int native_float_regs[NUM_FREE_FLOAT_REGS];
+#endif
 
 #define REG_TYPE_INTEGER        1
 #define REG_TYPE_FLOAT          2
@@ -145,24 +179,6 @@ typedef struct
 } tmp_register_t;
 
 #define DONT_KNOW           -1
-
-typedef struct
-{
-    int type;
-    int used;
-    int locked;
-    int dirty;
-    int first_insn_num;
-    int last_insn_num;
-    int live_at_start;
-    int live_at_end;
-    int is_saved;
-#ifdef DYNAMO_TRACES
-    int is_saved_freeze;
-#endif
-    reg_t preferred_native_reg;
-    reg_t native_reg;
-} emu_register_t;
 
 #define REG_LOCK_READ         1
 #define REG_LOCK_WRITE        2
@@ -208,10 +224,10 @@ typedef struct
 
 typedef struct
 {
-    word_64 addr;
+    addr_t addr;
     word_32 target;
 #ifdef SYNC_BLOCKS
-    word_64 start;
+    addr_t start;
     unsigned char alloced_integer_regs[NUM_FREE_INTEGER_REGS];
     unsigned char alloced_float_regs[NUM_FREE_FLOAT_REGS];
 #endif
@@ -247,8 +263,10 @@ int num_fragment_emu_insns;
 reg_lock_t reg_locks[MAX_REG_LOCKS];
 int num_reg_locks;
 
+#ifdef NEED_REGISTER_ALLOCATOR
 reg_field_t reg_fields[MAX_REG_FIELDS];
 int num_reg_fields;
+#endif
 
 label_info_t label_infos[MAX_LABELS];
 int num_labels;
@@ -275,15 +293,35 @@ word_32 constant_area[NUM_EMU_REGISTERS * 2 + 2 + MAX_CONSTANTS] __attribute__ (
 tmp_register_t tmp_integer_regs[NUM_TMP_INTEGER_REGS];
 tmp_register_t tmp_float_regs[NUM_TMP_FLOAT_REGS];
 
+#ifdef NEED_REGISTER_ALLOCATOR
+typedef struct
+{
+    int type;
+    int used;
+    int locked;
+    int dirty;
+    int first_insn_num;
+    int last_insn_num;
+    int live_at_start;
+    int live_at_end;
+    int is_saved;
+#ifdef DYNAMO_TRACES
+    int is_saved_freeze;
+#endif
+    reg_t preferred_native_reg;
+    reg_t native_reg;
+} emu_register_t;
+
 emu_register_t emu_regs[NUM_EMU_REGISTERS];
 
 reg_t alloced_integer_regs[NUM_NATIVE_INTEGER_REGS];
 reg_t alloced_float_regs[NUM_NATIVE_FLOAT_REGS];
 
+int all_regs_must_be_saved;
+#endif
+
 int have_jumped = 0;
 int generated_insn_index;
-
-int all_regs_must_be_saved;
 
 interpreter_t *compiler_intp = 0;
 #ifdef CROSSDEBUGGER
@@ -367,6 +405,7 @@ start_emu_insn (int type, word_32 addr)
     ++num_fragment_emu_insns;
 }
 
+#ifdef NEED_REGISTER_ALLOCATOR
 void
 emit_store_regs (int follow_type, word_32 addr)
 {
@@ -387,43 +426,44 @@ note_insn_reg (reg_t reg, int shift)
 
     ++num_reg_fields;
 }
+#endif
 
 void
-disassemble_alpha_code (word_64 start, word_64 end)
+disassemble_target_code (addr_t start, addr_t end)
 {
-    word_64 x;
+    addr_t x;
 
     for (x = start; x < end; x += 4)
     {
 	printf("%016lx  ", x);
-	disassemble_alpha_insn(*(word_32*)x, x);
+	disassemble_target_insn(*(word_32*)x, x);
 	printf("\n");
     }
 }
 
 void
-dump_fragment_code (word_64 start, word_64 end, word_64 alt_start, word_64 alt_end)
+dump_fragment_code (word_32 *addrs, addr_t start, addr_t end, addr_t alt_start, addr_t alt_end)
 {
 #ifdef DUMP_CODE
     int i;
-    word_64 index = start;
-    word_64 alt_index = alt_start;
+    addr_t index = start;
+    addr_t alt_index = alt_start;
     int in_alt = 0;
 
     for (i = 0; i < num_fragment_emu_insns; ++i)
     {
-	word_64 last;
+	addr_t last;
 
 	printf("++++++++++++++++\n");
 
 	switch (fragment_emu_insns[i].type)
 	{
 	    case EMU_INSN_INSN :
-		printf("%08x  ", fragment_emu_insns[i].addr);
+		printf("%08x  ", addrs[fragment_emu_insns[i].addr]);
 #if defined(EMU_PPC)
-		disassemble_ppc_insn(mem_get_32(compiler_intp, fragment_emu_insns[i].addr), fragment_emu_insns[i].addr);
+		disassemble_ppc_insn(mem_get_32(compiler_intp, addrs[fragment_emu_insns[i].addr]), addrs[fragment_emu_insns[i].addr]);
 #elif defined(EMU_I386)
-		compiler_intp->pc = fragment_emu_insns[i].addr;
+		compiler_intp->pc = addrs[fragment_emu_insns[i].addr];
 		disassemble_i386_insn(compiler_intp);
 		printf("       0x%08x", block_insns[i - 1].flags_killed);
 #endif
@@ -434,7 +474,7 @@ dump_fragment_code (word_64 start, word_64 end, word_64 alt_start, word_64 alt_e
 		break;
 
 	    case EMU_INSN_STORE_REGS :
-		printf("store regs");
+		printf("store regs (%08x)", fragment_emu_insns[i].addr);
 		break;
 
 	    case EMU_INSN_CONTINUE :
@@ -503,7 +543,7 @@ dump_fragment_code (word_64 start, word_64 end, word_64 alt_start, word_64 alt_e
 	    }
 	}
 
-	disassemble_alpha_code(in_alt ? alt_index : index, last);
+	disassemble_target_code(in_alt ? alt_index : index, last);
 
 	if (!in_alt)
 	    index = last;
@@ -568,6 +608,7 @@ direct_emit (word_32 insn)
     }
 }
 
+#ifdef ARCH_ALPHA
 void
 load_reg (reg_t native_reg, reg_t foreign_reg)
 {
@@ -611,7 +652,9 @@ store_reg (reg_t native_reg, reg_t foreign_reg)
 	    assert(0);
     }
 }
+#endif
 
+#ifdef NEED_REGISTER_ALLOCATOR
 reg_t
 ref_reg (int foreign_reg, int reading, int writing, int type)
 {
@@ -685,6 +728,7 @@ unref_reg (reg_t reg)
 	++num_reg_locks;
     }
 }
+#endif
 
 reg_t
 ref_integer_reg (int foreign_reg, int reading, int writing)
@@ -702,12 +746,13 @@ void
 unref_integer_reg (reg_t reg)
 {
 #ifdef EMU_I386
-    assert(reg > FIRST_NATIVE_INTEGER_HOST_REG && reg < FIRST_NATIVE_INTEGER_HOST_REG + NUM_NATIVE_INTEGER_HOST_REGS);
+    assert(reg >= FIRST_NATIVE_INTEGER_HOST_REG && reg < FIRST_NATIVE_INTEGER_HOST_REG + NUM_NATIVE_INTEGER_HOST_REGS);
 #else
     unref_reg(reg);
 #endif
 }
 
+#ifdef NEED_REGISTER_ALLOCATOR
 reg_t
 ref_float_reg (int foreign_reg, int reading, int writing)
 {
@@ -739,12 +784,15 @@ unref_float_reg (reg_t reg)
     unref_reg(reg);
 #endif
 }
+#endif
 
+#ifdef NEED_REGISTER_ALLOCATOR
 void
 set_all_regs_must_be_saved (void)
 {
     all_regs_must_be_saved = 1;
 }
+#endif
 
 reg_t
 alloc_tmp_reg (tmp_register_t *tmp_regs, int num_regs)
@@ -791,6 +839,17 @@ free_tmp_integer_reg (reg_t native_reg)
     free_tmp_reg(tmp_integer_regs, NUM_TMP_INTEGER_REGS, native_reg);
 }
 
+int
+is_tmp_integer_reg (reg_t reg)
+{
+    int i;
+
+    for (i = 0; i < NUM_TMP_INTEGER_REGS; ++i)
+	if (tmp_integer_regs[i].native_reg == reg)
+	    return 1;
+    return 0;
+}
+
 reg_t
 alloc_tmp_float_reg (void)
 {
@@ -803,6 +862,7 @@ free_tmp_float_reg (reg_t native_reg)
     free_tmp_reg(tmp_float_regs, NUM_TMP_FLOAT_REGS, native_reg);
 }
 
+#if defined(ARCH_ALPHA)
 void
 emit_load_integer_32 (reg_t reg, word_32 val)
 {
@@ -825,7 +885,26 @@ emit_load_integer_32 (reg_t reg, word_32 val)
 #endif
     }
 }
+#elif defined(ARCH_PPC)
+void
+emit_load_integer_32 (reg_t reg, word_32 val)
+{
+    if ((val >> 15) == 0 || (val >> 15) == 0x1ffff)
+	emit(COMPOSE_LI(reg, val & 0xffff));
+    else if ((val & 0xffff) == 0)
+	emit(COMPOSE_LIS(reg, val >> 16));
+    else
+    {
+	emit(COMPOSE_LIS(reg, val >> 16));
+	emit(COMPOSE_ORI(reg, reg, val & 0xffff));
+    }
+    
+}
+#else
+#error unsupported target architecture
+#endif
 
+#ifdef ARCH_ALPHA
 void
 emit_load_integer_64 (reg_t reg, word_64 val)
 {
@@ -863,6 +942,7 @@ emit_load_integer_64 (reg_t reg, word_64 val)
 	*/
     }
 }
+#endif
 
 label_t
 alloc_label (void)
@@ -991,9 +1071,18 @@ emit_direct_jump (word_32 target)
     if (branch_profile_func != 0)
 	branch_profile_func();
 
+#if defined(ARCH_ALPHA)
     emit(COMPOSE_LDQ(PROCEDURE_VALUE_REG, DIRECT_DISPATCHER_CONST * 4, CONSTANT_AREA_REG));
     emit(COMPOSE_JMP(RETURN_ADDR_REG, PROCEDURE_VALUE_REG));
     emit(target);
+#elif defined(ARCH_PPC)
+    emit(COMPOSE_LWZ(0, DIRECT_DISPATCHER_CONST * 4, CONSTANT_AREA_REG));
+    emit(COMPOSE_MTLR(0));
+    emit(COMPOSE_BLR());
+    emit(target);
+#else
+#error unsupported target architecture
+#endif
 
 #ifdef SYNC_BLOCKS
     assert(num_fragment_unresolved_jumps < MAX_FRAGMENT_UNRESOLVED_JUMPS);
@@ -1016,10 +1105,20 @@ emit_indirect_jump (void)
     if (branch_profile_func != 0)
 	branch_profile_func();
 
+#if defined(ARCH_ALPHA)
     /* we assume that the target address is already in $7 */
 
     emit(COMPOSE_LDQ(PROCEDURE_VALUE_REG, INDIRECT_DISPATCHER_CONST * 4, CONSTANT_AREA_REG));
     emit(COMPOSE_JMP(0, PROCEDURE_VALUE_REG)); /* FIXME: should be 31! */
+#elif defined(ARCH_PPC)
+    /* we assume that the target address is already in r3 */
+
+    emit(COMPOSE_LWZ(0, INDIRECT_DISPATCHER_CONST * 4, CONSTANT_AREA_REG));
+    emit(COMPOSE_MTLR(0));
+    emit(COMPOSE_BLR());
+#else
+#error unsupported target architecture
+#endif
 
     have_jumped = 1;
 }
@@ -1027,8 +1126,14 @@ emit_indirect_jump (void)
 void
 emit_isync (void)
 {
+#if defined(ARCH_ALPHA)
     emit(COMPOSE_LDQ(PROCEDURE_VALUE_REG, ISYNC_CONST * 4, CONSTANT_AREA_REG));
     emit(COMPOSE_JMP(31, PROCEDURE_VALUE_REG));
+#elif defined(ARCH_PPC)
+    assert(0);
+#else
+#error unsupported target architecture
+#endif
 
     have_jumped = 1;
 }
@@ -1036,8 +1141,14 @@ emit_isync (void)
 void
 emit_system_call (void)
 {
+#if defined(ARCH_ALPHA)
     emit(COMPOSE_LDQ(PROCEDURE_VALUE_REG, SYSTEM_CALL_CONST * 4, CONSTANT_AREA_REG));
     emit(COMPOSE_JMP(RETURN_ADDR_REG, PROCEDURE_VALUE_REG));
+#elif defined(ARCH_PPC)
+    assert(0);
+#else
+#error unsupported target architecture
+#endif
 }
 
 void
@@ -1048,12 +1159,14 @@ start_fragment (void)
     num_fragment_insns = 0;
     num_fragment_emu_insns = 0;
     num_reg_locks = 0;
-    num_reg_fields = 0;
     num_labels = 0;
 #ifdef SYNC_BLOCKS
     num_fragment_unresolved_jumps = 0;
 #endif
     old_num_constants = num_constants;
+
+#ifdef NEED_REGISTER_ALLOCATOR
+    num_reg_fields = 0;
 
     all_regs_must_be_saved = 0;
 
@@ -1063,8 +1176,10 @@ start_fragment (void)
 	emu_regs[i].locked = 0;
 	emu_regs[i].native_reg = NO_REG;
     }
+#endif
 }
 
+#ifdef NEED_REGISTER_ALLOCATOR
 void
 simple_reg_alloc (void)
 {
@@ -1098,9 +1213,36 @@ simple_reg_alloc (void)
 		assert(0);
 	}
 }
+#endif
 
+#ifdef COLLECT_LIVENESS
+int
+emu_reg_live (reg_t j, word_32 live_cr, word_32 live_xer, word_32 live_gpr)
+{
+    int live = 1;
+
+    if (j >= CLASS_FIRST_INDEX_GPR && j < CLASS_FIRST_INDEX_GPR + 32)
+	live = (live_gpr >> (j - CLASS_FIRST_INDEX_GPR)) & 1;
+    else if (j == REG_INDEX_CRFB0)
+	live = live_cr >> 31;
+    else if (j == REG_INDEX_CRFB1)
+	live = (live_cr >> 30) & 1;
+    else if (j == REG_INDEX_CRFB2)
+	live = (live_cr >> 29) & 1;
+    else if (j == REG_INDEX_CRFB3)
+	live = (live_cr >> 28) & 1;
+    else if (j == REG_INDEX_XER_SO)
+	live = live_xer >> 31;
+    else if (j == REG_INDEX_XER_CA)
+	live = (live_xer >> 29) & 1;
+
+    return live;
+}
+#endif
+
+#ifdef NEED_REGISTER_ALLOCATOR
 void
-alloc_native_reg_for_emu_reg (reg_t emu_reg, int current_insn_num)
+alloc_native_reg_for_emu_reg (reg_t emu_reg, int current_insn_num, int insn_index)
 {
     int l = -1;
     reg_t native_reg;
@@ -1143,7 +1285,11 @@ alloc_native_reg_for_emu_reg (reg_t emu_reg, int current_insn_num)
     if (emu_regs[l].dirty)
 	assert(emu_regs[l].live_at_end);
 
-    if (emu_regs[l].dirty)
+    if (emu_regs[l].dirty
+#ifdef COLLECT_LIVENESS
+	&& emu_reg_live(l, block_insns[insn_index].live_cr, block_insns[insn_index].live_xer, block_insns[insn_index].live_gpr)
+#endif
+	)
     {
 	store_reg(emu_regs[l].native_reg, l);
 	if (emu_regs[l].is_saved == DONT_KNOW)
@@ -1169,7 +1315,7 @@ alloc_native_reg_for_emu_reg (reg_t emu_reg, int current_insn_num)
 }
 
 void
-execute_reg_locks (int *_rl, int insn_num)
+execute_reg_locks (int *_rl, int insn_num, int insn_index)
 {
     int rl = *_rl;
 
@@ -1187,7 +1333,7 @@ execute_reg_locks (int *_rl, int insn_num)
 
 	    if (emu_regs[reg_locks[rl].reg].native_reg == NO_REG)
 	    {
-		alloc_native_reg_for_emu_reg(reg_locks[rl].reg, insn_num);
+		alloc_native_reg_for_emu_reg(reg_locks[rl].reg, insn_num, insn_index);
 
 		if (reg_locks[rl].type & REG_LOCK_READ)
 		    load_reg(emu_regs[reg_locks[rl].reg].native_reg, reg_locks[rl].reg);
@@ -1205,23 +1351,26 @@ execute_reg_locks (int *_rl, int insn_num)
 
     *_rl = rl;
 }
+#endif
 
 void
-finish_fragment (unsigned char *preferred_alloced_integer_regs)
+finish_fragment (word_32 *addrs, unsigned char *preferred_alloced_integer_regs)
 {
     int i;
+#ifdef NEED_REGISTER_ALLOCATOR
     int num_integer_regs = 0, num_float_regs = 0;
+#endif
 #ifdef DUMP_CODE
-    word_64 start = (word_64)emit_loc;
+    addr_t start = (addr_t)emit_loc;
 #ifdef DYNAMO_TRACES
-    word_64 alt_start = (word_64)alt_emit_loc;
+    addr_t alt_start = (addr_t)alt_emit_loc;
 #endif
 #endif
-    word_64 body_start;
+    addr_t body_start;
     int jumps_index;
     int rf, rl;
 #ifdef SYNC_BLOCKS
-    word_64 direct_jump_start;
+    addr_t direct_jump_start;
     int no_sync;
     int has_freezed_save = 0;
 #endif
@@ -1239,8 +1388,9 @@ finish_fragment (unsigned char *preferred_alloced_integer_regs)
 
     init_fragment_hash_entry(&fragment_entry, &fragment_entry_supplement);
 
-    fragment_entry.native_addr = (word_64)emit_loc;
+    fragment_entry.native_addr = (addr_t)emit_loc;
 
+#ifdef NEED_REGISTER_ALLOCATOR
     for (i = 0; i < NUM_NATIVE_INTEGER_REGS; ++i)
 	alloced_integer_regs[i] = NO_REG;
     for (i = 0; i < NUM_NATIVE_FLOAT_REGS; ++i)
@@ -1335,8 +1485,9 @@ finish_fragment (unsigned char *preferred_alloced_integer_regs)
 	if (emu_regs[i].used && emu_regs[i].live_at_start && emu_regs[i].native_reg != NO_REG)
 	    load_reg(emu_regs[i].native_reg, i);
     }
+#endif
 
-    body_start = (word_64)emit_loc;
+    body_start = (addr_t)emit_loc;
     jumps_index = 0;
     rf = 0;
     rl = 0;
@@ -1410,47 +1561,39 @@ finish_fragment (unsigned char *preferred_alloced_integer_regs)
 
 		    assert(first + 1 == last);
 
-		    execute_reg_locks(&rl, first);
+		    assert(i > 0);
+#ifdef NEED_REGISTER_ALLOCATOR
+		    execute_reg_locks(&rl, first, fragment_emu_insns[i - 1].addr);
+#endif
 
 		    /* the dummy insn is replaced by its code_area index */
 		    fragment_insns[first] = EMIT_LOC - code_area;
 
+#ifdef NEED_REGISTER_ALLOCATOR
 		    for (j = 0; j < NUM_EMU_REGISTERS; ++j)
 			if (emu_regs[j].used && emu_regs[j].dirty && emu_regs[j].live_at_end && emu_regs[j].native_reg != NO_REG)
 			{
 			    int live = 1;
 
 #ifdef COLLECT_LIVENESS
-			    if (j >= CLASS_FIRST_INDEX_GPR && j < CLASS_FIRST_INDEX_GPR + 32)
-				live = (live_gpr >> (j - CLASS_FIRST_INDEX_GPR)) & 1;
-			    else if (j == REG_INDEX_CRFB0)
-				live = live_cr >> 31;
-			    else if (j == REG_INDEX_CRFB1)
-				live = (live_cr >> 30) & 1;
-			    else if (j == REG_INDEX_CRFB2)
-				live = (live_cr >> 29) & 1;
-			    else if (j == REG_INDEX_CRFB3)
-				live = (live_cr >> 28) & 1;
-			    else if (j == REG_INDEX_XER_SO)
-				live = live_xer >> 31;
-			    else if (j == REG_INDEX_XER_CA)
-				live = (live_xer >> 29) & 1;
+			    live = emu_reg_live(j, live_cr, live_xer, live_gpr);
 #endif
 
 			    if (live)
 				store_reg(emu_regs[j].native_reg, j);
 			}
+#endif
 		}
 		break;
 
 #ifdef SYNC_BLOCKS
 	    case EMU_INSN_DIRECT_JUMP :
-		direct_jump_start = (word_64)EMIT_LOC;
+		direct_jump_start = (addr_t)EMIT_LOC;
 		no_sync = 0;
 		break;
 
 	    case EMU_INSN_DIRECT_JUMP_NO_SYNC :
-		direct_jump_start = (word_64)EMIT_LOC;
+		direct_jump_start = (addr_t)EMIT_LOC;
 		no_sync = 1;
 		break;
 #endif
@@ -1488,7 +1631,8 @@ finish_fragment (unsigned char *preferred_alloced_integer_regs)
 		{
 		    word_32 *first_insn = EMIT_LOC;
 
-		    execute_reg_locks(&rl, j);
+#ifdef NEED_REGISTER_ALLOCATOR
+		    execute_reg_locks(&rl, j, fragment_emu_insns[i].addr);
 
 		    while (rf < num_reg_fields && reg_fields[rf].insn_num == j)
 		    {
@@ -1500,6 +1644,7 @@ finish_fragment (unsigned char *preferred_alloced_integer_regs)
 
 			++rf;
 		    }
+#endif
 
 		    /*
 		    printf("  %d: ", j);
@@ -1524,7 +1669,7 @@ finish_fragment (unsigned char *preferred_alloced_integer_regs)
 
 			assert(k < MAX_UNRESOLVED_JUMPS);
 
-			unresolved_jumps[k].addr = (word_64)EMIT_LOC;
+			unresolved_jumps[k].addr = (addr_t)EMIT_LOC;
 			unresolved_jumps[k].target = fragment_unresolved_jumps[jumps_index].target;
 			unresolved_jumps[k].start = direct_jump_start;
 			for (l = 0; l < NUM_FREE_INTEGER_REGS; ++l)
@@ -1576,9 +1721,11 @@ finish_fragment (unsigned char *preferred_alloced_integer_regs)
     assert(has_freezed_save);
 #endif
 
+#ifdef NEED_REGISTER_ALLOCATOR
     for (i = 0; i < NUM_EMU_REGISTERS; ++i)
 	if (emu_regs[i].used && emu_regs[i].is_saved == DONT_KNOW)
 	    emu_regs[i].is_saved = emu_regs[i].live_at_end;
+#endif
 
 #ifdef SYNC_BLOCKS
 #ifdef DYNAMO_TRACES
@@ -1606,6 +1753,7 @@ finish_fragment (unsigned char *preferred_alloced_integer_regs)
 	for (j = 0; j < l->num_backpatches; ++j)
 	{
 	    int index = fragment_insns[l->backpatches[j]];
+#if defined(ARCH_ALPHA)
 	    sword_64 disp;
 	    word_32 field;
 
@@ -1619,22 +1767,28 @@ finish_fragment (unsigned char *preferred_alloced_integer_regs)
 	    field = (disp >> 2) & 0x1fffff;
 
 	    code_area[index] |= field;
+#elif defined(ARCH_PPC)
+	    assert(0);
+#else
+#error unsupported target architecture
+#endif
 	}
     }
 
 #ifdef DUMP_CODE
     printf("++++++++++++++++\nprologue\n- - - - - - - - \n");
 
-    disassemble_alpha_code(start, body_start);
+    disassemble_target_code(start, body_start);
 
 #ifdef DYNAMO_TRACES
-    dump_fragment_code(body_start, (word_64)emit_loc, alt_start, (word_64)alt_emit_loc);
+    dump_fragment_code(addrs, body_start, (addr_t)emit_loc, alt_start, (addr_t)alt_emit_loc);
 #else
-    dump_fragment_code(body_start, (word_64)emit_loc, 0, 0);
+    dump_fragment_code(addrs, body_start, (addr_t)emit_loc, 0, 0);
 #endif
 #endif
 }
 
+#ifdef ARCH_ALPHA
 void
 emit_store_mem_8 (reg_t value_reg, reg_t addr_reg)
 {
@@ -1703,6 +1857,7 @@ emit_load_mem_64 (reg_t value_reg, reg_t addr_reg)
     emit(COMPOSE_LDQ(value_reg, 0, addr_reg));
 #endif
 }
+#endif
 
 #if defined(EMU_PPC)
 #ifndef USE_HAND_TRANSLATOR
@@ -1710,16 +1865,13 @@ emit_load_mem_64 (reg_t value_reg, reg_t addr_reg)
 #else
 #include "ppc_to_alpha_compiler.c"
 #endif
-#ifdef DYNAMO_TRACES
-#include "ppc_livenesser.c"
-#include "ppc_killer.c"
-#endif
-#ifdef COLLECT_LIVENESS
-#include "ppc_livenesser.c"
-#endif
 #elif defined(EMU_I386)
 #include "i386.h"
+#ifndef USE_HAND_TRANSLATOR
 #include "i386_compiler.c"
+#else
+#include "i386_to_ppc_compiler.c"
+#endif
 #endif
 
 void
@@ -1736,7 +1888,7 @@ get_const_64 (int index)
     return (word_64)constant_area[index] + (((word_64)constant_area[index + 1]) << 32);
 }
 
-word_64
+addr_t
 lookup_fragment (word_32 addr)
 {
     fragment_hash_supplement_t *supplement;
@@ -1749,7 +1901,7 @@ lookup_fragment (word_32 addr)
 
 #ifndef COMPILER_THRESHOLD
 void
-enter_fragment (word_32 foreign_addr, word_64 native_addr)
+enter_fragment (word_32 foreign_addr, addr_t native_addr)
 {
 #ifdef PROFILE_LOOPS
     int i;
@@ -1939,6 +2091,7 @@ init_compiler (interpreter_t *intp, interpreter_t *dbg_intp)
     debugger_intp = dbg_intp;
 #endif
 
+#ifdef NEED_REGISTER_ALLOCATOR
     i = 0;
     for (range = 0; integer_reg_range[range].end > 0; ++range)
     {
@@ -1949,6 +2102,7 @@ init_compiler (interpreter_t *intp, interpreter_t *dbg_intp)
     i = 0;
     for (native = FIRST_FLOAT_REG; native < FIRST_FLOAT_REG + NUM_FREE_FLOAT_REGS; ++native)
 	native_float_regs[i++] = native;
+#endif
 
     for (i = 0; i < NUM_TMP_INTEGER_REGS; ++i)
     {
@@ -1962,6 +2116,7 @@ init_compiler (interpreter_t *intp, interpreter_t *dbg_intp)
 	tmp_float_regs[i].free = 1;
     }
 
+#ifdef NEED_REGISTER_ALLOCATOR
     j = 0;
     for (i = 0; i < NUM_EMU_REGISTERS; ++i)
 	if (i >= 5 + 32 && i < 5 + 32 + 32)
@@ -1974,6 +2129,7 @@ init_compiler (interpreter_t *intp, interpreter_t *dbg_intp)
 	    emu_regs[i].type = REG_TYPE_INTEGER;
 	    emu_regs[i].preferred_native_reg = native_integer_regs[j++ % NUM_FREE_INTEGER_REGS];
 	}
+#endif
 
 #ifdef SYNC_BLOCKS
     for (i = 0; i < MAX_UNRESOLVED_JUMPS; ++i)
@@ -2032,13 +2188,14 @@ init_compiler (interpreter_t *intp, interpreter_t *dbg_intp)
     num_constants_init = num_constants;
 }
 
-word_64
+#if 0
+addr_t
 compile_until_jump (word_32 *addr, int optimize_taken_jump, label_t taken_jump_label, word_32 *target_addr)
 {
-    word_64 start = (word_64)emit_loc;
+    addr_t start = (addr_t)emit_loc;
     word_32 insnp = *addr;
 #ifdef COLLECT_STATS
-    word_64 x = start;
+    addr_t x = start;
 #endif
 #ifdef EMU_I386
     int i;
@@ -2066,9 +2223,11 @@ compile_until_jump (word_32 *addr, int optimize_taken_jump, label_t taken_jump_l
 				  NO_FOREIGN_ADDR, 0xffffffff, 0xffffffff, 0xffffffff);
 #endif
 #elif defined(EMU_I386)
-	word_32 insn_addr = compiler_intp->pc;
-
+#ifdef USE_HAND_TRANSLATOR
+	compile_to_ppc_i386_insn(compiler_intp);
+#else
 	compile_i386_insn(compiler_intp, block_insns[i++].flags_killed);
+#endif
 #endif
 
 #ifdef NO_REGISTER_CACHING
@@ -2078,11 +2237,11 @@ compile_until_jump (word_32 *addr, int optimize_taken_jump, label_t taken_jump_l
 #ifdef COLLECT_STATS
 	assert(generated_insn_index < NUM_INSNS);
 	++insn_infos[generated_insn_index].num_translated;
-	insn_infos[generated_insn_index].num_generated_insns += ((word_64)emit_loc - x) / 4;
+	insn_infos[generated_insn_index].num_generated_insns += ((addr_t)emit_loc - x) / 4;
 #endif
 
 #if defined(COLLECT_STATS)
-	x = (word_64)emit_loc;
+	x = (addr_t)emit_loc;
 #endif
 
 #if defined(EMU_PPC)
@@ -2111,7 +2270,9 @@ compile_until_jump (word_32 *addr, int optimize_taken_jump, label_t taken_jump_l
 
     return start;
 }
+#endif
 
+#ifdef ARCH_ALPHA
 void
 emit_const_add (int const_index, int amount, word_32 **lda_loc)
 {
@@ -2149,35 +2310,46 @@ patch_mem_disp (word_32 insn, word_16 val)
 {
     return (insn & 0xffff0000) | val;
 }
+#endif
 
 #if defined(COLLECT_STATS) || defined(COUNT_INSNS)
 unsigned long old_num_translated_insns;
 #endif
 
-word_64
+addr_t
 compile_basic_block (word_32 foreign_addr, int as_trace, unsigned char *preferred_alloced_integer_regs)
 {
-    word_32 addr = foreign_addr;
-    word_64 native_addr;
+    static word_32 addrs[MAX_TRACE_INSNS];
+
+    int length;
+    addr_t native_addr;
+#ifdef COLLECT_LIVENESS
+    word_32 live_cr, live_xer, live_gpr;
+#endif
+
+    /*
 #ifdef COUNT_INSNS
     word_32 *emulated_lda_insn, *native_lda_insn, *old_emit_loc;
 
     old_num_translated_insns = num_translated_insns;
 #endif
-
-    start_timer();
-
-    setjmp(compiler_restart);
-
-    start_fragment();
-
-    /*
-    while (((emit_loc - code_area) & 3) != 0)
-	emit(0);
     */
 
-    native_addr = (word_64)emit_loc;
+#if defined(EMU_PPC)
+#ifdef COLLECT_LIVENESS
+    length = compute_iterative_liveness(compiler_intp, foreign_addr, addrs, &live_cr, &live_xer, &live_gpr);
+#else
+    length = compute_iterative_liveness(compiler_intp, foreign_addr, addrs, 0, 0, 0);
+#endif
+#elif defined(EMU_I386)
+    length = compute_liveness(compiler_intp, foreign_addr, addrs);
+#else
+#error unsupported emulation
+#endif
 
+    native_addr = compile_trace(addrs, length, preferred_alloced_integer_regs);
+
+    /*
 #ifdef COUNT_INSNS
     emit_const_add(FRAGMENTS_CONST, 1, 0);
     if (as_trace)
@@ -2191,37 +2363,10 @@ compile_basic_block (word_32 foreign_addr, int as_trace, unsigned char *preferre
 
     old_emit_loc = emit_loc;
 #endif
-
-    compile_until_jump(&addr, 0, 0, 0);
-
-    emit_start_direct_jump(1);
-
-    emit_store_regs(EMU_INSN_EPILOGUE, addr);
-
-    emit_direct_jump(addr);	/* this is not necessary if the jump at the end of the basic block was unconditional */
-
-    finish_fragment(preferred_alloced_integer_regs);
-
-#ifdef COLLECT_LIVENESS
-    {
-	word_32 live_cr, live_xer, live_gpr;
-
-	compute_iterative_liveness(compiler_intp, foreign_addr, &live_cr, &live_xer, &live_gpr);
-
-	fragment_entry_supplement.live_cr = live_cr;
-	fragment_entry_supplement.live_xer = live_xer;
-	fragment_entry_supplement.live_gpr = live_gpr;
-    }
-#endif
-
-    flush_icache();
-
-    stop_timer();
+    */
 
 #ifdef COLLECT_STATS
-    if (as_trace)
-	++num_translated_traces;
-    else
+    if (!as_trace)
 	++num_translated_blocks;
 
     /*
@@ -2237,9 +2382,17 @@ compile_basic_block (word_32 foreign_addr, int as_trace, unsigned char *preferre
     */
 #endif
 
+    /*
 #ifdef COUNT_INSNS
     *emulated_lda_insn = patch_mem_disp(*emulated_lda_insn, num_translated_insns - old_num_translated_insns);
     *native_lda_insn = patch_mem_disp(*native_lda_insn, emit_loc - old_emit_loc);
+#endif
+    */
+
+#ifdef COLLECT_LIVENESS
+    fragment_entry_supplement.live_cr = live_cr;
+    fragment_entry_supplement.live_xer = live_xer;
+    fragment_entry_supplement.live_gpr = live_gpr;
 #endif
 
     return native_addr;
@@ -2263,10 +2416,11 @@ branch_profile_end_trace (void)
 #endif
 }
 
-word_64
-compile_trace (word_32 addr, int length, int bits)
+#if 0
+addr_t
+compile_loop_trace (word_32 addr, int length, int bits)
 {
-    word_64 start;
+    addr_t start;
     int bit;
 
 #ifdef COLLECT_STATS
@@ -2277,7 +2431,7 @@ compile_trace (word_32 addr, int length, int bits)
 
     setjmp(compiler_restart);
 
-    start = (word_64)emit_loc;
+    start = (addr_t)emit_loc;
 
     start_fragment();
 
@@ -2294,7 +2448,9 @@ compile_trace (word_32 addr, int length, int bits)
 
 	    emit_start_direct_jump(1);
 
+#ifdef NEED_REGISTER_ALLOCATOR
 	    emit_store_regs(EMU_INSN_INTERLUDE, addr);
+#endif
 
 	    emit_direct_jump(addr);
 
@@ -2313,13 +2469,15 @@ compile_trace (word_32 addr, int length, int bits)
 
     emit_start_direct_jump(1);
 
+#ifdef NEED_REGISTER_ALLOCATOR
     emit_store_regs(EMU_INSN_EPILOGUE, addr);
+#endif
 
     emit_direct_jump(addr);	/* this is not necessary if the jump at the end of the basic block was unconditional */
 
     branch_profile_func = 0;
 
-    finish_fragment(0);
+    finish_fragment(0, 0);
 
     flush_icache();
 
@@ -2333,6 +2491,7 @@ compile_trace (word_32 addr, int length, int bits)
 
     return start;
 }
+#endif
 
 int
 count_bits (word_32 x)
@@ -2352,38 +2511,16 @@ count_bits (word_32 x)
 unsigned long real_killed_bits = 0, killed_bits = 0;
 #endif
 
-#ifdef DYNAMO_TRACES
-word_64
-compile_dynamo_trace (word_32 *addrs, int length)
+addr_t
+compile_trace (word_32 *addrs, int length, unsigned char *preferred_alloced_integer_regs)
 {
-    word_64 native_addr;
+    addr_t native_addr;
     int i;
 #ifdef COUNT_INSNS
     word_32 *emulated_lda_insn, *native_lda_insn, *old_emit_loc;
 
     old_num_translated_insns = num_translated_insns;
 #endif
-
-    /*
-    {
-	compute_liveness_for_trace(compiler_intp, addrs, length);
-
-	printf("*** cr kills\n");
-	for (i = 0; i < length; ++i)
-	{
-	    word_32 killed_cr, killed_xer;
-
-	    kill_ppc_insn(mem_get_32(compiler_intp, addrs[i]), addrs[i], &killed_cr, &killed_xer);
-	    printf("%08x  %08x  %08x  live: %08x\n", addrs[i], killed_cr, block_insns[i].killed_cr, block_insns[i].live_cr);
-
-#ifdef COLLECT_STATS
-	    real_killed_bits += count_bits(killed_cr);
-	    killed_bits += count_bits(block_insns[i].killed_cr);
-#endif
-	}
-	printf("***\n");
-    }
-    */
 
     start_timer();
 
@@ -2396,25 +2533,43 @@ compile_dynamo_trace (word_32 *addrs, int length)
 	emit(0);
     */
 
-    native_addr = (word_64)emit_loc;
+    native_addr = (addr_t)emit_loc;
 
     for (i = 0; i < length; ++i)
     {
-	start_emu_insn(EMU_INSN_INSN, addrs[i]);
+	start_emu_insn(EMU_INSN_INSN, i);
 
+#if defined(EMU_PPC)
 	compile_to_alpha_ppc_insn(mem_get_32(compiler_intp, addrs[i]), addrs[i], 0, 0,
 				  i + 1 < length ? addrs[i + 1] : NO_FOREIGN_ADDR,
-				  block_insns[i].killed_cr, block_insns[i].killed_xer,
-				  0xffffffff);
+#ifdef COLLECT_LIVENESS
+				  block_insns[i].killed_cr, block_insns[i].killed_xer, 0xffffffff
+#else
+				  0xffffffff, 0xffffffff, 0xffffffff
+#endif
+				  );
+#elif defined(EMU_I386)
+	{
+	    word_32 old_pc = compiler_intp->pc;
+
+	    compiler_intp->pc = addrs[i];
+	    compile_to_ppc_i386_insn(compiler_intp);
+	    compiler_intp->pc = old_pc;
+	}
+#else
+#error unsupported emulation
+#endif
     }
 
     emit_start_direct_jump(1);
 
+#ifdef NEED_REGISTER_ALLOCATOR
     emit_store_regs(EMU_INSN_EPILOGUE, addrs[length - 1] + 4);
+#endif
 
     emit_direct_jump(addrs[length - 1] + 4); /* this is not necessary if the jump at the end of the basic block was unconditional */
 
-    finish_fragment(0);
+    finish_fragment(addrs, preferred_alloced_integer_regs);
 
     flush_icache();
 
@@ -2438,7 +2593,6 @@ compile_dynamo_trace (word_32 *addrs, int length)
 
     return native_addr;
 }
-#endif
 
 #ifdef CROSSDEBUGGER
 void
@@ -2457,7 +2611,7 @@ compare_register_sets (void)
     {
 	if (compiler_intp->regs_GPR[i] != debugger_intp->regs_GPR[i])
 	    diff = 1;
-	if (*(word_64*)&compiler_intp->regs_FPR[i] != *(word_64*)&debugger_intp->regs_FPR[i])
+	if (*(addr_t*)&compiler_intp->regs_FPR[i] != *(addr_t*)&debugger_intp->regs_FPR[i])
 	    diff = 1;
     }
 #elif defined(EMU_I386)
@@ -2488,7 +2642,7 @@ compare_register_sets (void)
 #endif
 
 #ifdef COMPILER_THRESHOLD
-word_64
+addr_t
 interpret_until_threshold (word_32 addr)
 {
     fragment_hash_entry_t *entry;
@@ -2540,10 +2694,10 @@ interpret_until_threshold (word_32 addr)
 }
 #endif
 
-word_64
+addr_t
 compile_fragment_if_needed (word_32 addr, unsigned char *preferred_alloced_integer_regs)
 {
-    word_64 native_addr = lookup_fragment(addr);
+    addr_t native_addr = lookup_fragment(addr);
 
     /*
     move_regs_compiler_to_interpreter(compiler_intp);
@@ -2589,7 +2743,7 @@ compile_fragment_if_needed (word_32 addr, unsigned char *preferred_alloced_integ
 #endif
 }
 
-word_64
+addr_t
 provide_fragment (word_32 addr)
 {
     return compile_fragment_if_needed(addr, 0);
@@ -2630,7 +2784,7 @@ shuffle_regs (unsigned char *src, unsigned char *dst, int i)
 #define SYNC_BLOCK_CUSTOM        3
 
 int
-generate_sync_block (unsigned char *src, unsigned char *dst, word_32 foreign_addr, word_64 native_addr)
+generate_sync_block (unsigned char *src, unsigned char *dst, word_32 foreign_addr, addr_t native_addr)
 {
     int i;
 
@@ -2752,8 +2906,9 @@ generate_sync_block (unsigned char *src, unsigned char *dst, word_32 foreign_add
 }
 #endif
 
+#if defined(ARCH_ALPHA)
 word_32
-compose_branch (word_64 branch_addr, word_64 target_addr)
+compose_branch (addr_t branch_addr, addr_t target_addr)
 {
     sword_64 disp = target_addr - branch_addr - 4;
     word_32 field;
@@ -2763,12 +2918,27 @@ compose_branch (word_64 branch_addr, word_64 target_addr)
 
     return COMPOSE_BR(31, field);
 }
+#elif defined(ARCH_PPC)
+word_32
+compose_branch (addr_t branch_addr, addr_t target_addr)
+{
+    sword_32 disp = target_addr - branch_addr;
+    word_32 field;
 
-word_64
-provide_fragment_and_patch (word_64 jump_addr)
+    assert(disp >= -(1 << 25) && disp < (1 << 25));
+    field = (disp >> 2) & 0x1ffffff;
+
+    return COMPOSE_B(field);
+}
+#else
+#error unsupported target architecture
+#endif
+
+addr_t
+provide_fragment_and_patch (addr_t jump_addr)
 {
     int i;
-    word_64 native_addr;
+    addr_t native_addr;
     word_32 foreign_addr;
 
 #if defined(COLLECT_STATS) && !defined(COMPILER_THRESHOLD)
@@ -2886,7 +3056,7 @@ provide_fragment_and_patch (word_64 jump_addr)
 		word_32 *branch_loc = (word_32*)unresolved_jumps[i].start + (emit_loc - sync_block_start);
 
 		memcpy((void*)unresolved_jumps[i].start, sync_block_start, (emit_loc - sync_block_start) * 4);
-		*branch_loc = compose_branch((word_64)branch_loc, supplement->synced_native_addr);
+		*branch_loc = compose_branch((addr_t)branch_loc, supplement->synced_native_addr);
 
 		emit_loc = sync_block_start; /* revert emitting */
 
@@ -2909,7 +3079,7 @@ provide_fragment_and_patch (word_64 jump_addr)
 		    direct_emit_const_add(EMPTY_SYNC_CONST, 1, 0);
 
 		    *(word_32*)unresolved_jumps[i].start = compose_branch(unresolved_jumps[i].start, sync_block_start);
-		    direct_emit(compose_branch((word_64)emit_loc, supplement->synced_native_addr));
+		    direct_emit(compose_branch((addr_t)emit_loc, supplement->synced_native_addr));
 #else
 		    *(word_32*)unresolved_jumps[i].start = compose_branch(unresolved_jumps[i].start, supplement->synced_native_addr);
 #endif
@@ -2922,7 +3092,7 @@ provide_fragment_and_patch (word_64 jump_addr)
 		    direct_emit_const_add(STANDARD_SYNC_CONST, 1, 0);
 
 		    *(word_32*)jump_addr = compose_branch(jump_addr, sync_block_start);
-		    direct_emit(compose_branch((word_64)emit_loc, supplement->native_addr));
+		    direct_emit(compose_branch((addr_t)emit_loc, supplement->native_addr));
 #else
 		    *(word_32*)jump_addr = compose_branch(jump_addr, native_addr);
 #endif
@@ -2936,7 +3106,7 @@ provide_fragment_and_patch (word_64 jump_addr)
 #endif
 
 		    *(word_32*)unresolved_jumps[i].start = compose_branch(unresolved_jumps[i].start, sync_block_start);
-		    direct_emit(compose_branch((word_64)emit_loc, supplement->synced_native_addr));
+		    direct_emit(compose_branch((addr_t)emit_loc, supplement->synced_native_addr));
 		}
 	    }
 
@@ -2966,10 +3136,10 @@ provide_fragment_and_patch (word_64 jump_addr)
     }
 }
 
-word_64
+addr_t
 compile_and_return_first_native_addr (word_32 addr, int regs_in_compiler)
 {
-    word_64 native_addr;
+    addr_t native_addr;
 
     if (!regs_in_compiler)
 	move_regs_interpreter_to_compiler(compiler_intp);
@@ -2997,7 +3167,7 @@ start_compiler (word_32 addr)
     start_execution(compile_and_return_first_native_addr(addr, 0)); /* this call never returns */
 }
 
-word_64
+addr_t
 isync_handler (word_32 addr)
 {
     int i;

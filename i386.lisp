@@ -2,7 +2,7 @@
 
 ;; bintrans
 
-;; Copyright (C) 2001 Mark Probst
+;; Copyright (C) 2001,2002 Mark Probst
 
 ;; This program is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -111,6 +111,12 @@
   (case reg
     ((0 1 2 3) (subreg 0 7 reg gpr))
     ((4 5 6 7) (subreg 8 15 (- reg (width 3 4)) gpr))
+    :cse t))
+
+(define-insn-macro opcode-r8 ()
+  (case opcode-reg
+    ((0 1 2 4) (subreg 0 7 opcode-reg gpr))
+    ((4 5 6 7) (subreg 8 15 (- opcode-reg (width 3 4)) gpr))
     :cse t))
 
 (define-insn-macro r16 ()
@@ -235,7 +241,7 @@
 				   (eax-moffs32 (reg eax) (mem imm32) 32 nil nil)
 				   (moffs32-ax (width 16 (mem imm32)) ax 16 t nil)
 				   (moffs32-eax (mem imm32) (reg eax) 32 nil nil)
-				   (+r8-imm8 (subreg 0 7 opcode-reg gpr) imm8 8 nil nil)
+				   (+r8-imm8 (opcode-r8) imm8 8 nil nil)
 				   (+r16-imm16 (subreg 0 15 opcode-reg gpr) imm16 16 t nil)
 				   (+r32-imm32 (reg opcode-reg gpr) imm32 32 nil nil)
 				   (+st opcode-reg nil 3 nil nil))))))
@@ -300,7 +306,7 @@
 							r8-rm8 r16-rm16 r32-rm32))
 		 (unless modrm-decoded-p
 		   (format t "i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);~%"))
-		 (format t "i386_decode_sib(intp, opcode2, &scale, &index, &base, &disp8, &disp32);~%"))
+		 (format t "i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);~%"))
 	       (format t "if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {~%")
 	       (if (null insn16)
 		   (format t "assert(0);~%")
@@ -368,7 +374,7 @@ int prefix_flags;~%")
 								       (dolist (expr (intel-insn-effect insn))
 									 (format t "~A;~%" (generate-interpreter expr nil)))))
 			    (format t "intp->pc = next_pc;~%}~%")))))
-      (format t "static word_8 mod, reg, rm, scale, index, base, disp8, opcode_reg, imm8;
+      (format t "static word_8 mod, reg, rm, sib_scale, sib_index, sib_base, disp8, opcode_reg, imm8;
 static word_16 imm16;
 static word_32 disp32, imm32;~%")
       (generate-cse-bindings-code)
@@ -384,7 +390,7 @@ static word_32 disp32, imm32;~%")
 				      (sub rm32-r32)
 				      (xor al-imm8) (xor ax-imm16) (xor eax-imm32) (xor rm32-imm32) (xor rm32-simm8) (xor rm32-r32) (xor r32-rm32)))
 
-(defvar *intel-generator-function-arguments* "pc, mod, reg, rm, scale, index, base, disp8, opcode_reg, imm8, imm16, disp32, imm32, to_be_killed")
+(defvar *intel-generator-function-arguments* "pc, mod, reg, rm, sib_scale, sib_index, sib_base, disp8, opcode_reg, imm8, imm16, disp32, imm32, to_be_killed")
 
 (defun generate-intel-compiler ()
   (with-open-file (out (format nil "i386_compiler.c") :direction :output :if-exists :supersede)
@@ -393,7 +399,7 @@ static word_32 disp32, imm32;~%")
 	  (*generated-exprs* nil)
 	  (*analyzed-bits-register* (lookup-register 'eflags)))
       (generate-registers-and-insns-code *i386*)
-      (format t "static word_8 mod, reg, rm, scale, index, base, disp8, opcode_reg, imm8;
+      (format t "static word_8 mod, reg, rm, sib_scale, sib_index, sib_base, disp8, opcode_reg, imm8;
 static word_16 imm16;
 static word_32 disp32, imm32, pc;~%")
       (let ((main (with-output-to-string (out)
@@ -427,10 +433,10 @@ void **env = 0;~%")
 			       (ax "fputs(\"ax\", stdout);")
 			       ((r32) "i386_disassemble_r32(stdout, reg);")
 			       ((reg eax) "fputs(\"eax\", stdout);")
-			       ((rm8) "i386_disassemble_rm8(stdout, mod, rm, scale, index, base, disp8, disp32);")
-			       ((rm16) "i386_disassemble_rm16(stdout, mod, rm, scale, index, base, disp8, disp32);")
-			       ((rm32) "i386_disassemble_rm32(stdout, mod, rm, scale, index, base, disp8, disp32);")
-			       ((m64) "i386_disassemble_rm32(stdout, mod, rm, scale, index, base, disp8, disp32);")
+			       ((rm8) "i386_disassemble_rm8(stdout, mod, rm, sib_scale, sib_index, sib_base, disp8, disp32);")
+			       ((rm16) "i386_disassemble_rm16(stdout, mod, rm, sib_scale, sib_index, sib_base, disp8, disp32);")
+			       ((rm32) "i386_disassemble_rm32(stdout, mod, rm, sib_scale, sib_index, sib_base, disp8, disp32);")
+			       ((m64) "i386_disassemble_rm32(stdout, mod, rm, sib_scale, sib_index, sib_base, disp8, disp32);")
 			       ((subreg 0 7 opcode-reg gpr) "i386_disassemble_r8(stdout, opcode_reg);")
 			       ((subreg 0 15 opcode-reg gpr) "i386_disassemble_r16(stdout, opcode_reg);")
 			       ((reg opcode-reg gpr) "i386_disassemble_r32(stdout, opcode_reg);")
@@ -451,7 +457,7 @@ void **env = 0;~%")
 word_8 opcode, opcode2;
 word_32 pc, next_pc;
 int prefix_flags;
-word_8 mod, reg, rm, scale, index, base, disp8, opcode_reg, imm8;
+word_8 mod, reg, rm, sib_scale, sib_index, sib_base, disp8, opcode_reg, imm8;
 word_16 imm16;
 word_32 disp32, imm32;~%")
 	(generate-intel-insn-recognizer *i386* #'(lambda (insn)
@@ -473,6 +479,32 @@ word_32 disp32, imm32;~%")
 									   (dcs name) op1-disasm op2-disasm)))))))))
 	(format t "intp->pc = next_pc;~%}~%")))))
 
+(defun generate-intel-skeleton ()
+  (with-open-file (out (format nil "i386_skeleton.c") :direction :output :if-exists :supersede)
+    (let ((*standard-output* out)
+	  (*insn-field-accessor* #'(lambda (name begin end) (dcs name))))
+      (format t "static word_32 pc;
+static int prefix_flags;
+static word_8 mod, reg, rm, sib_scale, sib_index, sib_base, disp8, opcode_reg, imm8;
+static word_16 imm16;
+static word_32 disp32, imm32;
+
+void xxx_i386_insn (interpreter_t *intp) {
+word_8 opcode, opcode2;
+word_32 next_pc;~%")
+      (generate-intel-insn-recognizer *i386* #'(lambda (insn)
+						 (let ((mode (intel-insn-mode insn)))
+						   (if (eq mode 'no-args)
+						       (format t "mode = MODE_NIL;~%handle_~A_insn();~%"
+							       (dcs (intel-insn-name insn)))
+						       (destructuring-bind (op1 op2 width size-prefix mem-only)
+							   (insn-mode-params mode)
+							 (format t "mode = MODE_~A; op_width = ~A;~%handle_~A_insn();~%"
+								 (ucs mode)
+								 width
+								 (dcs (intel-insn-name insn))))))))
+      (format t "intp->pc = next_pc;~%}~%"))))
+
 (defun generate-intel-livenesser ()
   (with-open-file (out (format nil "i386_livenesser.c") :direction :output :if-exists :supersede)
     (let ((*standard-output* out)
@@ -481,7 +513,7 @@ word_32 disp32, imm32;~%")
 word_8 opcode, opcode2;
 word_32 pc, next_pc;
 int prefix_flags;
-word_8 mod, reg, rm, scale, index, base, disp8, opcode_reg, imm8;
+word_8 mod, reg, rm, sib_scale, sib_index, sib_base, disp8, opcode_reg, imm8;
 word_16 imm16;
 word_32 disp32, imm32;
 word_32 live = *_live, killed = 0;~%")
@@ -500,7 +532,7 @@ intp->pc = next_pc;~%}~%"))))
 word_8 opcode, opcode2;
 word_32 pc, next_pc;
 int prefix_flags;
-word_8 mod, reg, rm, scale, index, base, disp8, opcode_reg, imm8;
+word_8 mod, reg, rm, sib_scale, sib_index, sib_base, disp8, opcode_reg, imm8;
 word_16 imm16;
 word_32 disp32, imm32;
 int num_targets = 0;
@@ -542,13 +574,13 @@ can_jump_indirectly = ~:[0~;1~];~%"
 #include \"bintrans.h\"
 #include \"compiler.h\"
 #include \"alpha_composer.h\"
-static word_8 mod, reg, rm, scale, index, base, disp8, opcode_reg, imm8;
+static word_8 mod, reg, rm, sib_scale, sib_index, sib_base, disp8, opcode_reg, imm8;
 static word_16 imm16;
 static word_32 pc, disp32, imm32;~%")
 	(print-generated-exprs-functions)
 	(format t "void compile_~A_~A_insn (word_32 _pc, word_8 _mod, word_8 _reg, word_8 _rm, word_8 _scale, word_8 _index, word_8 _base, word_8 _disp8, word_8 _opcode_reg, word_8 _imm8, word_16 _imm16, word_32 _disp32, word_32 _imm32, word_32 to_be_killed) {
 void **env = 0;
-pc = _pc; mod = _mod; reg = _reg; rm = _rm; scale = _scale; index = _index; base = _base; disp8 = _disp8;
+pc = _pc; mod = _mod; reg = _reg; rm = _rm; sib_scale = _scale; sib_index = _index; sib_base = _base; disp8 = _disp8;
 opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 = _imm32;~%" (dcs insn-name) (dcs mode))
 	(princ main)
 	(format t "}~%")

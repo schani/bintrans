@@ -28,7 +28,7 @@
 (defvar *alpha* nil)
 
 (load "ppc.lisp")
-(load "alpha.lisp")
+;(load "alpha.lisp")
 
 ;(defparameter *source-machine* *ppc*)
 ;(defparameter *target-machine* *alpha*)
@@ -46,6 +46,6 @@
 
 (defun generate-ppc-insn-analyzers ()
   (generate-jump-analyzer *ppc*)
-  (generate-livenesser *ppc* (list (lookup-register 'cr) (lookup-register 'xer)))
-  (generate-killer *ppc* (list (lookup-register 'cr) (lookup-register 'xer)))
-  (generate-consumer *ppc* (list (lookup-register 'cr) (lookup-register 'xer))))
+  (generate-livenesser *ppc* (list (lookup-register 'cr) (lookup-register 'xer)) (list (lookup-register-class 'gpr)))
+  (generate-killer *ppc* (list (lookup-register 'cr) (lookup-register 'xer)) (list (lookup-register-class 'gpr)))
+  (generate-consumer *ppc* (list (lookup-register 'cr) (lookup-register 'xer)) (list (lookup-register-class 'gpr))))

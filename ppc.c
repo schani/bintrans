@@ -81,7 +81,13 @@
 #if defined(EMU_PPC)
 #define STACK_TOP  0x80000000
 #elif defined(EMU_I386)
+#if defined(ARCH_ALPHA)
 #define STACK_TOP  0xc0000000
+#elif defined(ARCH_PPC)
+#define STACK_TOP  0x70000000
+#else
+#error unsupported target architecture
+#endif
 #endif
 #define STACK_SIZE        128
 
@@ -1553,7 +1559,7 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 	case SYSCALL_UNAME :
 	    ANNOUNCE_SYSCALL("uname");
-	    assert(SYS_NMLN == 65);
+	    /* assert(SYS_NMLN == 65); */
 	    {
 		struct utsname un;
 
@@ -2580,8 +2586,10 @@ debugger (interpreter_t *intp)
 	    }
 	    addr = strtol(token, 0, 16);
 
+#if 0
 	    compute_liveness(intp, addr);
 	    print_liveness(intp);
+#endif
 	}
 #endif
 	else if (strcmp(token, "file") == 0)
@@ -2980,7 +2988,7 @@ main (int argc, char *argv[])
 
     /* debug = 1; */
 
-#if defined(DIFFERENT_BYTEORDER) && !defined(EMULATED_MEM)
+#if defined(ARCH_ALPHA) && defined(DIFFERENT_BYTEORDER) && !defined(EMULATED_MEM)
     init_unaligned();
 #endif
 
