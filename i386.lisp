@@ -402,6 +402,7 @@ static word_32 disp32, imm32;~%")
       (princ interpreter)
       (generate-register-dumper *i386*))))
 
+#|
 (defparameter *intel-insn-matchers* '((add rm32-simm8) (add rm32-r32)
 				      (inc +r32) (inc rm32)
 				      (lea r32-rm32)
@@ -410,6 +411,9 @@ static word_32 disp32, imm32;~%")
 				      (push imm32) (push +r32) (push simm8) (push rm32)
 				      (sub rm32-r32)
 				      (xor al-imm8) (xor ax-imm16) (xor eax-imm32) (xor rm32-imm32) (xor rm32-simm8) (xor rm32-r32) (xor r32-rm32)))
+|#
+
+(defparameter *intel-insn-matchers* nil)
 
 (defvar *intel-generator-function-arguments* "pc, mod, reg, rm, sib_scale, sib_index, sib_base, disp8, opcode_reg, imm8, imm16, disp32, imm32, to_be_killed")
 
@@ -420,16 +424,20 @@ static word_32 disp32, imm32;~%")
 	  (*generated-exprs* nil)
 	  (*analyzed-bits-register* (lookup-register 'eflags)))
       (generate-registers-and-insns-code *i386*)
-      (format t "static word_8 mod, reg, rm, sib_scale, sib_index, sib_base, disp8, opcode_reg, imm8;
+      (format t "#define optimize_taken_jump 0
+#define taken_jump_label 0
+static word_8 mod, reg, rm, sib_scale, sib_index, sib_base, disp8, opcode_reg, imm8;
 static word_16 imm16;
-static word_32 disp32, imm32, pc;~%")
+static word_32 disp32, imm32, pc;
+static word_32 to_be_killed;~%")
       (let ((main (with-output-to-string (out)
 		    (let ((*standard-output* out))
-		      (format t "void compile_i386_insn (interpreter_t *intp, word_32 to_be_killed) {
+		      (format t "void compile_i386_insn (interpreter_t *intp, word_32 _to_be_killed) {
 word_8 opcode, opcode2;
 word_32 next_pc;
 int prefix_flags;
-void **env = 0;~%")
+void **env = 0;
+to_be_killed = _to_be_killed;~%")
 		      (generate-intel-insn-recognizer *i386* #'(lambda (insn)
 								 (let ((name (intel-insn-name insn))
 								       (mode (intel-insn-mode insn)))

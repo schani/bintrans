@@ -679,6 +679,11 @@
 	    (t (every #'expr-constp (remove-if-not #'expr-p (expr-operands expr)))))))
   (expr-constp-value expr))
 
+(defun contains-free-vars-p (expr)
+  (if (eq (expr-kind expr) 'symbol)
+      t
+      (some #'contains-free-vars-p (remove-if-not #'expr-p (expr-operands expr)))))
+
 (defun expr-alternatives (expr)
   (if (not (expr-p expr))
       (list expr)
@@ -1699,92 +1704,100 @@
 
 (defun generate-compiler (target expr bindings &key true-label false-label (foreign-target -1))
   (labels ((load-reg-name (type width)
-  (format nil "load_reg_~A_~A" (dcs type) width))
+	     (format nil "load_reg_~A_~A" (dcs type) width))
 	   (store-reg-name (type width)
 	     (format nil "store_reg_~A_~A" (dcs type) width))
 	   (normalize-value (width src dst)
-	   (cond ((= width 64)
-		  "")
-		 ((= width 32)
-		  (format nil
-			  "emit(COMPOSE_ADDL(~A, 31, ~A));~%"
-			  src dst))
-		 ((= (rem width 8) 0)
-		  (format nil
-			  "emit(COMPOSE_ZAPNOT_IMM(~A, ~A, ~A));~%"
-			  src (1- (ash 1 (/ width 8))) dst))
-		 ((< width 8)
-		  (format nil
-			  "emit(COMPOSE_AND_IMM(~A, ~A, ~A));~%"
-			  src (1- (ash 1 width)) dst))
-		 (t
-		  (error "cannot normalize width ~A" width))))
+	     (cond ((= width 64)
+		    "")
+		   ((= width 32)
+		    (format nil
+			    "emit(COMPOSE_ADDL(~A, 31, ~A));~%"
+			    src dst))
+		   ((= (rem width 8) 0)
+		    (format nil
+			    "emit(COMPOSE_ZAPNOT_IMM(~A, ~A, ~A));~%"
+			    src (1- (ash 1 (/ width 8))) dst))
+		   ((< width 8)
+		    (format nil
+			    "emit(COMPOSE_AND_IMM(~A, ~A, ~A));~%"
+			    src (1- (ash 1 width)) dst))
+		   (t
+		    (error "cannot normalize width ~A" width))))
 	   (lookup-generator (paradigm expr)
-	   (cadr (assoc (cons paradigm expr) *generated-exprs*
-			:test #'(lambda (x y) (and (eq (car x) (car y)) (expr-equal-p (cdr x) (cdr y)))))))
+	     (cadr (assoc (cons paradigm expr) *generated-exprs*
+			  :test #'(lambda (x y) (and (eq (car x) (car y)) (expr-equal-p (cdr x) (cdr y)))))))
 	   (expr-symbols (expr)
-	   (mappend #'(lambda (x)
-			(destructuring-bind (name type width)
-			    x
-			  (list (c-type width type) (second (assoc name bindings)))))
-		    (symbols-in-expr expr)))
+	     (mappend #'(lambda (x)
+			  (destructuring-bind (name type width)
+			      x
+			    (list (c-type width type) (second (assoc name bindings)))))
+		      (symbols-in-expr expr)))
 	   (symbols-decl (symbols)
-	   (format nil "~{, ~A ~A~}" (mappend #'(lambda (x)
-						  (destructuring-bind (name type width)
-						      x
-						    (list (c-type width type) (second (assoc name bindings)))))
-					      symbols)))
+	     (format nil "~{, ~A ~A~}" (mappend #'(lambda (x)
+						    (destructuring-bind (name type width)
+							x
+						      (list (c-type width type) (second (assoc name bindings)))))
+						symbols)))
 	   (symbols-args (symbols)
-	   (format nil "~{, ~A~}" (mapcar #'(lambda (x) (second (assoc (first x) bindings))) symbols)))
+	     (format nil "~{, ~A~}" (mapcar #'(lambda (x) (second (assoc (first x) bindings))) symbols)))
 	   (rhs-func-args ()
-	   (symbols-args (symbols-in-expr *rhs-expr*)))
+	     (symbols-args (symbols-in-expr *rhs-expr*)))
 	   (generate-const ()
-	   (unless (eq (expr-type expr) 'integer)
-	     (error "can only load integers~%"))
-	   (let* ((width (expr-width expr))
-		  (load-width (if (<= width 32) 32 width)))
-	     (format nil "*target = ref_integer_reg_for_writing(foreign_target);
+	     (case (expr-type expr)
+	       (integer
+		(let* ((width (expr-width expr))
+		       (load-width (if (<= width 32) 32 width)))
+		  (format nil "*target = get_integer_reg_for_writing(foreign_target);
 emit_load_integer_~A(*target, ~A);~%"
-		     load-width (generate-interpreter expr nil))))
+			  load-width (generate-interpreter expr nil))))
+	       (float
+		(let* ((width (expr-width expr)))
+		  (assert (member width '(32 64)))
+		  (format nil "*target = get_float_reg_for_writing(foreign_target);
+emit_load_float_~A(*target, ~A);~%"
+			  width (generate-interpreter expr nil))))
+	       (t
+		(error "can only load ~A~%" (expr-type expr)))))
 	   (generate-generator (generator gen-bindings)
-	   (format nil "if (~A)
+	     (format nil "if (~A)
 {
 ~A}
 else
 {
 ~A}~%"
-		   (reduce #'(lambda (a b)
-			       (format nil "~A && ~A" a b)) 
-			   (mapcar #'(lambda (gen-binding)
-				       (destructuring-bind (name . bound-expr)
-					   gen-binding
-					 (if (integerp name)
-					     (format nil "~A == ~A"
-						     (generate-interpreter bound-expr nil) name)
-					     "1")))
-				   gen-bindings)
-			   :initial-value "1")
-		   (let ((c-bindings (mapcar* #'(lambda (gen-binding)
-						  (destructuring-bind (name . bound-expr)
-						      gen-binding
-						    (if (symbolp name)
-							(destructuring-bind (type (rel width) source)
-							    (cdr (assoc name (generator-inputs generator)))
-							  (let ((c-name (make-tmp-name)))
-							    (list name
-								  (if (eq source 'const)
-								      (c-type width type)
-								      "reg_t")
-								  c-name source bound-expr
-								  (if (eq source 'const)
-								      (generate-interpreter bound-expr nil)
-								      "0")
-								  (if (eq source 'const)
-								      nil
-								      (format nil "unref_~A_reg(~A)" (dcs type) c-name)))))
-							nil)))
-					      gen-bindings)))
-		     (format nil "~{~A ~A = ~A;~^
+		     (reduce #'(lambda (a b)
+				 (format nil "~A && ~A" a b)) 
+			     (mapcar #'(lambda (gen-binding)
+					 (destructuring-bind (name . bound-expr)
+					     gen-binding
+					   (if (integerp name)
+					       (format nil "~A == ~A"
+						       (generate-interpreter bound-expr nil) name)
+					       "1")))
+				     gen-bindings)
+			     :initial-value "1")
+		     (let ((c-bindings (mapcar* #'(lambda (gen-binding)
+						    (destructuring-bind (name . bound-expr)
+							gen-binding
+						      (if (symbolp name)
+							  (destructuring-bind (type (rel width) source)
+							      (cdr (assoc name (generator-inputs generator)))
+							    (let ((c-name (make-tmp-name)))
+							      (list name
+								    (if (eq source 'const)
+									(c-type width type)
+									"reg_t")
+								    c-name source bound-expr
+								    (if (eq source 'const)
+									(generate-interpreter bound-expr nil)
+									"0")
+								    (if (eq source 'const)
+									nil
+									(format nil "dispose_~A_reg(~A)" (dcs type) c-name)))))
+							  nil)))
+						gen-bindings)))
+		       (format nil "~{~A ~A = ~A;~^
 ~}
 ~{~A~}
 ~A
@@ -1792,34 +1805,34 @@ else
 ~}
 ~{~A;~^
 ~}~%"
-			     (mappend #'(lambda (b) (list (second b) (third b) (sixth b))) c-bindings)
-			     (mapcar* #'(lambda (b)
-					  (if (eq (fourth b) 'reg)
-					      (generate-compiler (third b) (fifth b) bindings)
-					      nil))
-				      c-bindings)
-			     (if target
-				 (format nil "*target = ref_~A_reg_for_writing(foreign_target);" (dcs (expr-type expr)))
-				 "")
-			     (mapcar #'(lambda (i)
-					 (format nil "emit(COMPOSE_~A(~{~A~^, ~}))"
-						 (first i)
-						 (mapcar #'(lambda (n)
-							     (if (eq n (first (generator-result generator)))
-								 target
-								 (third (assoc n c-bindings))))
-							 (rest i))))
-				     (generator-code generator))
-			     (mapcar* #'(lambda (b) (seventh b)) c-bindings)))
-		   default-generator))
+			       (mappend #'(lambda (b) (list (second b) (third b) (sixth b))) c-bindings)
+			       (mapcar* #'(lambda (b)
+					    (if (eq (fourth b) 'reg)
+						(generate-compiler (third b) (fifth b) bindings)
+						nil))
+					c-bindings)
+			       (if target
+				   (format nil "*target = get_~A_reg_for_writing(foreign_target);" (dcs (expr-type expr)))
+				   "")
+			       (mapcar #'(lambda (i)
+					   (format nil "emit(COMPOSE_~A(~{~A~^, ~}))"
+						   (first i)
+						   (mapcar #'(lambda (n)
+							       (if (eq n (first (generator-result generator)))
+								   target
+								   (third (assoc n c-bindings))))
+							   (rest i))))
+				       (generator-code generator))
+			       (mapcar* #'(lambda (b) (seventh b)) c-bindings)))
+		     default-generator))
 	   (generate-full ()
-	   (expr-case expr
+	     (expr-case expr
 	     (field (name begin end)
-		    (format nil "*target = ref_integer_reg_for_writing(foreign_target);
+		    (format nil "*target = get_integer_reg_for_writing(foreign_target);
 emit_load_integer_32(*target, ~A);~%"
 			    (funcall *insn-field-accessor* "insn" begin end)))
 	     (string (value) (error "cannot generate compiler for string~%"))
-	     (pc () "*target = ref_integer_reg_for_writing(foreign_target);
+	     (pc () "*target = get_integer_reg_for_writing(foreign_target);
 emit_load_integer_32(target, pc);~%")
 	     (addr () (error "cannot generate compiler for addr~%"))
 	     (symbol (name)
@@ -1827,10 +1840,13 @@ emit_load_integer_32(target, pc);~%")
 		       (destructuring-bind (name c-name type width constp)
 			   (nth pos bindings)
 			 (let ((value (format nil "*(~A*)env[~A]" (if constp (c-type width type) "reg_t") pos)))
-			   (format nil "*target = ref_integer_reg_for_writing(foreign_target);~%~A~%"
+			   (format nil "*target = get_~A_reg_for_writing(foreign_target);~%~A~%"
+				   (dcs type)
 				   (if constp
-				       (format nil "emit_load_integer_32(*target, ~A);~%" value)
-				       (format nil "emit(COMPOSE_MOV(~A, *target));~%" value)))))))
+				       (progn
+					 (assert (eq type 'integer))
+					 (format nil "emit_load_integer_32(*target, ~A);~%" value))
+				       (format nil "emit(COMPOSE_~AMOV(~A, *target));~%" (if (eq type 'float) "F" "") value)))))))
 	     (let (let-bindings body)
 	       (with-output-to-string (out)
 		 (let* ((new-bindings (mapcar #'(lambda (binding)
@@ -1841,7 +1857,7 @@ emit_load_integer_32(target, pc);~%")
 							  (let ((code (generate-interpreter expr bindings)))
 							    (format out "{~%~A ~A = ~A;~%"
 								    (c-type (expr-width expr) (expr-type expr)) c-name code))
-							  (format out "{~%reg_t ~A = ref_~A_reg_for_writing(-1);
+							  (format out "{~%reg_t ~A = get_~A_reg_for_writing(-1);
 ~A"
 								  c-name (dcs (expr-type expr))
 								  (generate-compiler c-name expr bindings
@@ -1871,9 +1887,11 @@ void *new_env[~A];~%"
 		   (format out "env = old_env;
 }~%")
 		   (mapc #'(lambda (let-binding binding)
-			     (format out "unref_~A_reg(~A);~%}~%"
-				     (dcs (expr-type (cdr let-binding)))
-				     (second binding)))
+			     (if (expr-constp (cdr let-binding))
+				 (format out "}~%")
+				 (format out "dispose_~A_reg(~A);~%}~%"
+					 (dcs (expr-type (cdr let-binding)))
+					 (second binding))))
 			 (reverse let-bindings) (reverse new-bindings)))))
 	     (set (lvalue rhs)
 		  (generate-compiler "zapor" rhs bindings)
@@ -1910,7 +1928,9 @@ emit(COMPOSE_SRA_IMM(*target, ~A, *target));~%"
 		   (format nil "if (optimize_taken_jump) {
 ~A
 } else {
-store_all_foreign_regs();
+#ifdef NEED_REGISTER_ALLOCATOR
+emit_store_regs(EMU_INSN_EPILOGUE, NO_FOREIGN_ADDR);
+#endif
 ~A
 }~%"
 			   (if (expr-constp target)
@@ -1930,8 +1950,14 @@ reg_t ~A;
 		 (if (expr-constp cond)
 		     (format nil "if (~A) {~%~A} else {~%~A}~%"
 			     (generate-interpreter cond nil)
-			     (generate-compiler "(*target)" cons bindings :foreign-target "foreign_target")
-			     (generate-compiler "(*target)" alt bindings :foreign-target "foreign_target"))
+			     (generate-compiler (if (null target) nil "(*target)") cons bindings
+						:true-label true-label :false-label false-label
+						:foreign-target (if (null target) foreign-target "foreign_target"))
+			     (generate-compiler (if (null target) nil "(*target)") alt bindings
+						:true-label true-label :false-label false-label
+						:foreign-target (if (null target) foreign-target "foreign_target")))
+;;			     (generate-compiler "(*target)" cons bindings :foreign-target "foreign_target")
+;;			     (generate-compiler "(*target)" alt bindings :foreign-target "foreign_target")
 		     (let* ((result-reg (if (null target) nil (make-tmp-name)))
 			    (dummy-foreign-target (if (null target) -1 (format nil "~A | NEED_NATIVE" result-reg)))
 			    (true (make-tmp-name))
@@ -1961,7 +1987,7 @@ free_label(~A);
 			       (let ((*rhs-expr* nil)) (generate-compiler nil cond bindings :true-label true :false-label false))
 			       (if (null target)
 				   ""
-				   (format nil "~A = ref_~A_reg_for_writing(-1);" result-reg (dcs (expr-type expr))))
+				   (format nil "~A = get_~A_reg_for_writing(-1);" result-reg (dcs (expr-type expr))))
 			       true
 			       (generate-compiler result-reg cons bindings :foreign-target dummy-foreign-target)
 			       end
@@ -1974,9 +2000,9 @@ free_label(~A);
 				   (format nil "if (foreign_target == -1)
 *target = ~A;
 else {
-*target = ref_~A_reg_for_writing(foreign_target);
+*target = get_~A_reg_for_writing(foreign_target);
 emit(COMPOSE_~AMOV(~A, *target));
-unref_~A_reg(~A);
+dispose_~A_reg(~A);
 }~%"
 					   result-reg
 					   (dcs (expr-type expr))
@@ -2017,21 +2043,40 @@ free_label(~A);
 	     (bit-set-p (value index)
 			(let ((value-reg (make-tmp-name))
 			      (bit-reg (make-tmp-name)))
-			  (format nil "{
+			  (if (expr-constp index)
+			      (format nil "{
 reg_t ~A, ~A;
-~A~A = ref_integer_reg_for_writing(-1);
+~A~A = alloc_tmp_integer_reg();
 emit(COMPOSE_SRL_IMM(~A, ~A, ~A));
-unref_integer_reg(~A);
+dispose_integer_reg(~A);
 emit_branch(COMPOSE_BLBS(~A, 0), true_label);
-unref_integer_reg(~A);
+free_tmp_integer_reg(~A);
 emit_branch(COMPOSE_BR(31, 0), false_label);
 }~%"
-				  value-reg bit-reg
-				  (generate-compiler value-reg value bindings) bit-reg
-				  value-reg (generate-interpreter index nil) bit-reg
-				  value-reg
-				  bit-reg
-				  bit-reg)))
+				      value-reg bit-reg
+				      (generate-compiler value-reg value bindings) bit-reg
+				      value-reg (generate-interpreter index nil) bit-reg
+				      value-reg
+				      bit-reg
+				      bit-reg)
+			      (let ((index-reg (make-tmp-name)))
+				(format nil "{
+reg_t ~A, ~A, ~A;
+~A~A~A = alloc_tmp_integer_reg();
+emit(COMPOSE_SRL(~A, ~A, ~A));
+dispose_integer_reg(~A);
+dispose_integer_reg(~A);
+emit_branch(COMPOSE_BLBS(~A, 0), true_label);
+free_tmp_integer_reg(~A);
+emit_branch(COMPOSE_BR(31, 0), false_label);
+}~%"
+					value-reg bit-reg index-reg
+					(generate-compiler value-reg value bindings) (generate-compiler index-reg index bindings) bit-reg
+					value-reg index-reg bit-reg
+					value-reg
+					index-reg
+					bit-reg
+					bit-reg)))))
 	     (register (reg class number)
 		       (let ((reg-index (register-index reg class number))
 			     (type (register-class-type class)))
@@ -2041,9 +2086,9 @@ emit_branch(COMPOSE_BR(31, 0), false_label);
 *target = ref_~A_reg_for_reading(~A);
 else {
 reg_t ~A = ref_~A_reg_for_reading(~A);
-*target = ref_~A_reg_for_writing(foreign_target);
+*target = get_~A_reg_for_writing(foreign_target);
 emit(COMPOSE_~AMOV(~A, *target));
-unref_~A_reg(~A);
+dispose_~A_reg(~A);
 }~%"
 
 				       (dcs type) reg-index
@@ -2057,7 +2102,7 @@ unref_~A_reg(~A);
 			       (format nil "{
 reg_t ~A;
 rhs_func(&~A, ~A, env);
-unref_~A_reg(~A);
+dispose_~A_reg(~A);
 }~%"
 				       reg-reg
 				       reg-reg reg-index
@@ -2072,13 +2117,13 @@ unref_~A_reg(~A);
 			       (if (null *rhs-expr*)
 				   (format nil "{
 reg_t ~A, ~A;
-~A~A = ref_integer_reg_for_writing(-1);
+~A~A = alloc_tmp_integer_reg();
 emit(COMPOSE_MOV(CONSTANT_AREA_REG, ~A));
 emit(COMPOSE_S8ADDQ(~A, ~A, ~A));
-*target = ref_~A_reg_for_writing(foreign_target);
+*target = get_~A_reg_for_writing(foreign_target);
 emit(COMPOSE_LDT(*target, ~A, ~A));
-unref_integer_reg(~A);
-unref_integer_reg(~A);
+free_tmp_integer_reg(~A);
+dispose_integer_reg(~A);
 }~%"
 					   addr-reg number-reg
 					   (generate-compiler number-reg number bindings) addr-reg
@@ -2093,13 +2138,13 @@ unref_integer_reg(~A);
 				     (format nil "{
 reg_t ~A, ~A, ~A;
 rhs_func(&~A, -1, env);
-~A~A = ref_integer_reg_for_writing(-1);
+~A~A = alloc_tmp_integer_reg();
 emit(COMPOSE_MOV(CONSTANT_AREA_REG, ~A));
 emit(COMPOSE_S8ADDQ(~A, ~A, ~A));
-unref_integer_reg(~A);
+dispose_integer_reg(~A);
 emit(COMPOSE_STT(~A, ~A, ~A));
-unref_integer_reg(~A);
-unref_~A_reg(~A);
+free_tmp_integer_reg(~A);
+dispose_~A_reg(~A);
 }~%"
 					     addr-reg number-reg rhs-reg
 					     rhs-reg
@@ -2121,9 +2166,9 @@ unref_~A_reg(~A);
 				    (let ((reg-type (register-class-type class)))
 				      (format nil "{
 reg_t ~A = ref_~A_reg_for_reading(~A);
-*target = ref_~A_reg_for_writing(foreign_target);
+*target = get_~A_reg_for_writing(foreign_target);
 emit(COMPOSE_SLL_IMM(~A, ~A, *target));
-unref_~A_reg(~A);
+dispose_~A_reg(~A);
 emit(COMPOSE_SRL_IMM(*target, ~A, *target));
 }~%"
 					      reg-reg (dcs reg-type) reg-index
@@ -2140,16 +2185,16 @@ reg_t ~A, ~A, ~A;
 rhs_func(&~A, -1, env);
 emit(COMPOSE_SLL_IMM(~A, ~A, ~A));
 emit(COMPOSE_SRL_IMM(~A, ~A, ~A));
-~A = ref_integer_reg_for_writing(-1);
+~A = alloc_tmp_integer_reg();
 emit_load_integer_32(~A, -1);
 emit(COMPOSE_SLL_IMM(~A, ~A, ~A));
 emit(COMPOSE_SRL_IMM(~A, ~A, ~A));
 ~A = ref_integer_reg_for_reading_and_writing(~A);
 emit(COMPOSE_BIC(~A, ~A, ~A));
-unref_integer_reg(~A);
+free_tmp_integer_reg(~A);
 emit(COMPOSE_BIS(~A, ~A, ~A));
-unref_integer_reg(~A);
-unref_integer_reg(~A);
+dispose_integer_reg(~A);
+dispose_integer_reg(~A);
 }~%"
 					      rhs-reg mask-reg reg-reg
 					      rhs-reg
@@ -2170,9 +2215,9 @@ unref_integer_reg(~A);
 *target = ref_integer_reg_for_reading(~A);
 else {
 reg_t ~A = ref_integer_reg_for_reading(~A);
-*target = ref_integer_reg_for_writing(foreign_target);
+*target = get_integer_reg_for_writing(foreign_target);
 emit(COMPOSE_MOV(~A, *target));
-unref_integer_reg(~A);
+dispose_integer_reg(~A);
 }~%"
 					    subreg-reg-index
 					    reg-reg subreg-reg-index
@@ -2181,7 +2226,7 @@ unref_integer_reg(~A);
 				    (format nil "{
 reg_t ~A;
 rhs_func(&~A, ~A, env);
-~Aunref_integer_reg(~A);
+~Adispose_integer_reg(~A);
 }~%"
 					    reg-reg
 					    reg-reg subreg-reg-index
@@ -2196,9 +2241,9 @@ rhs_func(&~A, ~A, env);
 					   (format nil "{
 word_32 index = ~A;
 reg_t ~A = ref_~A_reg_for_reading(~A);
-*target = ref_~A_reg_for_writing(foreign_target);
+*target = get_~A_reg_for_writing(foreign_target);
 emit(COMPOSE_SLL_IMM(~A, 64 - (index + 1) * ~A, *target));
-unref_~A_reg(~A);
+dispose_~A_reg(~A);
 emit(COMPOSE_SRL_IMM(*target, ~A, *target));
 }~%"
 						   (generate-interpreter index nil)
@@ -2217,17 +2262,17 @@ word_64 begin = ~A * ~A;
 reg_t ~A, ~A, ~A;
 rhs_func(&~A, -1, env);
 emit(COMPOSE_SLL_IMM(~A, begin, ~A));
-~A = ref_integer_reg_for_writing(-1);
+~A = alloc_tmp_integer_reg();
 emit_load_integer_32(~A, -1);
 emit(COMPOSE_SRL_IMM(~A, ~A, ~A));
 emit(COMPOSE_SLL_IMM(~A, begin, ~A));
 emit(COMPOSE_AND(~A, ~A, ~A));
 ~A = ref_integer_reg_for_reading_and_writing(~A);
 emit(COMPOSE_BIC(~A, ~A, ~A));
-unref_integer_reg(~A);
+free_tmp_integer_reg(~A);
 emit(COMPOSE_BIS(~A, ~A, ~A));
-unref_integer_reg(~A);
-unref_integer_reg(~A);
+dispose_integer_reg(~A);
+dispose_integer_reg(~A);
 }~%"
 						   (generate-interpreter index nil) width
 						   rhs-reg mask-reg reg-reg
@@ -2251,15 +2296,15 @@ unref_integer_reg(~A);
 			(format nil "{
 reg_t ~A, ~A;
 ~A#ifdef EMU_I386
-~A = ref_integer_reg_for_writing(-1);
+~A = alloc_tmp_integer_reg();
 emit(COMPOSE_ZAPNOT_IMM(~A, 15, ~A));
-unref_integer_reg(~A);
+dispose_integer_reg(~A);
 #else
 ~A = ~A;
 #endif
-*target = ref_~A_reg_for_writing(foreign_target);
+*target = get_~A_reg_for_writing(foreign_target);
 emit_load_mem_~A(*target, ~A);
-unref_integer_reg(~A);
+free_tmp_integer_reg(~A);
 }~%"
 				addr-reg zapped-addr-reg
 				(generate-compiler addr-reg addr bindings)
@@ -2277,16 +2322,16 @@ unref_integer_reg(~A);
 			  (format nil "{
 reg_t ~A, ~A, ~A;
 ~A#ifdef EMU_I386
-~A = ref_integer_reg_for_writing(-1);
+~A = alloc_tmp_integer_reg();
 emit(COMPOSE_ZAPNOT_IMM(~A, 15, ~A));
-unref_integer_reg(~A);
+dispose_integer_reg(~A);
 #else
 ~A = ~A;
 #endif
 rhs_func(&~A, -1, env);
 emit_store_mem_~A(~A, ~A);
-unref_integer_reg(~A);
-unref_integer_reg(~A);
+free_tmp_integer_reg(~A);
+dispose_integer_reg(~A);
 }~%"
 				  addr-reg rhs-reg zapped-addr-reg
 				  (generate-compiler addr-reg addr bindings)
@@ -2303,9 +2348,9 @@ unref_integer_reg(~A);
 		      (let ((tmp-reg (make-tmp-name)))
 			(format nil "{
 reg_t ~A;
-~A*target = ref_integer_reg_for_writing(foreign_target);
+~A*target = get_integer_reg_for_writing(foreign_target);
 emit(COMPOSE_ZAPNOT_IMM(~A, 15, *target));
-unref_integer_reg(~A);
+dispose_integer_reg(~A);
 }~%"
 				tmp-reg
 				(generate-compiler tmp-reg value bindings)
@@ -2319,9 +2364,9 @@ unref_integer_reg(~A);
 		  (let ((tmp-reg (make-tmp-name)))
 		    (format nil "{
 reg_t ~A;
-~A*target = ref_integer_reg_for_writing(foreign_target);
+~A*target = get_integer_reg_for_writing(foreign_target);
 emit(COMPOSE_SLL_IMM(~A, ~A, *target));
-unref_integer_reg(~A);
+dispose_integer_reg(~A);
 emit(COMPOSE_SRA_IMM(*target, ~A, *target));
 }~%"
 			    tmp-reg
@@ -2338,12 +2383,12 @@ emit(COMPOSE_SRA_IMM(*target, ~A, *target));
 				   (op2-reg (make-tmp-name)))
 			       (format out "{
 reg_t ~A, ~A, ~A, ~A;
-~A~A = ref_integer_reg_for_writing(-1);
+~A~A = alloc_tmp_integer_reg();
 emit(COMPOSE_ZAPNOT_IMM(~A, 15, ~A));
-unref_integer_reg(~A);
-~A~A = ref_integer_reg_for_writing(-1);
+dispose_integer_reg(~A);
+~A~A = alloc_tmp_integer_reg();
 emit(COMPOSE_ZAPNOT_IMM(~A, 15, ~A));
-unref_integer_reg(~A);"
+dispose_integer_reg(~A);"
 				       op1-reg op2-reg op1-zapped-reg op2-zapped-reg
 				       (generate-compiler op1-reg op1 bindings) op1-zapped-reg
 				       op1-reg op1-zapped-reg
@@ -2357,10 +2402,10 @@ reg_t ~A, ~A;
 				     op1-zapped-reg op2-zapped-reg
 				     (generate-compiler op1-zapped-reg op1 bindings)
 				     (generate-compiler op2-zapped-reg op2 bindings)))
-			 (format out "*target = ref_integer_reg_for_writing(foreign_target);
+			 (format out "*target = get_integer_reg_for_writing(foreign_target);
 emit(COMPOSE_ADDQ(~A, ~A, *target));
-unref_integer_reg(~A);
-unref_integer_reg(~A);
+dispose_integer_reg(~A);
+dispose_integer_reg(~A);
 emit(COMPOSE_SRL_IMM(*target, ~A, *target));
 }~%"
 				 op1-zapped-reg op2-zapped-reg
@@ -2376,12 +2421,12 @@ emit(COMPOSE_SRL_IMM(*target, ~A, *target));
 				   (op2-reg (make-tmp-name)))
 			       (format out "{
 reg_t ~A, ~A, ~A, ~A;
-~A~A = ref_integer_reg_for_writing(-1);
+~A~A = alloc_tmp_integer_reg();
 emit(COMPOSE_ZAPNOT_IMM(~A, 15, ~A));
-unref_integer_reg(~A);
-~A~A = ref_integer_reg_for_writing(-1);
+dispose_integer_reg(~A);
+~A~A = alloc_tmp_integer_reg();
 emit(COMPOSE_ZAPNOT_IMM(~A, 15, ~A));
-unref_integer_reg(~A);"
+dispose_integer_reg(~A);"
 				       op1-reg op2-reg op1-zapped-reg op2-zapped-reg
 				       (generate-compiler op1-reg op1 bindings) op1-zapped-reg
 				       op1-reg op1-zapped-reg
@@ -2395,10 +2440,10 @@ reg_t ~A, ~A;
 				     op1-zapped-reg op2-zapped-reg
 				     (generate-compiler op1-zapped-reg op1 bindings)
 				     (generate-compiler op2-zapped-reg op2 bindings)))
-			 (format out "*target = ref_integer_reg_for_writing(foreign_target);
+			 (format out "*target = get_integer_reg_for_writing(foreign_target);
 emit(COMPOSE_SUBQ(~A, ~A, *target));
-unref_integer_reg(~A);
-unref_integer_reg(~A);
+dispose_integer_reg(~A);
+dispose_integer_reg(~A);
 emit(COMPOSE_SRL_IMM(*target, ~A, *target));
 emit(COMPOSE_AND_IMM(*target, 1, *target));
 }~%"
@@ -2424,12 +2469,12 @@ reg_t ~A, ~A, ~A;
 				  (assert (member (expr-width op1) '(8 16)))
 				  (format out "{
 reg_t ~A, ~A, ~A, ~A, ~A;
-~A~A = ref_integer_reg_for_writing(-1);
+~A~A = alloc_tmp_integer_reg();
 emit(COMPOSE_SEXT~A(~A, ~A));
-unref_integer_reg(~A);
-~A~A = ref_integer_reg_for_writing(-1);
+dispose_integer_reg(~A);
+~A~A = alloc_tmp_integer_reg();
 emit(COMPOSE_SEXT~A(~A, ~A));
-unref_integer_reg(~A);~%"
+dispose_integer_reg(~A);~%"
 					  op1-reg op2-reg op1-sexed-reg op2-sexed-reg tmp-reg
 					  (generate-compiler op1-reg op1 bindings) op1-sexed-reg
 					  sext-char op1-reg op1-sexed-reg
@@ -2437,17 +2482,17 @@ unref_integer_reg(~A);~%"
 					  (generate-compiler op2-reg op2 bindings) op2-sexed-reg
 					  sext-char op2-reg op2-sexed-reg
 					  op2-reg)))
-			    (format out "~A = ref_integer_reg_for_writing(-1);
+			    (format out "~A = alloc_tmp_integer_reg();
 emit(COMPOSE_ADDQ(~A, ~A, ~A));
-unref_integer_reg(~A);
-unref_integer_reg(~A);
+dispose_integer_reg(~A);
+dispose_integer_reg(~A);
 emit(COMPOSE_SRA_IMM(~A, ~A, ~A));
-*target = ref_integer_reg_for_writing(foreign_target);
+*target = get_integer_reg_for_writing(foreign_target);
 emit(COMPOSE_ADDQ_IMM(31, 1, *target));
 emit(COMPOSE_CMOVEQ_IMM(~A, 0, *target));
 emit(COMPOSE_NOT(~A, ~A));
 emit(COMPOSE_CMOVEQ_IMM(~A, 0, *target));
-unref_integer_reg(~A);
+free_tmp_integer_reg(~A);
 }~%"
 				    tmp-reg
 				    op1-sexed-reg op2-sexed-reg tmp-reg
@@ -2458,15 +2503,43 @@ unref_integer_reg(~A);
 				    tmp-reg tmp-reg
 				    tmp-reg
 				    tmp-reg))))
+	     (parity-even (value)	;FIXME: only works on the lowest 8 bits
+			  (let ((value-reg (make-tmp-name))
+				(tmp-reg (make-tmp-name)))
+			    (format nil "{
+reg_t ~A, ~A;
+~A*target = get_integer_reg_for_writing(foreign_target);
+~A = alloc_tmp_integer_reg();
+emit(COMPOSE_SRL_IMM(~A, 4, ~A));
+emit(COMPOSE_XOR(~A, ~A, *target));
+dispose_integer_reg(~A);
+emit(COMPOSE_SRL_IMM(*target, 2, ~A));
+emit(COMPOSE_XOR(*target, ~A, *target));
+emit(COMPOSE_SRL_IMM(*target, 1, ~A));
+emit(COMPOSE_XOR(*target, ~A, *target));
+emit(COMPOSE_XOR_IMM(*target, 1, *target));
+free_tmp_integer_reg(~A);
+}~%"
+				    value-reg tmp-reg
+				    (generate-compiler value-reg value bindings)
+				    tmp-reg
+				    value-reg tmp-reg ;srl 4
+				    value-reg tmp-reg ;xor
+				    value-reg ;unref
+				    tmp-reg ;srl 2
+				    tmp-reg ;xor
+				    tmp-reg ;srl 1
+				    tmp-reg ;xor
+				    tmp-reg)))
 	     (shiftl (value amount)
 		     (let ((value-reg (make-tmp-name))
 			   (amount-reg (make-tmp-name)))
 		       (format nil "{
 reg_t ~A, ~A;
-~A~A*target = ref_integer_reg_for_writing(foreign_target);
+~A~A*target = get_integer_reg_for_writing(foreign_target);
 emit(COMPOSE_SLL(~A, ~A, *target));
-unref_integer_reg(~A);
-unref_integer_reg(~A);
+dispose_integer_reg(~A);
+dispose_integer_reg(~A);
 ~A}~%"
 			       value-reg amount-reg
 			       (generate-compiler value-reg value bindings)
@@ -2480,10 +2553,10 @@ unref_integer_reg(~A);
 			   (amount-reg (make-tmp-name)))
 		       (format nil "{
 reg_t ~A, ~A;
-~A~A~A*target = ref_integer_reg_for_writing(foreign_target);
+~A~A~A*target = get_integer_reg_for_writing(foreign_target);
 emit(COMPOSE_SRL(~A, ~A, *target));
-unref_integer_reg(~A);
-unref_integer_reg(~A);
+dispose_integer_reg(~A);
+dispose_integer_reg(~A);
 ~A}~%"
 			       value-reg amount-reg
 			       (generate-compiler value-reg value bindings)
@@ -2499,10 +2572,10 @@ unref_integer_reg(~A);
 			(if (member (expr-width expr) '(32 64))
 			    (format nil "{
 reg_t ~A, ~A;
-~A~A*target = ref_integer_reg_for_writing(foreign_target);
+~A~A*target = get_integer_reg_for_writing(foreign_target);
 emit(COMPOSE_SRA(~A, ~A, *target));
-unref_integer_reg(~A);
-unref_integer_reg(~A);
+dispose_integer_reg(~A);
+dispose_integer_reg(~A);
 }~%"
 				    value-reg amount-reg
 				    (generate-compiler value-reg value bindings)
@@ -2513,10 +2586,10 @@ unref_integer_reg(~A);
 			    (let ((right-amount-reg (make-tmp-name)))
 			      (format nil "{
 reg_t ~A, ~A, ~A;
-~A~A*target = ref_integer_reg_for_writing(foreign_target);
+~A~A*target = get_integer_reg_for_writing(foreign_target);
 emit(COMPOSE_SLL(~A, ~A, *target));
 emit(COMPOSE_ADDQ_IMM(~A, ~A, ~A));
-unref_integer_reg(~A);
+dispose_integer_reg(~A);
 emit(COMPOSE_SRA(*target, ~A, *target));
 ~A}~%"
 				      value-reg amount-reg right-amount-reg
@@ -2531,7 +2604,8 @@ emit(COMPOSE_SRA(*target, ~A, *target));
 		   (let ((tmp-reg (make-tmp-name))
 			 (value-reg (make-tmp-name))
 			 (zapped-reg (make-tmp-name)))
-		     (format nil "{
+		     (if (expr-constp amount)
+			 (format nil "{
 reg_t ~A, ~A, ~A;
 word_64 amount = ~A;
 if (amount == 0)
@@ -2539,32 +2613,60 @@ if (amount == 0)
 ~A}
 else
 {
-~A~A = ref_integer_reg_for_writing(-1);
+~A~A = alloc_tmp_integer_reg();
 emit(COMPOSE_ZAPNOT_IMM(~A, 15, ~A));
-unref_integer_reg(~A);
-~A = ref_integer_reg_for_writing(-1);
+dispose_integer_reg(~A);
+~A = alloc_tmp_integer_reg();
 emit(COMPOSE_SLL_IMM(~A, amount, ~A));
-emit(COMPOSE_SLL_IMM(~A, 32 + amount, ~A));
+emit(COMPOSE_SLL_IMM(~A, ~A + amount, ~A));
 emit(COMPOSE_BIS(~A, ~A, ~A));
-unref_integer_reg(~A);
-*target = ref_integer_reg_for_writing(foreign_target);
-emit(COMPOSE_SRA_IMM(~A, 32, *target));
-unref_integer_reg(~A);
+free_tmp_integer_reg(~A);
+*target = get_integer_reg_for_writing(foreign_target);
+emit(COMPOSE_SRA_IMM(~A, ~A, *target));
+free_tmp_integer_reg(~A);
 }
 }~%"
-			     tmp-reg value-reg zapped-reg
-			     (generate-interpreter amount nil)
-			     (generate-compiler "(*target)" value bindings :foreign-target "foreign_target")
-			     (generate-compiler value-reg value bindings) zapped-reg
-			     value-reg zapped-reg
-			     value-reg
-			     tmp-reg
-			     zapped-reg tmp-reg
-			     zapped-reg zapped-reg
-			     zapped-reg tmp-reg zapped-reg
-			     tmp-reg
-			     zapped-reg
-			     zapped-reg)))
+				 tmp-reg value-reg zapped-reg
+				 (generate-interpreter amount nil)
+				 (generate-compiler "(*target)" value bindings :foreign-target "foreign_target")
+				 (generate-compiler value-reg value bindings) zapped-reg
+				 value-reg zapped-reg ;zapnot_imm
+				 value-reg
+				 tmp-reg
+				 zapped-reg tmp-reg ;sll_imm
+				 zapped-reg (expr-width expr) zapped-reg ;sll_imm
+				 zapped-reg tmp-reg zapped-reg ;bis
+				 tmp-reg
+				 zapped-reg (expr-width expr) ;sra
+				 zapped-reg)
+			 (let ((amount-reg (make-tmp-name)))
+			   (format nil "{
+reg_t ~A, ~A, ~A, ~A;
+~A~A = alloc_tmp_integer_reg();
+emit(COMPOSE_ZAPNOT_IMM(~A, 15, ~A));
+dispose_integer_reg(~A);
+~A~A = alloc_tmp_integer_reg();
+emit(COMPOSE_SLL(~A, ~A, ~A));
+dispose_integer_reg(~A);
+emit(COMPOSE_SLL_IMM(~A, ~A, ~A));
+emit(COMPOSE_BIS(~A, ~A, ~A));
+free_tmp_integer_reg(~A);
+*target = get_integer_reg_for_writing(foreign_target);
+emit(COMPOSE_SRA_IMM(~A, ~A, *target));
+free_tmp_integer_reg(~A);
+}~%"
+				   tmp-reg value-reg zapped-reg amount-reg
+				   (generate-compiler value-reg value bindings) zapped-reg
+				   value-reg zapped-reg	;zapnot
+				   value-reg
+				   (generate-compiler amount-reg amount bindings) tmp-reg
+				   zapped-reg amount-reg tmp-reg ;sll
+				   amount-reg
+				   tmp-reg (expr-width expr) zapped-reg ;sll_imm
+				   zapped-reg tmp-reg zapped-reg ;bis
+				   tmp-reg
+				   zapped-reg (expr-width expr) ;sra
+				   zapped-reg)))))
 	     (leading-zeros (value)
 			    (let ((tmp-reg (make-tmp-name)))
 			      (format nil "{
@@ -2572,7 +2674,7 @@ reg_t ~A;
 ~Aemit(COMPOSE_LDQ(0, LEADING_ZEROS_CONST * 4, CONSTANT_AREA_REG));
 emit(COMPOSE_LDQ(PROCEDURE_VALUE_REG, C_STUB_CONST * 4, CONSTANT_AREA_REG));
 emit(COMPOSE_JMP(RETURN_ADDR_REG, PROCEDURE_VALUE_REG));
-*target = ref_integer_reg_for_writing(foreign_target);
+*target = get_integer_reg_for_writing(foreign_target);
 emit(COMPOSE_MOV(0, *target));
 }~%"
 				      tmp-reg
@@ -2585,8 +2687,8 @@ emit(COMPOSE_MOV(0, *target));
 			      (format nil "{
 reg_t ~A;
 ~Aemit(COMPOSE_ST~A(~A, SCRATCH_OFFSET, CONSTANT_AREA_REG));
-unref_integer_reg(~A);
-*target = ref_float_reg_for_writing(foreign_target);
+dispose_integer_reg(~A);
+*target = get_float_reg_for_writing(foreign_target);
 emit(COMPOSE_LD~A(*target, SCRATCH_OFFSET, CONSTANT_AREA_REG));
 }~%"
 				      bits-reg
@@ -2600,8 +2702,8 @@ emit(COMPOSE_LD~A(*target, SCRATCH_OFFSET, CONSTANT_AREA_REG));
 			      (format nil "{
 reg_t ~A;
 ~Aemit(COMPOSE_ST~A(~A, SCRATCH_OFFSET, CONSTANT_AREA_REG));
-unref_float_reg(~A);
-*target = ref_integer_reg_for_writing(foreign_target);
+dispose_float_reg(~A);
+*target = get_integer_reg_for_writing(foreign_target);
 emit(COMPOSE_LD~A(*target, SCRATCH_OFFSET, CONSTANT_AREA_REG));
 }~%"
 				      float-reg
@@ -2616,13 +2718,13 @@ emit(COMPOSE_LD~A(*target, SCRATCH_OFFSET, CONSTANT_AREA_REG));
 				      (int-char (if (= width 32) "L" "Q")))
 				 (format nil "{
 reg_t ~A, ~A;
-~A~A = ref_float_reg_for_writing(-1);
+~A~A = alloc_tmp_float_reg();
 emit(COMPOSE_CVTTQC(~A, ~A));
-unref_float_reg(~A);
+dispose_float_reg(~A);
 ~A
 emit(COMPOSE_ST~A(~A, SCRATCH_OFFSET, CONSTANT_AREA_REG));
-unref_float_reg(~A);
-*target = ref_integer_reg_for_writing(foreign_target);
+free_tmp_float_reg(~A);
+*target = get_integer_reg_for_writing(foreign_target);
 emit(COMPOSE_LD~A(*target, SCRATCH_OFFSET, CONSTANT_AREA_REG));
 }~%"
 					 float-reg float-int-reg
@@ -2638,8 +2740,8 @@ emit(COMPOSE_LD~A(*target, SCRATCH_OFFSET, CONSTANT_AREA_REG));
 				 (format nil "{
 reg_t ~A;
 ~Aemit(COMPOSE_STQ(~A, SCRATCH_OFFSET, CONSTANT_AREA_REG));
-unref_integer_reg(~A);
-*target = ref_float_reg_for_writing(foreign_target);
+dispose_integer_reg(~A);
+*target = get_float_reg_for_writing(foreign_target);
 emit(COMPOSE_LDT(*target, SCRATCH_OFFSET, CONSTANT_AREA_REG));
 emit(COMPOSE_CVTQTC(*target, *target));
 }~%"
@@ -2648,8 +2750,12 @@ emit(COMPOSE_CVTQTC(*target, *target));
 					 int-reg)))
 	     (nop () (format nil "/* nop */~%"))
 	     (ignore (value) (format nil "/* ignore */~%"))
-	     (system-call () (format nil "store_and_free_all_foreign_regs();
-emit_system_call();~%"))
+	     (not-implemented () (format nil "bt_assert(0); /* not implemented */~%"))
+	     (system-call () (format nil "#ifdef NEED_REGISTER_ALLOCATOR
+emit_store_regs(EMU_INSN_EPILOGUE, NO_FOREIGN_ADDR);
+#endif
+emit_system_call();
+emit_direct_jump(next_pc);~%"))
 	     ((= =f < <f <s <= > >f >s >=) (left right)
 	      (destructuring-bind (op swap)
 		  (cadr (assoc (expr-kind expr) '((= ("EQ" nil)) (=f ("EQ" nil))
@@ -2664,10 +2770,10 @@ emit_system_call();~%"))
 		  (if (null false-label)
 		      (format nil "{
 reg_t ~A, ~A;
-~A~A*target = ref_~A_reg_for_writing(foreign_target);
+~A~A*target = get_~A_reg_for_writing(foreign_target);
 emit(COMPOSE_CMP~A~A(~A, ~A, *target));
-unref_~A_reg(~A);
-unref_~A_reg(~A);
+dispose_~A_reg(~A);
+dispose_~A_reg(~A);
 }~%"
 			      left-reg right-reg
 			      (generate-compiler left-reg left bindings)
@@ -2681,12 +2787,12 @@ unref_~A_reg(~A);
 			(assert (and (not (null true-label)) (not (null false-label))))
 			(format nil "{
 reg_t ~A, ~A, ~A;
-~A~A~A = ref_~A_reg_for_writing(-1);
+~A~A~A = alloc_tmp_~A_reg();
 emit(COMPOSE_CMP~A~A(~A, ~A, ~A));
-unref_~A_reg(~A);
-unref_~A_reg(~A);
+dispose_~A_reg(~A);
+dispose_~A_reg(~A);
 emit_branch(COMPOSE_~ABEQ(~A, 0), false_label);
-unref_~A_reg(~A);
+free_tmp_~A_reg(~A);
 emit_branch(COMPOSE_BR(31, 0), true_label);
 }~%"
 				left-reg right-reg result-reg
@@ -2726,10 +2832,10 @@ label_t ~A = alloc_label();
 		      (right-reg (make-tmp-name)))
 		  (format nil "{
 reg_t ~A, ~A;
-~A~A*target = ref_integer_reg_for_writing(foreign_target);
+~A~A*target = get_integer_reg_for_writing(foreign_target);
 emit(COMPOSE_~A(~A, ~A, *target));
-unref_integer_reg(~A);
-unref_integer_reg(~A);
+dispose_integer_reg(~A);
+dispose_integer_reg(~A);
 }~%"
 			  left-reg right-reg
 			  (generate-compiler left-reg left bindings)
@@ -2743,9 +2849,9 @@ unref_integer_reg(~A);
 		    (type (expr-type expr)))
 		(format nil "{
 reg_t ~A;
-~A*target = ref_~A_reg_for_writing(foreign_target);
+~A*target = get_~A_reg_for_writing(foreign_target);
 emit(COMPOSE_~A(~A, *target));
-unref_~A_reg(~A);
+dispose_~A_reg(~A);
 }~%"
 			value-reg
 			(generate-compiler value-reg value bindings) (dcs type)
@@ -2763,10 +2869,10 @@ unref_~A_reg(~A);
 		(assert (not (null type-char)))
 		(format nil "{
 reg_t ~A, ~A;
-~A~A*target = ref_~A_reg_for_writing(foreign_target);
+~A~A*target = get_~A_reg_for_writing(foreign_target);
 emit(COMPOSE_~A(~A, ~A, *target));
-~Aunref_~A_reg(~A);
-unref_~A_reg(~A);
+~Adispose_~A_reg(~A);
+dispose_~A_reg(~A);
 }~%"
 			left-reg right-reg
 			(generate-compiler left-reg left bindings)
@@ -2790,12 +2896,12 @@ unref_~A_reg(~A);
 reg_t ~A, ~A;
 ~A~Aemit(COMPOSE_MOV(~A, 16));
 emit(COMPOSE_MOV(~A, 17));
-unref_integer_reg(~A);
-unref_integer_reg(~A);
+dispose_integer_reg(~A);
+dispose_integer_reg(~A);
 emit(COMPOSE_LDQ(0, ~? * 4, CONSTANT_AREA_REG));
 emit(COMPOSE_LDQ(PROCEDURE_VALUE_REG, C_STUB_CONST * 4, CONSTANT_AREA_REG));
 emit(COMPOSE_JMP(RETURN_ADDR_REG, PROCEDURE_VALUE_REG));
-*target = ref_integer_reg_for_writing(foreign_target);
+*target = get_integer_reg_for_writing(foreign_target);
 emit(COMPOSE_MOV(0, *target));
 }~%"
 			left-reg right-reg
@@ -2805,20 +2911,20 @@ emit(COMPOSE_MOV(0, *target));
 			left-reg right-reg
 			const (list (expr-width expr)))))))
 	   (generate ()
-	   (if (expr-constp expr)
-	       (generate-const)
-	       (multiple-value-bind (generator gen-bindings)
-		   (find-generator expr (machine-generators *this-machine*))
-		 (if generator
-		     (generate-generator generator gen-bindings)
-		     (generate-full))))))
-    (let* ((paradigm (cond (*rhs-expr* 'set) (true-label 'cond) (target 'expr) (t 'toplevel)))
-    (func-name (lookup-generator paradigm expr))
-    (symbols-in-expr (symbols-in-expr (cons expr *rhs-expr*)))
-    (bindings-args-decl (symbols-decl symbols-in-expr))
-    (bindings-args (symbols-args symbols-in-expr))
-    (rhs-bindings-args-decl (if (null *rhs-expr*) "" (symbols-decl (symbols-in-expr *rhs-expr*)))))
-      (unless (or func-name (eq paradigm 'toplevel))
+		     (if (expr-constp expr)
+			 (generate-const)
+			 (multiple-value-bind (generator gen-bindings)
+			     (find-generator expr (machine-generators *this-machine*))
+			   (if generator
+			       (generate-generator generator gen-bindings)
+			       (generate-full))))))
+  (let* ((paradigm (cond (*rhs-expr* 'set) (true-label 'cond) (target 'expr) (t 'toplevel)))
+	 (func-name (if (contains-free-vars-p expr) nil (lookup-generator paradigm expr)))
+	 (symbols-in-expr (symbols-in-expr (cons expr *rhs-expr*)))
+	 (bindings-args-decl (symbols-decl symbols-in-expr))
+	 (bindings-args (symbols-args symbols-in-expr))
+	 (rhs-bindings-args-decl (if (null *rhs-expr*) "" (symbols-decl (symbols-in-expr *rhs-expr*)))))
+    (unless (or func-name (eq paradigm 'toplevel))
       (setf func-name (format nil "compiler_~A" (make-tmp-name)))
       (let* ((compiler-code (generate))
 	     (func-proto (case paradigm
@@ -2829,7 +2935,7 @@ emit(COMPOSE_MOV(0, *target));
 			   (set
 			    (format nil "void ~A (void (*rhs_func) (reg_t*, int, void**), void **env)" func-name)))))
 	(push (list (cons paradigm expr) func-name func-proto compiler-code) *generated-exprs*)))
-      (case paradigm
+    (case paradigm
       (expr
        (format nil "~A(&~A, ~A, env);~%" func-name target foreign-target))
       (cond
@@ -4974,7 +5080,7 @@ unrecognized:
   
 
 (defun generate-registers-and-insns-code (machine)
-  (format t "#define SCRATCH_OFFSET   ~A~%" (* 8 (length (machine-registers machine))))
+  (format t "#define SCRATCH_OFFSET   ~A~%" (* 8 (+ (length (machine-registers machine)) (length (machine-subreg-registers machine)))))
   (format t "void move_~A_regs_interpreter_to_compiler (interpreter_t *intp) {~%" (dcs (machine-name machine)))
   (dolist (reg (machine-registers machine))
     (let* ((class (register-register-class reg))

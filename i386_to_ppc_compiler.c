@@ -208,17 +208,6 @@ ref_i386_gpr (reg_t num, int for_reading, int for_writing)
 	return ref_i386_gpr_w(num);
 }
 
-static void
-dispose_integer_reg (reg_t reg)
-{
-    if (reg == 0)
-	return;
-    if (is_tmp_integer_reg(reg))
-	free_tmp_integer_reg(reg);
-    else
-	unref_integer_reg(reg);
-}
-
 static int
 src_is_imm (word_32 *val)
 {

@@ -31,7 +31,7 @@
 /* #define NO_REGISTER_CACHING */
 /* #define NO_PATCHING */
 #define PATCH_STORE_REGS
-/* #define CHECK_TMP_REGS */
+#define CHECK_TMP_REGS
 #define PRESERVE_CONSTANTS
 
 #ifdef NEED_COMPILER
@@ -146,13 +146,15 @@ typedef struct
 #if defined(EMU_PPC)
 #define NEED_REGISTER_ALLOCATOR
 reg_range_t integer_reg_range[] = { { 4, 16 }, { 18, 26 }, { 0, 0 } };
+#define FIRST_TMP_INTEGER_REG   1
+#define NUM_TMP_INTEGER_REGS    3
 #elif defined(EMU_I386)
 /* reg_range_t integer_reg_range[] = { { 15, 16 }, { 18, 26 }, { 0, 0 } }; */
 #define FIRST_NATIVE_INTEGER_HOST_REG           1
-#define NUM_NATIVE_INTEGER_HOST_REGS           14 /* FIXME: this should be in the machine definition (NUM_INTEGER_EMU_REGISTERS) */
+#define NUM_NATIVE_INTEGER_HOST_REGS           15 /* FIXME: this should be in the machine definition (NUM_INTEGER_EMU_REGISTERS) */
+#define FIRST_TMP_INTEGER_REG   18
+#define NUM_TMP_INTEGER_REGS    7
 #endif
-#define FIRST_TMP_INTEGER_REG   1
-#define NUM_TMP_INTEGER_REGS    3
 #elif defined(ARCH_PPC)
 #if defined(EMU_I386)
 #define FIRST_NATIVE_INTEGER_HOST_REG          14
@@ -176,8 +178,13 @@ reg_range_t integer_reg_range[] = { { 4, 16 }, { 18, 26 }, { 0, 0 } };
 #define FIRST_FLOAT_REG         2
 #endif
 
+#if defined(ARCH_ALPHA) && defined(EMU_I386)
+#define FIRST_TMP_FLOAT_REG     1
+#define NUM_TMP_FLOAT_REGS      3
+#else
 #define FIRST_TMP_FLOAT_REG     1
 #define NUM_TMP_FLOAT_REGS      1
+#endif
 
 #ifdef NEED_REGISTER_ALLOCATOR
 int native_integer_regs[NUM_FREE_INTEGER_REGS];
@@ -796,10 +803,12 @@ unref_integer_reg (reg_t reg)
 #endif
 }
 
-#ifdef NEED_REGISTER_ALLOCATOR
 reg_t
 ref_float_reg (int foreign_reg, int reading, int writing)
 {
+#ifdef EMU_I386
+    bt_assert(0);
+#else
     bt_assert(foreign_reg >= 0 && foreign_reg < NUM_EMU_REGISTERS);
 
 #if defined(EMU_PPC) && defined(FAST_PPC_FPR)
@@ -816,19 +825,23 @@ ref_float_reg (int foreign_reg, int reading, int writing)
 #else
     return ref_reg(foreign_reg, reading, writing, REG_TYPE_FLOAT);
 #endif
+#endif
 }
 
 void
 unref_float_reg (reg_t reg)
 {
+#ifdef EMU_I386
+    bt_assert(0);
+#else
 #if defined(EMU_PPC) && defined(FAST_PPC_FPR)
     if (reg < 28)
 	return;
 #else
     unref_reg(reg);
 #endif
-}
 #endif
+}
 
 #ifdef NEED_REGISTER_ALLOCATOR
 void
@@ -883,15 +896,32 @@ free_tmp_integer_reg (reg_t native_reg)
     free_tmp_reg(tmp_integer_regs, NUM_TMP_INTEGER_REGS, native_reg);
 }
 
-int
-is_tmp_integer_reg (reg_t reg)
+static int
+is_tmp_reg (reg_t reg, tmp_register_t *tmp_regs, int num_regs)
 {
     int i;
 
-    for (i = 0; i < NUM_TMP_INTEGER_REGS; ++i)
-	if (tmp_integer_regs[i].native_reg == reg)
+    for (i = 0; i < num_regs; ++i)
+	if (tmp_regs[i].native_reg == reg)
 	    return 1;
     return 0;
+}
+
+int
+is_tmp_integer_reg (reg_t reg)
+{
+    return is_tmp_reg(reg, tmp_integer_regs, NUM_TMP_INTEGER_REGS);
+}
+
+void
+dispose_integer_reg (reg_t reg)
+{
+    if (reg == 0)
+	return;
+    if (is_tmp_integer_reg(reg))
+	free_tmp_integer_reg(reg);
+    else
+	unref_integer_reg(reg);
 }
 
 reg_t
@@ -906,6 +936,23 @@ free_tmp_float_reg (reg_t native_reg)
     free_tmp_reg(tmp_float_regs, NUM_TMP_FLOAT_REGS, native_reg);
 }
 
+int
+is_tmp_float_reg (reg_t reg)
+{
+    return is_tmp_reg(reg, tmp_float_regs, NUM_TMP_FLOAT_REGS);
+}
+
+void
+dispose_float_reg (reg_t reg)
+{
+    if (reg == 0)
+	return;
+    if (is_tmp_float_reg(reg))
+	free_tmp_float_reg(reg);
+    else
+	unref_float_reg(reg);
+}
+
 #if defined(ARCH_ALPHA)
 void
 emit_load_integer_32 (reg_t reg, word_32 val)
@@ -917,15 +964,15 @@ emit_load_integer_32 (reg_t reg, word_32 val)
     else
     {
 #if defined(EMU_I386) || defined(PRESERVE_CONSTANTS)
-	bt_assert(num_constants < MAX_CONSTANTS);
-
-	emit(COMPOSE_LDL(reg, num_constants * 4, CONSTANT_AREA_REG));
-	constant_area[num_constants++] = val;
-#else
 	emit(COMPOSE_LDA(reg, val & 0xffff, 31));
 	if (val & 0x8000)
 	    emit(COMPOSE_ZAPNOT_IMM(reg, 3, reg));
 	emit(COMPOSE_LDAH(reg, val >> 16, reg));
+#else
+	bt_assert(num_constants < MAX_CONSTANTS);
+
+	emit(COMPOSE_LDL(reg, num_constants * 4, CONSTANT_AREA_REG));
+	constant_area[num_constants++] = val;
 #endif
     }
 }
@@ -971,10 +1018,10 @@ emit_load_integer_64 (reg_t reg, word_64 val)
 #endif
     else
     {
-	bt_assert(num_constants + 2 < MAX_CONSTANTS);
-
 	if (num_constants % 2 == 1)
 	    constant_area[num_constants++] = 0xdeadbeef;
+
+	bt_assert(num_constants + 2 < MAX_CONSTANTS);
 
 	emit(COMPOSE_LDQ(reg, num_constants * 4, CONSTANT_AREA_REG));
 	constant_area[num_constants++] = val & 0xffffffff;
@@ -984,6 +1031,44 @@ emit_load_integer_64 (reg_t reg, word_64 val)
 	printf("  load $%u,0x%lx\n", reg, val);
 	bt_assert(0);
 	*/
+    }
+}
+#endif
+
+#ifdef ARCH_ALPHA
+void
+emit_load_float_32 (reg_t reg, float val)
+{
+    if (val == 0.0)
+	emit(COMPOSE_FMOV(31, reg));
+    else
+    {
+	word_32 int_val = *(word_32*)&val;
+
+	bt_assert(num_constants + 1 < MAX_CONSTANTS);
+
+	emit(COMPOSE_LDS(reg, num_constants * 4, CONSTANT_AREA_REG));
+	constant_area[num_constants++] = int_val;
+    }
+}
+
+void
+emit_load_float_64 (reg_t reg, double val)
+{
+    if (val == 0.0)
+	emit(COMPOSE_FMOV(31, reg));
+    else
+    {
+	word_64 int_val = *(word_64*)&val;
+
+	if (num_constants % 2 == 1)
+	    constant_area[num_constants++] = 0xdeadbeef;
+
+	bt_assert(num_constants + 2 < MAX_CONSTANTS);
+
+	emit(COMPOSE_LDT(reg, num_constants * 4, CONSTANT_AREA_REG));
+	constant_area[num_constants++] = int_val & 0xffffffff;
+	constant_area[num_constants++] = int_val >> 32;
     }
 }
 #endif
@@ -1892,7 +1977,7 @@ finish_fragment (word_32 *addrs, unsigned char *preferred_alloced_integer_regs)
 		   || (code_area[index] >> 26) == 0x23 || (code_area[index] >> 26) == 0x27)
 		++index;
 
-	    disp = (fragment_insns[l->insn_num] - index - 1) * 4;
+	    disp = ((int)fragment_insns[l->insn_num] - index - 1) * 4;
 
 	    bt_assert(disp >= -(1 << 22) && disp < (1 << 22));
 	    field = (disp >> 2) & 0x1fffff;
@@ -2009,6 +2094,30 @@ emit_load_mem_64 (reg_t value_reg, reg_t addr_reg)
 #elif defined(EMU_I386)
 #include "i386.h"
 #ifndef USE_HAND_TRANSLATOR
+reg_t
+get_integer_reg_for_writing (int foreign_reg)
+{
+    if (foreign_reg == -1)
+	return alloc_tmp_integer_reg();
+    if (foreign_reg & NEED_NATIVE)
+	return foreign_reg & ~NEED_NATIVE;
+    return ref_integer_reg_for_writing(foreign_reg);
+}
+
+reg_t
+get_float_reg_for_writing (int foreign_reg)
+{
+    if (foreign_reg == -1)
+	return alloc_tmp_float_reg();
+    if (foreign_reg & NEED_NATIVE)
+	return foreign_reg & ~NEED_NATIVE;
+    bt_assert(0);
+    return 0;
+}
+
+#define push_alloc()
+#define pop_alloc()
+
 #include "i386_compiler.c"
 #else
 #include "i386_to_ppc_compiler.c"
@@ -2703,7 +2812,13 @@ compile_trace (word_32 *addrs, int length, unsigned char *preferred_alloced_inte
 	    word_32 old_pc = compiler_intp->pc;
 
 	    compiler_intp->pc = addrs[i];
+#if defined(ARCH_ALPHA)
+	    compile_i386_insn(compiler_intp, block_insns[i].flags_killed);
+#elif defined(ARCH_PPC)
 	    compile_to_ppc_i386_insn(compiler_intp, block_insns[i].flags_killed);
+#else
+#error unsupported target architecture
+#endif
 	    compiler_intp->pc = old_pc;
 	}
 #else
@@ -2817,7 +2932,7 @@ compare_register_sets (word_32 addr)
     {
 	if (compiler_intp->regs_GPR[i] != debugger_intp->regs_GPR[i])
 	    diff = 1;
-	if (compiler_intp->regs_FPST[i] != debugger_intp->regs_FPST[i])
+	if (*(word_64*)&(compiler_intp->regs_FPST[i]) != *(word_64*)&(debugger_intp->regs_FPST[i]))
 	    diff = 1;
     }
     if (compiler_intp->regs_FSPR[0] != debugger_intp->regs_FSPR[0])
