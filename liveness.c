@@ -31,7 +31,8 @@
 i386_insn_t block_insns[MAX_TRACE_INSNS + MAX_AFTER_BRANCH_INSNS];
 
 int
-compute_liveness (interpreter_t *intp, word_32 addr, word_32 *addrs)
+compute_liveness (interpreter_t *intp, word_32 addr, word_32 *addrs,
+		  word_32 *fallthrough_addr)
 {
     word_32 old_pc = intp->pc;
     word_32 live;
@@ -56,6 +57,11 @@ compute_liveness (interpreter_t *intp, word_32 addr, word_32 *addrs)
     }
 
     assert(num_targets > 0 || can_jump_indirectly || !can_fall_through);
+
+    if (can_fall_through)
+	*fallthrough_addr = intp->pc;
+    else
+	*fallthrough_addr = NO_FOREIGN_ADDR;
 
     if (!can_jump_indirectly)
     {

@@ -45,8 +45,8 @@ int can_inv_maskmask (int width, word_64 value);
 word_64 inv_maskmask (int width, word_64 value);
 
 /* asm routines */
-void flush_icache (void);
-void start_execution (word_64);
+void flush_icache (addr_t first, addr_t last);
+void start_execution (addr_t);
 
 /* these asm routines are only called from generated code */
 void direct_dispatcher (void);

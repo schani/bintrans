@@ -85,59 +85,60 @@
 #define KILL_CF                   1
 #define KILL_SF                   1
 #define KILL_ZF                   1
+#define KILL_SZF                  (KILL_SF || KILL_ZF)
 
 void
 move_i386_regs_interpreter_to_compiler (interpreter_t *intp)
 {
-    *(double*)&constant_area[21 * 2] = (intp->regs_FPST[7]);
-    *(double*)&constant_area[20 * 2] = (intp->regs_FPST[6]);
-    *(double*)&constant_area[19 * 2] = (intp->regs_FPST[5]);
-    *(double*)&constant_area[18 * 2] = (intp->regs_FPST[4]);
-    *(double*)&constant_area[17 * 2] = (intp->regs_FPST[3]);
-    *(double*)&constant_area[16 * 2] = (intp->regs_FPST[2]);
-    *(double*)&constant_area[15 * 2] = (intp->regs_FPST[1]);
-    *(double*)&constant_area[14 * 2] = (intp->regs_FPST[0]);
-    *(word_16*)&constant_area[9 * 2] = (intp->regs_FSPR[0]);
-    *(word_32*)&constant_area[8 * 2] = (intp->regs_SPR[0]);
-    *(word_32*)&constant_area[7 * 2] = (intp->regs_GPR[7]);
-    *(word_32*)&constant_area[6 * 2] = (intp->regs_GPR[6]);
-    *(word_32*)&constant_area[5 * 2] = (intp->regs_GPR[5]);
-    *(word_32*)&constant_area[4 * 2] = (intp->regs_GPR[4]);
-    *(word_32*)&constant_area[3 * 2] = (intp->regs_GPR[3]);
-    *(word_32*)&constant_area[2 * 2] = (intp->regs_GPR[2]);
-    *(word_32*)&constant_area[1 * 2] = (intp->regs_GPR[1]);
-    *(word_32*)&constant_area[0 * 2] = (intp->regs_GPR[0]);
-    *(word_32*)&constant_area[13 * 2] = ((intp->regs_SPR[0] >> 11) & 0x1);
-    *(word_32*)&constant_area[12 * 2] = ((intp->regs_SPR[0] >> 7) & 0x1);
-    *(word_32*)&constant_area[11 * 2] = ((intp->regs_SPR[0] >> 6) & 0x1);
-    *(word_32*)&constant_area[10 * 2] = ((intp->regs_SPR[0] >> 0) & 0x1);
+    *(double*)&constant_area[21] = (intp->regs_FPST[7]);
+    *(double*)&constant_area[20] = (intp->regs_FPST[6]);
+    *(double*)&constant_area[19] = (intp->regs_FPST[5]);
+    *(double*)&constant_area[18] = (intp->regs_FPST[4]);
+    *(double*)&constant_area[17] = (intp->regs_FPST[3]);
+    *(double*)&constant_area[16] = (intp->regs_FPST[2]);
+    *(double*)&constant_area[15] = (intp->regs_FPST[1]);
+    *(double*)&constant_area[14] = (intp->regs_FPST[0]);
+    *(word_16*)&constant_area[9] = (intp->regs_FSPR[0]);
+    *(word_32*)&constant_area[8] = (intp->regs_SPR[0]);
+    *(word_32*)&constant_area[7] = (intp->regs_GPR[7]);
+    *(word_32*)&constant_area[6] = (intp->regs_GPR[6]);
+    *(word_32*)&constant_area[5] = (intp->regs_GPR[5]);
+    *(word_32*)&constant_area[4] = (intp->regs_GPR[4]);
+    *(word_32*)&constant_area[3] = (intp->regs_GPR[3]);
+    *(word_32*)&constant_area[2] = (intp->regs_GPR[2]);
+    *(word_32*)&constant_area[1] = (intp->regs_GPR[1]);
+    *(word_32*)&constant_area[0] = (intp->regs_GPR[0]);
+    *(word_32*)&constant_area[13] = ((intp->regs_SPR[0] >> 11) & 0x1);
+    *(word_32*)&constant_area[12] = ((intp->regs_SPR[0] >> 7) & 0x1);
+    *(word_32*)&constant_area[11] = ((intp->regs_SPR[0] >> 6) & 0x1);
+    *(word_32*)&constant_area[10] = ((intp->regs_SPR[0] >> 0) & 0x1);
 }
 
 void
 move_i386_regs_compiler_to_interpreter (interpreter_t *intp)
 {
-    (intp->regs_FPST[7]) = *(double*)&constant_area[21 * 2];
-    (intp->regs_FPST[6]) = *(double*)&constant_area[20 * 2];
-    (intp->regs_FPST[5]) = *(double*)&constant_area[19 * 2];
-    (intp->regs_FPST[4]) = *(double*)&constant_area[18 * 2];
-    (intp->regs_FPST[3]) = *(double*)&constant_area[17 * 2];
-    (intp->regs_FPST[2]) = *(double*)&constant_area[16 * 2];
-    (intp->regs_FPST[1]) = *(double*)&constant_area[15 * 2];
-    (intp->regs_FPST[0]) = *(double*)&constant_area[14 * 2];
-    (intp->regs_FSPR[0]) = *(word_16*)&constant_area[9 * 2];
-    (intp->regs_SPR[0]) = *(word_32*)&constant_area[8 * 2];
-    (intp->regs_GPR[7]) = *(word_32*)&constant_area[7 * 2];
-    (intp->regs_GPR[6]) = *(word_32*)&constant_area[6 * 2];
-    (intp->regs_GPR[5]) = *(word_32*)&constant_area[5 * 2];
-    (intp->regs_GPR[4]) = *(word_32*)&constant_area[4 * 2];
-    (intp->regs_GPR[3]) = *(word_32*)&constant_area[3 * 2];
-    (intp->regs_GPR[2]) = *(word_32*)&constant_area[2 * 2];
-    (intp->regs_GPR[1]) = *(word_32*)&constant_area[1 * 2];
-    (intp->regs_GPR[0]) = *(word_32*)&constant_area[0 * 2];
-    (intp->regs_SPR[0] = (intp->regs_SPR[0] & 0xFFFFF7FF) | ((*(word_32*)&constant_area[13 * 2]) << 11));
-    (intp->regs_SPR[0] = (intp->regs_SPR[0] & 0xFFFFFF7F) | ((*(word_32*)&constant_area[12 * 2]) << 7));
-    (intp->regs_SPR[0] = (intp->regs_SPR[0] & 0xFFFFFFBF) | ((*(word_32*)&constant_area[11 * 2]) << 6));
-    (intp->regs_SPR[0] = (intp->regs_SPR[0] & 0xFFFFFFFE) | ((*(word_32*)&constant_area[10 * 2]) << 0));
+    (intp->regs_FPST[7]) = *(double*)&constant_area[21];
+    (intp->regs_FPST[6]) = *(double*)&constant_area[20];
+    (intp->regs_FPST[5]) = *(double*)&constant_area[19];
+    (intp->regs_FPST[4]) = *(double*)&constant_area[18];
+    (intp->regs_FPST[3]) = *(double*)&constant_area[17];
+    (intp->regs_FPST[2]) = *(double*)&constant_area[16];
+    (intp->regs_FPST[1]) = *(double*)&constant_area[15];
+    (intp->regs_FPST[0]) = *(double*)&constant_area[14];
+    (intp->regs_FSPR[0]) = *(word_16*)&constant_area[9];
+    (intp->regs_SPR[0]) = *(word_32*)&constant_area[8];
+    (intp->regs_GPR[7]) = *(word_32*)&constant_area[7];
+    (intp->regs_GPR[6]) = *(word_32*)&constant_area[6];
+    (intp->regs_GPR[5]) = *(word_32*)&constant_area[5];
+    (intp->regs_GPR[4]) = *(word_32*)&constant_area[4];
+    (intp->regs_GPR[3]) = *(word_32*)&constant_area[3];
+    (intp->regs_GPR[2]) = *(word_32*)&constant_area[2];
+    (intp->regs_GPR[1]) = *(word_32*)&constant_area[1];
+    (intp->regs_GPR[0]) = *(word_32*)&constant_area[0];
+    (intp->regs_SPR[0] = (intp->regs_SPR[0] & 0xFFFFF7FF) | ((*(word_32*)&constant_area[13]) << 11));
+    (intp->regs_SPR[0] = (intp->regs_SPR[0] & 0xFFFFFF7F) | ((*(word_32*)&constant_area[12]) << 7));
+    (intp->regs_SPR[0] = (intp->regs_SPR[0] & 0xFFFFFFBF) | ((*(word_32*)&constant_area[11]) << 6));
+    (intp->regs_SPR[0] = (intp->regs_SPR[0] & 0xFFFFFFFE) | ((*(word_32*)&constant_area[10]) << 0));
 }
 
 static word_32 pc;
@@ -167,6 +168,8 @@ ref_i386_gpr (reg_t num, int for_reading, int for_writing)
 static void
 dispose_integer_reg (reg_t reg)
 {
+    if (reg == 0)
+	return;
     if (is_tmp_integer_reg(reg))
 	free_tmp_integer_reg(reg);
     else
@@ -270,7 +273,7 @@ gen_sib_address (reg_t *ra, reg_t *rb, word_16 *imm)
 	    *rb = alloc_tmp_integer_reg();
 	    index_reg = ref_i386_gpr_r(sib_index);
 	    emit(COMPOSE_SLWI(*rb, index_reg, sib_scale));
-	    free_tmp_integer_reg(index_reg);
+	    unref_integer_reg(index_reg);
 	}
 
 	if (*ra == NO_REG)
@@ -298,7 +301,7 @@ gen_ea (reg_t *ra, reg_t *rb, word_16 *imm)
 		    *rb = alloc_tmp_integer_reg();
 		    *imm = 0;
 
-		    emit_load_integer_32(*ra, disp32);
+		    emit_load_integer_32(*rb, disp32);
 		    break;
 
 		default :
@@ -507,6 +510,8 @@ extract_hreg (reg_t num, int for_reading, int for_writing)
 
 	    emit(COMPOSE_EXTRWI(tmp, ereg, 8, 16));
 
+	    unref_integer_reg(ereg);
+
 	    return tmp;
 	}
     }
@@ -650,7 +655,6 @@ ref_src_op (int zexed, word_32 *imm, int imm_width, int is_simm)
 	default :
 	    assert(0);
     }
-	    
 }
 
 static int
@@ -679,9 +683,12 @@ dst_is_imm (word_32 *val)
 }
 
 static reg_t
-ref_dst_op (int for_reading, int for_writing, int zexed)
+ref_dst_op (int for_reading, int for_writing, int zexed,
+	    word_32 *imm, int imm_width, int is_simm)
 {
     word_32 val;
+
+    assert(imm == 0);
 
     assert(for_reading || for_writing);
     if (zexed)
@@ -822,6 +829,42 @@ ref_dst_op (int for_reading, int for_writing, int zexed)
 	case MODE_EAX_MOFFS32 :
 	    return ref_i386_gpr(REG_EAX, for_reading, for_writing);
 
+	case MODE_MOFFS32_AX :
+	    {
+		reg_t tmp = alloc_tmp_integer_reg();
+
+		if (for_reading)
+		{
+		    reg_t addr = alloc_tmp_integer_reg();
+
+		    emit_load_integer_32(addr, imm32);
+
+		    emit(COMPOSE_LHBRX(tmp, 0, addr));
+
+		    free_tmp_integer_reg(addr);
+		}
+
+		return tmp;
+	    }
+
+	case MODE_MOFFS32_EAX :
+	    {
+		reg_t tmp = alloc_tmp_integer_reg();
+
+		if (for_reading)
+		{
+		    reg_t addr = alloc_tmp_integer_reg();
+
+		    emit_load_integer_32(addr, imm32);
+
+		    emit(COMPOSE_LWBRX(tmp, 0, addr));
+
+		    free_tmp_integer_reg(addr);
+		}
+
+		return tmp;
+	    }
+
 	case MODE_R8_RM8 :
 	    return ref_i386_gpr_extended(reg, for_reading, for_writing, zexed, 8); /* FIXME */
 
@@ -845,6 +888,12 @@ ref_dst_op (int for_reading, int for_writing, int zexed)
 	default :
 	    assert(0);
     }
+}
+
+static reg_t
+ref_dst_op_to_reg (int for_reading, int for_writing, int zexed)
+{
+    return ref_dst_op(for_reading, for_writing, zexed, 0, 0, 0);
 }
 
 static void
@@ -982,6 +1031,30 @@ commit_and_dispose_dst_op (reg_t dst_reg, int for_reading, int zexed, int own_re
 	    }
 	    break;
 
+	case MODE_MOFFS32_AX :
+	    {
+		reg_t addr = alloc_tmp_integer_reg();
+
+		emit_load_integer_32(addr, imm32);
+
+		emit(COMPOSE_STHBRX(dst_reg, 0, addr));
+
+		free_tmp_integer_reg(addr);
+	    }
+	    break;
+
+	case MODE_MOFFS32_EAX :
+	    {
+		reg_t addr = alloc_tmp_integer_reg();
+
+		emit_load_integer_32(addr, imm32);
+
+		emit(COMPOSE_STWBRX(dst_reg, 0, addr));
+
+		free_tmp_integer_reg(addr);
+	    }
+	    break;
+
 	case MODE_R8_RM8 :
 	    if (reg < 4)
 		insert_into_gpr(reg, dst_reg, 8, 24);
@@ -1038,22 +1111,22 @@ static void
 gen_bit_insn (void (*igen) (reg_t, reg_t, word_16), void (*dgen) (reg_t, reg_t, reg_t), void (*idgen) (reg_t, reg_t, word_16), void (*gen) (reg_t, reg_t, reg_t))
 {
     word_32 imm;
-    reg_t src = ref_src_op(0, &imm, 16, 0), dst = ref_dst_op(1, 1, 0);
+    reg_t src = ref_src_op(0, &imm, 16, 0), dst = ref_dst_op_to_reg(1, 1, 0);
 
     if (src == NO_REG)
     {
-	if ((KILL_SF || KILL_ZF) && idgen != 0)
+	if (KILL_SZF && idgen != 0)
 	    idgen(dst, dst, imm);
 	else
 	{
 	    igen(dst, dst, imm);
-	    if (KILL_SF || KILL_ZF)
+	    if (KILL_SZF)
 		emit(COMPOSE_CMPWI(0, dst, 0));
 	}
     }
     else
     {
-	if (KILL_SF || KILL_ZF)
+	if (KILL_SZF)
 	    dgen(dst, dst, src);
 	else
 	    gen(dst, dst, src);
@@ -1067,9 +1140,51 @@ gen_bit_insn (void (*igen) (reg_t, reg_t, word_16), void (*dgen) (reg_t, reg_t, 
 }
 
 static void
+gen_add_with_imm (reg_t dst, word_16 imm)
+{
+    assert(!KILL_OF);
+    if (KILL_SZF)
+	emit(COMPOSE_ADDICD(dst, dst, imm));
+    else if (KILL_CF)
+	emit(COMPOSE_ADDIC(dst, dst, imm));
+    else
+	emit(COMPOSE_ADDI(dst, dst, imm));
+}
+
+static void
 handle_add_insn (void)
 {
-    assert(0);
+    word_32 imm;
+    reg_t src = ref_src_op(0, KILL_OF ? 0 : &imm, 16, 1);
+    reg_t dst = ref_dst_op_to_reg(1, 1, 0);
+
+    assert(op_width == 32);
+
+    if (src == NO_REG)
+	gen_add_with_imm(dst, imm);
+    else
+    {
+	if (KILL_CF && KILL_OF && KILL_SZF)
+	    emit(COMPOSE_ADDCOD(dst, dst, src));
+	else if (KILL_CF && KILL_OF)
+	    emit(COMPOSE_ADDCO(dst, dst, src));
+	else if (KILL_CF && KILL_SZF)
+	    emit(COMPOSE_ADDCD(dst, dst, src));
+	else if (KILL_CF)
+	    emit(COMPOSE_ADDC(dst, dst, src));
+	else if (KILL_OF && KILL_SZF)
+	    emit(COMPOSE_ADDOD(dst, dst, src));
+	else if (KILL_OF)
+	    emit(COMPOSE_ADDO(dst, dst, src));
+	else if (KILL_SZF)
+	    emit(COMPOSE_ADDD(dst, dst, src));
+	else
+	    emit(COMPOSE_ADD(dst, dst, src));
+
+	dispose_integer_reg(src);
+    }
+
+    commit_and_dispose_dst_op(dst, 1, 0, 0);
 }
 
 static void
@@ -1129,7 +1244,7 @@ handle_call_insn (void)
 
 	case MODE_RM32 :
 	    {
-		tmp = ref_dst_op(1, 0, 0);
+		tmp = ref_dst_op_to_reg(1, 0, 0);
 
 		emit(COMPOSE_MR(JUMP_TARGET_REG, tmp));
 
@@ -1159,7 +1274,27 @@ handle_cld_insn (void)
 static void
 handle_cmp_insn (void)
 {
-    assert(0);
+    if (KILL_SZF || KILL_OF || KILL_CF)
+    {
+	word_32 dst_imm;
+	reg_t src = ref_src_op(0, 0, 0, 0);
+	reg_t dst = ref_dst_op_to_reg(1, 0, 0);
+	reg_t tmp = alloc_tmp_integer_reg();
+
+	assert(op_width == 32);
+
+	if (KILL_SZF && (KILL_OF || KILL_CF))
+	    emit(COMPOSE_SUBFOD(tmp, src, dst));
+	else if (KILL_SZF)
+	    emit(COMPOSE_SUBFD(tmp, src, dst));
+	else
+	    emit(COMPOSE_SUBFO(tmp, src, dst));
+
+	free_tmp_integer_reg(tmp);
+
+	dispose_integer_reg(dst);
+	dispose_integer_reg(src);
+    }
 }
 
 static void
@@ -1255,7 +1390,11 @@ handle_inc_insn (void)
 static void
 handle_int_insn (void)
 {
-    assert(0);
+    assert(mode == MODE_IMM8 && imm8 == 0x80);
+
+    emit_system_call();
+
+    emit_direct_jump(pc);
 }
 
 static void
@@ -1267,7 +1406,20 @@ handle_ja_insn (void)
 static void
 handle_jae_insn (void)
 {
-    assert(0);
+    word_32 rel;
+    int is_imm = dst_is_imm(&rel);
+    label_t label = alloc_label();
+
+    assert(is_imm);
+
+    emit(COMPOSE_MCRXR(1));
+    emit_branch(COMPOSE_BEQ(6, 0), label);
+
+    emit_direct_jump(pc + rel);
+
+    emit_label(label);
+
+    free_label(label);
 }
 
 static void
@@ -1283,9 +1435,33 @@ handle_jbe_insn (void)
 }
 
 static void
+gen_cr_jump (void (*gen) (label_t))
+{
+    word_32 rel;
+    int is_imm = dst_is_imm(&rel);
+    label_t label = alloc_label();
+
+    assert(is_imm);
+
+    gen(label);
+
+    emit_direct_jump(pc + rel);
+
+    emit_label(label);
+
+    free_label(label);
+}
+
+static void
+gen_bne_2 (label_t label)
+{
+    emit_branch(COMPOSE_BNE(2, 0), label);
+}
+
+static void
 handle_je_insn (void)
 {
-    assert(0);
+    gen_cr_jump(&gen_bne_2);
 }
 
 static void
@@ -1319,9 +1495,15 @@ handle_jmp_insn (void)
 }
 
 static void
+gen_beq_2 (label_t label)
+{
+    emit_branch(COMPOSE_BEQ(2, 0), label);
+}
+
+static void
 handle_jne_insn (void)
 {
-    assert(0);
+    gen_cr_jump(&gen_beq_2);
 }
 
 static void
@@ -1333,7 +1515,27 @@ handle_jns_insn (void)
 static void
 handle_lea_insn (void)
 {
-    assert(0);
+    reg_t ra, rb;
+    word_16 imm;
+    reg_t dst = ref_dst_op_to_reg(0, 1, 0);
+
+    gen_ea(&ra, &rb, &imm);
+
+    if (imm != 0)
+    {
+	assert(rb == NO_REG);
+	emit(COMPOSE_ADDI(dst, ra, imm));
+    }
+    else
+    {
+	assert(rb != NO_REG);
+	emit(COMPOSE_ADD(dst, ra, rb));
+	dispose_integer_reg(rb);
+    }
+
+    dispose_integer_reg(ra);
+
+    commit_and_dispose_dst_op(dst, 0, 0, 0);
 }
 
 static void
@@ -1344,7 +1546,7 @@ handle_mov_insn (void)
 
     if (src == NO_REG)
     {
-	reg_t dst = ref_dst_op(0, 1, 0);
+	reg_t dst = ref_dst_op_to_reg(0, 1, 0);
 
 	emit(COMPOSE_LI(dst, imm));
 
@@ -1375,7 +1577,28 @@ handle_mul_insn (void)
 static void
 handle_neg_insn (void)
 {
-    assert(0);
+    reg_t dst = ref_dst_op_to_reg(1, 1, 0);
+
+    if (KILL_CF)
+    {
+	reg_t tmp = alloc_tmp_integer_reg();
+
+	emit(COMPOSE_ADDI(tmp, 0, 0xffff)); /* tmp = 0xffffffff */
+	emit(COMPOSE_ADDC(tmp, tmp, dst));
+
+	free_tmp_integer_reg(tmp);
+    }
+
+    if (KILL_OF && KILL_SZF)
+	emit(COMPOSE_NEGOD(dst, dst));
+    else if (KILL_OF)
+	emit(COMPOSE_NEGO(dst, dst));
+    else if (KILL_SZF)
+	emit(COMPOSE_NEGD(dst, dst));
+    else
+	emit(COMPOSE_NEG(dst, dst));
+
+    commit_and_dispose_dst_op(dst, 1, 0, 0);
 }
 
 static void
@@ -1417,24 +1640,24 @@ handle_or_insn (void)
 static void
 handle_pop_insn (void)
 {
-    reg_t dst = ref_dst_op(1, 0, 0);
+    reg_t dst = ref_dst_op_to_reg(0, 1, 0);
     reg_t sp = ref_i386_gpr_rw(REG_ESP);
 
-    emit(COMPOSE_STWBRX(dst, 0, sp));
+    emit(COMPOSE_LWBRX(dst, 0, sp));
     emit(COMPOSE_ADDI(sp, sp, 4));
 
     dispose_integer_reg(sp);
-    dispose_integer_reg(dst);
+    commit_and_dispose_dst_op(dst, 0, 0, 0);
 }
 
 static void
 handle_push_insn (void)
 {
     reg_t sp = ref_i386_gpr_rw(REG_ESP);
-    reg_t dst = ref_dst_op(0, 1, 0);
+    reg_t dst = ref_dst_op_to_reg(1, 0, 0);
 
     emit(COMPOSE_ADDI(sp, sp, (word_16)-4));
-    emit(COMPOSE_LWBRX(dst, 0, sp));
+    emit(COMPOSE_STWBRX(dst, 0, sp));
 
     dispose_integer_reg(dst);
     dispose_integer_reg(sp);
@@ -1461,7 +1684,23 @@ handle_rep_movsd_insn (void)
 static void
 handle_ret_insn (void)
 {
-    assert(0);
+    reg_t esp = ref_i386_gpr_rw(REG_ESP);
+    word_32 offset;
+
+    emit(COMPOSE_LWBRX(JUMP_TARGET_REG, 0, esp));
+
+    if (mode == MODE_IMM16)
+	offset = imm16 + 4;
+    else
+	offset = 4;
+
+    assert((offset & ~0x7fff) == 0);
+
+    emit(COMPOSE_ADDI(esp, esp, offset));
+
+    unref_integer_reg(esp);
+
+    emit_indirect_jump();
 }
 
 static void
@@ -1515,13 +1754,62 @@ handle_shr_insn (void)
 static void
 handle_sub_insn (void)
 {
-    assert(0);
+    word_32 imm;
+    reg_t src = ref_src_op(0, KILL_OF ? 0 : &imm, 15, 1); /* we could actually do more than 15 bits */
+    reg_t dst = ref_dst_op_to_reg(1, 1, 0);
+
+    assert(op_width == 32);
+
+    if (src == NO_REG)
+	gen_add_with_imm(dst, -imm);
+    else
+    {
+	if (KILL_CF && KILL_OF && KILL_SZF)
+	    emit(COMPOSE_SUBFCOD(dst, src, dst));
+	else if (KILL_CF && KILL_OF)
+	    emit(COMPOSE_SUBFCO(dst, src, dst));
+	else if (KILL_CF && KILL_SZF)
+	    emit(COMPOSE_SUBFCD(dst, src, dst));
+	else if (KILL_CF)
+	    emit(COMPOSE_SUBFC(dst, src, dst));
+	else if (KILL_OF && KILL_SZF)
+	    emit(COMPOSE_SUBFOD(dst, src, dst));
+	else if (KILL_OF)
+	    emit(COMPOSE_SUBFO(dst, src, dst));
+	else if (KILL_SZF)
+	    emit(COMPOSE_SUBFD(dst, src, dst));
+	else
+	    emit(COMPOSE_SUBF(dst, src, dst));
+
+	dispose_integer_reg(src);
+    }
 }
 
 static void
 handle_test_insn (void)
 {
-    assert(0);
+    /* we only load the operands if we have to set the flags.  this is
+       not correct if loading the operands would cause a trap.  */
+    if (KILL_SZF)
+    {
+	word_32 imm;
+	reg_t src = ref_src_op(1, &imm, 16, 0);
+	reg_t dst = ref_dst_op_to_reg(1, 0, 1);
+	reg_t tmp = alloc_tmp_integer_reg();
+
+	if (src == NO_REG)
+	    emit(COMPOSE_ANDID(tmp, dst, imm));
+	else
+	{
+	    emit(COMPOSE_ANDD(tmp, dst, src));
+	    dispose_integer_reg(src);
+	}
+
+	dispose_integer_reg(dst);
+	free_tmp_integer_reg(tmp);
+    }
+    if (KILL_CF || KILL_OF)
+	clear_of_cf();
 }
 
 static void

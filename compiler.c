@@ -73,6 +73,7 @@
 #error unsupported target architecture
 #endif
 
+#if defined(ARCH_ALPHA)
 #define NUM_REG_CONSTANTS          (NUM_EMU_REGISTERS * 2 + 2) /* registers + scratch area */
 
 #define DIRECT_DISPATCHER_CONST    (NUM_REG_CONSTANTS + 0)
@@ -109,6 +110,17 @@
 #define STANDARD_SYNC_CONST        (NUM_REG_CONSTANTS + 58)
 #define CUSTOM_SYNC_CONST          (NUM_REG_CONSTANTS + 60)
 #endif
+#endif
+#elif defined(ARCH_PPC)
+#define NUM_REG_CONSTANTS          (NUM_EMU_REGISTERS + 1) /* registers + scratch area */
+
+#define DIRECT_DISPATCHER_CONST    (NUM_REG_CONSTANTS + 0)
+#define INDIRECT_DISPATCHER_CONST  (NUM_REG_CONSTANTS + 1)
+#define SYSTEM_CALL_CONST          (NUM_REG_CONSTANTS + 2)
+#define ISYNC_CONST                (NUM_REG_CONSTANTS + 3)
+#define C_STUB_CONST               (NUM_REG_CONSTANTS + 4)
+#else
+#error unsupported target architecture
 #endif
 
 typedef struct
@@ -285,7 +297,13 @@ int emit_alt = 0;
 word_32 *alt_emit_loc;
 #endif
 
+#if defined(ARCH_ALPHA)
 int num_constants = NUM_EMU_REGISTERS * 2 + 2;
+#elif defined(ARCH_PPC)
+int num_constants = NUM_EMU_REGISTERS + 1;
+#else
+#error unsupported target architecture
+#endif
 int old_num_constants;
 int num_constants_init;
 word_32 constant_area[NUM_EMU_REGISTERS * 2 + 2 + MAX_CONSTANTS] __attribute__ ((aligned (8)));
@@ -1078,7 +1096,7 @@ emit_direct_jump (word_32 target)
 #elif defined(ARCH_PPC)
     emit(COMPOSE_LWZ(0, DIRECT_DISPATCHER_CONST * 4, CONSTANT_AREA_REG));
     emit(COMPOSE_MTLR(0));
-    emit(COMPOSE_BLR());
+    emit(COMPOSE_BLRL());
     emit(target);
 #else
 #error unsupported target architecture
@@ -1145,7 +1163,9 @@ emit_system_call (void)
     emit(COMPOSE_LDQ(PROCEDURE_VALUE_REG, SYSTEM_CALL_CONST * 4, CONSTANT_AREA_REG));
     emit(COMPOSE_JMP(RETURN_ADDR_REG, PROCEDURE_VALUE_REG));
 #elif defined(ARCH_PPC)
-    assert(0);
+    emit(COMPOSE_LWZ(0, SYSTEM_CALL_CONST * 4, CONSTANT_AREA_REG));
+    emit(COMPOSE_MTLR(0));
+    emit(COMPOSE_BLRL());
 #else
 #error unsupported target architecture
 #endif
@@ -1768,7 +1788,17 @@ finish_fragment (word_32 *addrs, unsigned char *preferred_alloced_integer_regs)
 
 	    code_area[index] |= field;
 #elif defined(ARCH_PPC)
-	    assert(0);
+	    sword_32 disp;
+	    word_32 field;
+
+	    assert((code_area[index] >> 26) == 16);
+
+	    disp = (fragment_insns[l->insn_num] - index);
+
+	    assert(disp >= -(1 << 13) && disp < (1 << 13));
+	    field = disp & 0x3fff;
+
+	    code_area[index] |= field << 2;
 #else
 #error unsupported target architecture
 #endif
@@ -1875,11 +1905,25 @@ emit_load_mem_64 (reg_t value_reg, reg_t addr_reg)
 #endif
 
 void
+add_const_32 (word_32 val)
+{
+    constant_area[num_constants++] = val;
+}
+
+void
 add_const_64 (word_64 val)
 {
     constant_area[num_constants++] = val & 0xffffffff;
     constant_area[num_constants++] = val >> 32;
 }
+
+#if defined(ARCH_ALPHA)
+#define add_addr_const     add_const_64
+#elif defined(ARCH_PPC)
+#define add_addr_const     add_const_32
+#else
+#error unsupported target architecture
+#endif
 
 word_64
 get_const_64 (int index)
@@ -2141,11 +2185,13 @@ init_compiler (interpreter_t *intp, interpreter_t *dbg_intp)
     alt_emit_loc = code_area + MAX_CODE_INSNS;
 #endif
 
-    add_const_64((word_64)direct_dispatcher);
-    add_const_64((word_64)indirect_dispatcher);
-    add_const_64((word_64)system_call_entry);
-    add_const_64((word_64)isync_entry);
-    add_const_64((word_64)c_stub);
+    add_addr_const((addr_t)direct_dispatcher);
+    add_addr_const((addr_t)indirect_dispatcher);
+    add_addr_const((addr_t)system_call_entry);
+    add_addr_const((addr_t)isync_entry);
+    add_addr_const((addr_t)c_stub);
+
+#ifdef ARCH_ALPHA
     add_const_64((word_64)count_leading_zeros);
     add_const_64((word_64)div_unsigned_64);
     add_const_64((word_64)div_signed_64);
@@ -2175,6 +2221,7 @@ init_compiler (interpreter_t *intp, interpreter_t *dbg_intp)
     add_const_64(0);		/* empty sync blocks */
     add_const_64(0);		/* standard sync blocks */
     add_const_64(0);		/* custom sync blocks */
+#endif
 #endif
 
     for (i = 0; i < NUM_INSNS; ++i)
@@ -2323,6 +2370,7 @@ compile_basic_block (word_32 foreign_addr, int as_trace, unsigned char *preferre
 
     int length;
     addr_t native_addr;
+    word_32 fallthrough_addr;
 #ifdef COLLECT_LIVENESS
     word_32 live_cr, live_xer, live_gpr;
 #endif
@@ -2341,13 +2389,15 @@ compile_basic_block (word_32 foreign_addr, int as_trace, unsigned char *preferre
 #else
     length = compute_iterative_liveness(compiler_intp, foreign_addr, addrs, 0, 0, 0);
 #endif
+    fallthrough_addr = addrs[length - 1] + 4;
 #elif defined(EMU_I386)
-    length = compute_liveness(compiler_intp, foreign_addr, addrs);
+    length = compute_liveness(compiler_intp, foreign_addr, addrs, &fallthrough_addr);
 #else
 #error unsupported emulation
 #endif
 
-    native_addr = compile_trace(addrs, length, preferred_alloced_integer_regs);
+    native_addr = compile_trace(addrs, length, preferred_alloced_integer_regs,
+				fallthrough_addr);
 
     /*
 #ifdef COUNT_INSNS
@@ -2515,7 +2565,8 @@ unsigned long real_killed_bits = 0, killed_bits = 0;
 #endif
 
 addr_t
-compile_trace (word_32 *addrs, int length, unsigned char *preferred_alloced_integer_regs)
+compile_trace (word_32 *addrs, int length, unsigned char *preferred_alloced_integer_regs,
+	       word_32 fallthrough_addr)
 {
     addr_t native_addr;
     int i;
@@ -2570,11 +2621,12 @@ compile_trace (word_32 *addrs, int length, unsigned char *preferred_alloced_inte
     emit_store_regs(EMU_INSN_EPILOGUE, addrs[length - 1] + 4);
 #endif
 
-    emit_direct_jump(addrs[length - 1] + 4); /* this is not necessary if the jump at the end of the basic block was unconditional */
+    if (fallthrough_addr != NO_FOREIGN_ADDR)
+	emit_direct_jump(fallthrough_addr);
 
     finish_fragment(addrs, preferred_alloced_integer_regs);
 
-    flush_icache();
+    flush_icache(native_addr, emit_loc);
 
     stop_timer();
 
@@ -2966,8 +3018,10 @@ compose_branch (addr_t branch_addr, addr_t target_addr)
     sword_32 disp = target_addr - branch_addr;
     word_32 field;
 
+    printf("composing from %08x to %08x\n", branch_addr, target_addr);
+
     assert(disp >= -(1 << 25) && disp < (1 << 25));
-    field = (disp >> 2) & 0x1ffffff;
+    field = (disp >> 2) & 0xffffff;
 
     return COMPOSE_B(field);
 }
@@ -3161,7 +3215,13 @@ provide_fragment_and_patch (addr_t jump_addr)
 #if !defined(CROSSDEBUGGER) && !defined(NO_PATCHING)
 	/* printf("patching at %lx\n", jump_addr); */
 
+#if defined(ARCH_ALPHA)
 	jump_addr -= 8;
+#elif defined(ARCH_PPC)
+	jump_addr -= 12;
+#else
+#error unsupported target architecture
+#endif
 
 	*(word_32*)jump_addr = compose_branch(jump_addr, native_addr);
 
@@ -3169,7 +3229,7 @@ provide_fragment_and_patch (addr_t jump_addr)
 	unresolved_jumps[i].addr = 0;
 #endif
 
-	flush_icache();
+	flush_icache(jump_addr, jump_addr + 4);
 #endif
 #endif
 

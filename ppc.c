@@ -266,6 +266,7 @@ int emu_errnos[] = { 0,
 #define SYSCALL_GETPID            20
 #define SYSCALL_GETUID            24
 #define SYSCALL_ACCESS            33
+#define SYSCALL_TIMES             43
 #define SYSCALL_BRK               45
 #define SYSCALL_GETGID            47
 #define SYSCALL_GETEUID           49
@@ -290,9 +291,10 @@ int emu_errnos[] = { 0,
 #define SYSCALL_WRITEV           146
 #define SYSCALL_MREMAP           163
 #define SYSCALL_RT_SIGACTION     173
+#define SYSCALL_FSTAT64          197
 #endif
 
-#undef SYSCALL_OUTPUT
+#define SYSCALL_OUTPUT
 #ifdef SYSCALL_OUTPUT
 #define ANNOUNCE_SYSCALL(n)         printf("%s\n", (n))
 #else
@@ -869,7 +871,7 @@ convert_native_stat_to_emu_stat64 (interpreter_t *intp, word_32 addr, struct sta
     mem_set_32(intp, addr + 80, buf->st_mtime);
     mem_set_32(intp, addr + 88, buf->st_ctime);
 #elif defined(EMU_I386)
-#error not yet supported
+    assert(0);
 #endif
 }
 

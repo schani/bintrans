@@ -86,7 +86,8 @@ typedef struct
 
 extern i386_insn_t block_insns[MAX_TRACE_INSNS + MAX_AFTER_BRANCH_INSNS];
 
-int compute_liveness (interpreter_t *intp, word_32 addr, word_32 *addrs);
+int compute_liveness (interpreter_t *intp, word_32 addr, word_32 *addrs,
+		      word_32 *fallthrough_addr);
 void print_liveness (interpreter_t *intp, word_32 *addrs, int num_block_insns);
 #endif
 
@@ -119,7 +120,8 @@ void compile_ppc_insn (word_32 insn, word_32 pc, int optimize_taken_jump, label_
 
 addr_t compile_basic_block (word_32 addr, int as_trace, unsigned char *preferred_alloced_integer_regs);
 addr_t compile_loop_trace (word_32 addr, int length, int bits);
-addr_t compile_trace (word_32 *addrs, int length, unsigned char *preferred_alloced_integer_regs);
+addr_t compile_trace (word_32 *addrs, int length, unsigned char *preferred_alloced_integer_regs,
+		      word_32 fallthrough_addr);
 
 /* ppc_to_alpha_compiler.c */
 void compile_to_alpha_ppc_insn (word_32 insn, word_32 pc, int optimize_taken_jump, label_t taken_jump_label, word_32 next_pc,

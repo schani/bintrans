@@ -996,7 +996,7 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
      (rm16 (#xf7) 3)
      (rm32 (#xf7) 3))
   ((set cf (if (= dst (width op-width 0)) 0 1))
-   (set of (if (= dst (width op-width (bitneg 0))) 1 0)) ;is this correct?
+   (set of (+overflow (bitneg dst) 1))	;of is set iff dst==0x80000000
    (set dst (neg dst))
    (set-sf dst op-width)
    (set-zf dst op-width)))

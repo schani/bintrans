@@ -59,6 +59,7 @@
       (LK 0 0)
       (BD 2 15)
       (BO 21 25)
+      (srs 21 25)
       (rS 21 25)
       (frS 21 25)
       (rD 21 25)
@@ -114,7 +115,7 @@
       (mbe 5 5)))
 
 (define-operand-order
-    '(crm rs frs rd frd crfd crfs d ra fra frc rb frb uimm simm imm bo bi bd crbd crba crbb sh mb me))
+    '(crm srs frs rd frd crfd crfs d ra fra rs frc rb frb uimm simm imm bo bi bd crbd crba crbb sh mb me))
 
 ;;;; macros
 
@@ -996,7 +997,17 @@
   ("mcrf cr%u,cr%u" crfd crfs))
 
 ;mcrfs (move to condition register from fpscr)
-;mcrxr (move to condition register from xer)
+
+(define-insn mcrxr			;move to condition register from xer
+    ((opcd 31)
+     (crdz 0)
+     (crba 0)
+     (crbb 0)
+     (xo1 512)
+     (rc 0))
+  ((set (numbered-subreg 4 (- (width 3 7) crfd) cr)
+	(numbered-subreg 4 7 xer)))
+  ("mcrxr cr%u" crfd))
 
 (define-insn mfcr
     ((opcd 31)
@@ -1258,14 +1269,14 @@
   ((set (width 8 (mem (if (= ra (width 5 0))
 			  (sex d)
 			  (+ (reg ra gpr) (sex d)))))
-	(subreg 0 7 rs gpr)))
-  ("stb r%u,%d(r%u)" rs d ra))
+	(subreg 0 7 srs gpr)))
+  ("stb r%u,%d(r%u)" srs d ra))
 
 (define-insn stbu
     ((opcd 39))
-  ((set (width 8 (mem (+ (reg ra gpr) (sex d)))) (subreg 0 7 rs gpr))
+  ((set (width 8 (mem (+ (reg ra gpr) (sex d)))) (subreg 0 7 srs gpr))
    (set (reg ra gpr) (+ (reg ra gpr) (sex d))))
-  ("stbu r%u,%d(r%u)" rs d ra))
+  ("stbu r%u,%d(r%u)" srs d ra))
 
 ;stbux
 
@@ -1273,13 +1284,13 @@
     ((opcd 31)
      (xo1 215)
      (rc 0))
-  ((set (width 8 (mem (+ (if (= ra (width 5 0)) 0 (reg ra gpr)) (reg rb gpr)))) (subreg 0 7 rs gpr)))
-  ("stbx r%u,r%u,r%u" rs ra rb))
+  ((set (width 8 (mem (+ (if (= ra (width 5 0)) 0 (reg ra gpr)) (reg rb gpr)))) (subreg 0 7 srs gpr)))
+  ("stbx r%u,r%u,r%u" srs ra rb))
 
 (define-insn stfd
     ((opcd 54))
   ((set (width 64 (mem (+ (if (= ra (width 5 0)) 0 (reg ra gpr)) (sex d)))) (double-to-bits (reg frs fpr))))
-  ("stfd fr%u,%d(r%u)" rs d ra))
+  ("stfd fr%u,%d(r%u)" frs d ra))
 
 (define-insn stfdu
     ((opcd 55))
@@ -1301,7 +1312,7 @@
 (define-insn stfs
     ((opcd 52))
   ((set (mem (+ (if (= ra (width 5 0)) 0 (reg ra gpr)) (sex d))) (single-to-bits (double-to-single (reg frs fpr)))))
-  ("stfs fr%u,%d(r%u)" rs d ra))
+  ("stfs fr%u,%d(r%u)" frs d ra))
 
 ;stfsu
 ;stfsux
@@ -1318,21 +1329,21 @@
   ((set (width 16 (mem (if (= ra (width 5 0))
 			   (sex d)
 			   (+ (reg ra gpr) (sex d)))))
-	(subreg 0 15 rs gpr)))
-  ("sth r%u,%d(r%u)" rs d ra))
+	(subreg 0 15 srs gpr)))
+  ("sth r%u,%d(r%u)" srs d ra))
 
 (define-insn sthbrx			;FIXME: this is sthx semantics!
     ((opcd 31)
      (xo1 918)
      (rc 0))
-  ((set (width 16 (mem (+ (if (= ra (width 5 0)) 0 (reg ra gpr)) (reg rb gpr)))) (subreg 0 15 rs gpr)))
-  ("sthbrx r%u,r%u,r%u" rs ra rb))
+  ((set (width 16 (mem (+ (if (= ra (width 5 0)) 0 (reg ra gpr)) (reg rb gpr)))) (subreg 0 15 srs gpr)))
+  ("sthbrx r%u,r%u,r%u" srs ra rb))
 
 (define-insn sthu
     ((opcd 45))
-  ((set (width 16 (mem (+ (reg ra gpr) (sex d)))) (subreg 0 15 rs gpr))
+  ((set (width 16 (mem (+ (reg ra gpr) (sex d)))) (subreg 0 15 srs gpr))
    (set (reg ra gpr) (+ (reg ra gpr) (sex d))))
-  ("sthu r%u,%d(r%u)" rs d ra))
+  ("sthu r%u,%d(r%u)" srs d ra))
 
 ;sthux
 
@@ -1340,8 +1351,8 @@
     ((opcd 31)
      (xo1 407)
      (rc 0))
-  ((set (width 16 (mem (+ (if (= ra (width 5 0)) 0 (reg ra gpr)) (reg rb gpr)))) (subreg 0 15 rs gpr)))
-  ("sthx r%u,r%u,r%u" rs ra rb))
+  ((set (width 16 (mem (+ (if (= ra (width 5 0)) 0 (reg ra gpr)) (reg rb gpr)))) (subreg 0 15 srs gpr)))
+  ("sthx r%u,r%u,r%u" srs ra rb))
 
 ;stmw (store multiple word)
 ;stswi (store string word immediate)
@@ -1349,38 +1360,38 @@
 
 (define-insn stw
     ((opcd 36))
-  ((set (mem (+ (if (= ra (width 5 0)) 0 (reg ra gpr)) (sex d))) (reg rs gpr)))
-  ("stw r%u,%d(r%u)" rs d ra))
+  ((set (mem (+ (if (= ra (width 5 0)) 0 (reg ra gpr)) (sex d))) (reg srs gpr)))
+  ("stw r%u,%d(r%u)" srs d ra))
 
 (define-insn stwbrx			;FIXME: this is stwx semantics!
     ((opcd 31)
      (xo1 662)
      (rc 0))
-  ((set (mem (+ (if (= ra (width 5 0)) 0 (reg ra gpr)) (reg rb gpr))) (reg rs gpr)))
-  ("stwbrx r%u,r%u,r%u" rs ra rb))
+  ((set (mem (+ (if (= ra (width 5 0)) 0 (reg ra gpr)) (reg rb gpr))) (reg srs gpr)))
+  ("stwbrx r%u,r%u,r%u" srs ra rb))
 
 ;stwcx. (store word conditional indexed)
 
 (define-insn stwu
     ((opcd 37))
-  ((set (mem (+ (reg ra gpr) (sex d))) (reg rs gpr))
+  ((set (mem (+ (reg ra gpr) (sex d))) (reg srs gpr))
    (set (reg ra gpr) (+ (reg ra gpr) (sex d))))
-  ("stwu r%u,%d(r%u)" rs d ra))
+  ("stwu r%u,%d(r%u)" srs d ra))
 
 (define-insn stwux
     ((opcd 31)
      (xo1 183)
      (rc 0))
-  ((set (mem (+ (reg ra gpr) (reg rb gpr))) (reg rs gpr))
+  ((set (mem (+ (reg ra gpr) (reg rb gpr))) (reg srs gpr))
    (set (reg ra gpr) (+ (reg ra gpr) (reg rb gpr))))
-  ("stwux r%u,r%u,r%u" rs ra rb))
+  ("stwux r%u,r%u,r%u" srs ra rb))
 
 (define-insn stwx
     ((opcd 31)
      (xo1 151)
      (rc 0))
-  ((set (mem (+ (if (= ra (width 5 0)) 0 (reg ra gpr)) (reg rb gpr))) (reg rs gpr)))
-  ("stwx r%u,r%u,r%u" rs ra rb))
+  ((set (mem (+ (if (= ra (width 5 0)) 0 (reg ra gpr)) (reg rb gpr))) (reg srs gpr)))
+  ("stwx r%u,r%u,r%u" srs ra rb))
 
 (define-rc-insn subf rd
     ((opcd 31)

@@ -1448,6 +1448,7 @@
 			      (format nil "((~A)(~A)~A)" (c-type width 'integer) (c-type width 'integer t)
 				      (generate-interpreter value bindings))))
 	  (nop () "0 /* nop */")
+	  (not-implemented () "({ assert(0); 0; }) /* not implemented */")
 	  (system-call () "handle_system_call(intp)")
 	  ((= =f < <f > >f + +f - -f * *f / % /f logor logand logxor shiftl shiftr and or) (left right)
 	   (let* ((op (cadr (assoc (expr-kind expr) '((= "==") (=f "==") (< "<") (<f "<") (> ">") (>f ">") (+ "+") (+f "+") (- "-")
@@ -4495,6 +4496,8 @@ save_live = live;~%"
 }~%")))
 	       (nop ()
 		    (format t "/* nop */~%"))
+	       (not-implemented ()
+				(format t "assert(0); /* not implemented */~%"))
 	       (ignore (value)
 		       (format t "/* ignore */~%"))
 	       (system-call ()
@@ -4505,7 +4508,7 @@ save_live = live;~%"
       (generate expr))))
 
 (defun generate-killed (regs classes exprs)
-  (labels ((meta-generate (exprs var-name var-width killed-bits-func)
+  (labels ((meta-generate (exprs c-var-name var-width killed-bits-func)
 	     (labels ((generate (expr)
 			(expr-case expr
 			  (let (let-bindings body)
@@ -4534,6 +4537,8 @@ save_live = live;~%"
 			    (format t "}~%"))
 			  (nop ()
 			       (format t "/* nop */~%"))
+			  (not-implemented ()
+					   (format t "assert(0); /* not implemented */~%"))
 			  (ignore (value)
 				  (format t "/* ignore */~%"))
 			  (system-call ()
@@ -4544,14 +4549,14 @@ save_live = live;~%"
 	       (mapc #'generate exprs)
 	       (format t "killed_~A = killed;
 }~%"
-		       var-name))))
+		       c-var-name))))
     (dolist (reg regs)
       (meta-generate exprs (register-name reg) (register-width reg) #'(lambda (expr) (generate-killed-bits-for-set-expr reg expr))))
     (dolist (class classes)
       (meta-generate exprs (register-class-name class) 32 #'(lambda (expr) (generate-killed-regs-for-set-expr class expr))))))
 
 (defun generate-consumed (regs classes exprs)
-  (labels ((meta-generate (var-name used-bits-func var-width)
+  (labels ((meta-generate (c-var-name used-bits-func var-width)
 	     (labels ((generate-for-lvalue (expr)
 			(expr-case expr
 			  (register (register class number)
@@ -4609,6 +4614,8 @@ save_live = live;~%"
 			    (format t "}~%"))
 			  (nop ()
 			       (format t "/* nop */~%"))
+			  (not-implemented ()
+					   (format t "assert(0); /* not implemented */~%"))
 			  (ignore (value)
 				  (format t "/* ignore */~%"))
 			  (system-call ()
@@ -4619,7 +4626,7 @@ save_live = live;~%"
 	       (mapc #'generate exprs)
 	       (format t "consumed_~A = consumed;
 }~%"
-		       var-name))))
+		       c-var-name))))
     (dolist (reg regs)
       (meta-generate (register-name reg) #'(lambda (expr) (generate-used-reg-bits reg expr)) (register-width reg)))
     (dolist (class classes)
