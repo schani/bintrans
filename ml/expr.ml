@@ -232,6 +232,12 @@ let extract_bit_expr value bit =
 let is_bit_set_expr value bit =
   Unary (ConditionNeg, Unary (IntEven, extract_bit_expr value bit))
 
+let is_full_mask_expr x =
+  BinaryWidth (IntEqual, 8, x, int_literal_expr minus_one)
+
+let is_zero_expr x =
+  UnaryWidth (IntZero, 8, x)
+
 let both_low_one_bits_expr a b =
   Binary (BothLowOneBits, a, b)
 
@@ -240,6 +246,17 @@ let low_mask_expr x =
 
 let high_mask_expr x =
   Unary (HighMask, x)
+
+let and_expr a b =
+  Binary (ConditionAnd, a, b)
+
+let or_expr a b =
+  Binary (ConditionOr, a, b)
+
+let not_expr a =
+  match a with
+    Unary (ConditionNeg, x) -> x
+  | _ -> Unary (ConditionNeg, a)
 
 let bitand_expr a b =
   Binary (BitAnd, a, b)
@@ -444,11 +461,12 @@ let cfold_expr fields expr =
 	  ConditionConst false
     | LShiftR -> IntConst (IntLiteral (lshiftr arg1 arg2))
     | AShiftR ->
-	let amount = if (compare arg2 (mul 8L (of_int width))) >= 0 || (compare arg2 0L) < 0 then
+	let amount = if ((compare arg2 (mul 8L (of_int width))) >= 0) || ((compare arg2 0L) < 0) then
 	  8 * width - 1
 	else
 	  to_int arg2
-	in IntConst (IntLiteral (shift_right (shift_left arg2 (64 - 8 * width)) (64 - 8 * width + amount)))
+	in 
+	  IntConst (IntLiteral (shift_right (shift_left arg1 (64 - (8 * width))) ((64 - (8 * width)) + amount)))
     | IntMulHS ->
 	if width > 4 then raise Unsupported_width ;
 	let arg1 = sex (width * 8) arg1

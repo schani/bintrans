@@ -26,12 +26,9 @@ let binding_input_name binding =
 let find_binding bindings name =
   find (fun b -> (binding_input_name b) = name) bindings
 
-let get_int_const_binding fields bindings name =
+let get_const_binding fields bindings name =
   match find_binding bindings name with
-      ConstBinding (name, expr) ->
-	(match cfold_expr fields expr with
-	     IntConst (IntLiteral i) -> i
-	   | _ -> raise Wrong_binding)
+      ConstBinding (name, expr) -> expr
     | _ -> raise Wrong_binding
 
 (*** target insns ***)
@@ -39,8 +36,9 @@ let get_int_const_binding fields bindings name =
 type cost = int
 
 type target_insn =
-    { pattern : stmt_pattern ;
-      matcher : (input_name * int64) list -> stmt -> binding list -> cost option }
+    { name : string ;
+      pattern : stmt_pattern ;
+      matcher : (input_name * int64) list -> stmt -> binding list -> cost condition_monad }
 
 (*** matches ***)
 
@@ -188,6 +186,8 @@ let match_expr fields expr pattern =
   in
     match_rec expr pattern
 
+(*** matching against target insns ***)
+
 let try_stmt_match fields stmt insn =
   match (stmt, insn.pattern) with
       (Store (byte_order1, width, addr, value),
@@ -198,9 +198,9 @@ let try_stmt_match fields stmt insn =
 	       (cm_return [ WidthBinding (width_input_name, width) ])
 	       (combine_bindings (match_expr fields addr addr_pattern) (match_expr fields value value_pattern)))
 	    (fun bindings ->
-	      match insn.matcher fields stmt bindings with
-		Some cost -> cm_return (bindings, cost)
-	      | None -> cm_fail)
+	       cm_bind (insn.matcher fields stmt bindings)
+	       (fun cost ->
+		  cm_return (bindings, cost)))
     | (Assign (register, expr),
        AssignPattern (input_name, pattern)) ->
 	 cm_bind
@@ -208,13 +208,13 @@ let try_stmt_match fields stmt insn =
 	      (cm_return [ RegisterBinding (input_name, register) ])
 	      (match_expr fields expr pattern))
 	   (fun bindings ->
-	     match insn.matcher fields stmt bindings with
-	       Some cost -> cm_return (bindings, cost)
-	     | None -> cm_fail)
+	      cm_bind (insn.matcher fields stmt bindings)
+	      (fun cost ->
+		 cm_return (bindings, cost)))
     | _ -> cm_fail
 
-let calculate_sub_costs bindings best_matches_alist =
-  fold_left ( combine_maybe ( + ) )
+let calculate_submatch_data bindings best_matches_alist =
+  fold_left (combine_maybe (fun cost1 cost2 -> cost1 + cost2))
     (Some 0)
     (map (fun binding ->
             match binding with
@@ -227,59 +227,57 @@ let calculate_sub_costs bindings best_matches_alist =
 	    | _ -> Some 0)
        bindings)
 
-let find_stmt_matches fields stmt insns best_matches_alist =
-  concat (map (fun insn ->
-                 let match_cm = try_stmt_match fields stmt insn
-		 in if cm_successful match_cm then
-		   (match cm_value match_cm with
-		     (bindings, cost) ->
-		       (let maybe_sub_costs = calculate_sub_costs bindings best_matches_alist
-		       in match maybe_sub_costs with
-			 Some sub_costs ->
-			   [ { matched_stmt = stmt ;
-			       stmt_match_data = { target_insn = insn ;
-						   cost = cost ;
-						   cumulative_cost = cost + sub_costs ;
-						   bindings = bindings }} ]
-		       | None -> []))
-		 else
-		   [])
-	    insns)
+let find_matches make_match_data stmt fields insns best_matches_alist =
+  let (matches, conds_list) =
+    split (map (fun insn ->
+                  let match_cm = try_stmt_match fields stmt insn
+		  in match match_cm with
+		    CMSuccess ((bindings, cost), conds) ->
+		      (let maybe_sub_data = calculate_submatch_data bindings best_matches_alist
+		      in match maybe_sub_data with
+			Some sub_costs ->
+			  ([ make_match_data insn cost (cost + sub_costs) bindings ], conds)
+		      | None -> ([], conds))
+		  | CMFailureWithReason (conds, fcond) ->
+		      ([], (not_expr fcond) :: conds)
+		  | CMFailure ->
+		      ([], []))
+	     insns)
+  in (flatten matches, flatten conds_list)
 
-let find_expr_matches fields expr insns best_matches_alist =
+let find_stmt_matches stmt =
+  find_matches (fun insn cost cumulative_cost bindings ->
+		  { matched_stmt = stmt ;
+		    stmt_match_data = { target_insn = insn ;
+					cost = cost ;
+					cumulative_cost = cumulative_cost ;
+					bindings = bindings }})
+    stmt
+
+let find_expr_matches expr =
   (* print_string "matching " ; print_expr expr ; print_string " with " ; print_matches_alist best_matches_alist ; *)
   let stmt = Assign ((-1, expr_value_type expr), expr)
-  in concat (map (fun insn ->
-                    let match_cm = try_stmt_match fields stmt insn
-		    in if cm_successful match_cm then
-                      (match cm_value match_cm with
-			(bindings, cost) ->
-			  (let maybe_sub_costs = calculate_sub_costs bindings best_matches_alist
-			  in match maybe_sub_costs with
-			    Some sub_costs ->
-			      [ { matched_expr = expr ;
-				  expr_match_data = { target_insn = insn ;
-						      cost = cost ;
-						      cumulative_cost = cost + sub_costs ;
-						      bindings = bindings }} ]
-			  | None -> []))
-		    else
-		      [])
-	       insns)
+  in find_matches (fun insn cost cumulative_cost bindings ->
+		     { matched_expr = expr ;
+		       expr_match_data = { target_insn = insn ;
+					   cost = cost ;
+					   cumulative_cost = cumulative_cost ;
+					   bindings = bindings }})
+       stmt
 
 let rec recursively_match_stmt fields stmt target_insns =
   try
-    let rec recursively_match_expr best_matches_alist expr =
+    let rec recursively_match_expr (best_matches_alist, conds) expr =
       let subs = if is_const (cfold_expr fields expr) then [] else expr_sub_exprs expr
-      in let best_matches_alist = fold_left recursively_match_expr best_matches_alist subs
-      in let matches = find_expr_matches fields expr target_insns best_matches_alist
+      in let (best_matches_alist, conds) = fold_left recursively_match_expr (best_matches_alist, conds) subs
+      in let (matches, match_conds) = find_expr_matches expr fields target_insns best_matches_alist
       in try
-	(expr, (fold_left better_expr_match (hd matches) (tl matches))) :: best_matches_alist
+	((expr, (fold_left better_expr_match (hd matches) (tl matches))) :: best_matches_alist, match_conds @ conds)
       with
 	Failure _ -> print_string "could not match expr " ; print_expr expr ; print_newline () ; raise No_match
     in let subs = stmt_sub_exprs stmt
-    in let best_matches_alist = fold_left recursively_match_expr [] subs
-    in let matches = find_stmt_matches fields stmt target_insns best_matches_alist
-    in ((fold_left better_stmt_match (hd matches) (tl matches)), best_matches_alist)
+    in let (best_matches_alist, conds) = fold_left recursively_match_expr ([], []) subs
+    in let (matches, match_conds) = find_stmt_matches stmt fields target_insns best_matches_alist
+    in ((fold_left better_stmt_match (hd matches) (tl matches)), best_matches_alist, match_conds @ conds)
   with
     Failure _ -> print_string "could not match stmt " ; print_stmt stmt ; raise No_match

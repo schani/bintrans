@@ -1,5 +1,6 @@
 bitmath.ml
 cond_monad.ml
+explorer.ml
 expr.ml
 instruction.ml
 machine.ml
@@ -9,7 +10,6 @@ monad.ml
 pruner.ml
 simplify.ml
 target_alpha.ml
-target.ml
 test.ml
 build.lisp
 irmacros.lisp

@@ -5,8 +5,7 @@ open Expr
 open Cond_monad
 open Target_alpha
 open Matcher
-open Simplify
-open Pruner
+open Explorer
 
 let make_mask begin_bit end_bit =
   If (BinaryWidth (LessU, 8, end_bit, begin_bit),
@@ -32,69 +31,35 @@ let make_ppc_mask mb me =
 let make_ppc_rlwinm ra rs sh mb me =
   Assign (ra, Binary (BitAnd, make_rotl4 rs sh, make_ppc_mask mb me))
 
+(*
 let rec repeat_until_fixpoint fn data =
   let ndata = fn data
   in if ndata = data then
     data
   else
     repeat_until_fixpoint fn ndata
+*)
 
-let rec simplify_and_prune_until_fixpoint depth print prune simplify fields x =
-  if depth >= 100 then
-    (print_int depth ; print_string " : " ; print x ; print_newline ())
-  else
-    () ;
-  cm_bind (prune fields x)
-    (fun px ->
-      cm_bind (simplify fields px)
-	(fun spx ->
-	  if spx = x then
-	    cm_return x
-	  else
-	    simplify_and_prune_until_fixpoint (depth + 1) print prune simplify fields spx))
-
-let simplify_and_prune_expr_until_fixpoint =
-  simplify_and_prune_until_fixpoint 0 print_expr (fun f x -> prune_expr f x minus_one) simplify_expr
-
-let simplify_and_prune_stmt_until_fixpoint =
-  simplify_and_prune_until_fixpoint 0 (fun _ -> ()) prune_stmt simplify_stmt
-
-let explore_all_fields stmt fields =
-  let rec explore fields_so_far rest_fields stmts_so_far =
-    match rest_fields with
-      [] ->
-	if exists (fun (_, conds) ->
-		     for_all (fun c ->
-				match cfold_expr fields_so_far c with
-				    ConditionConst true -> true
-				  | _ -> false) conds) stmts_so_far then
-	  stmts_so_far
-	else
-	  let (new_stmt, new_conds) = cm_yield (simplify_and_prune_stmt_until_fixpoint fields_so_far stmt)
-	  in assert (not (exists (fun (stmt, _) -> stmt = new_stmt) stmts_so_far));
-	    (new_stmt, new_conds) :: stmts_so_far
-    | (name, min, max) :: rest_fields when (compare min max) < 0 ->
-	let stmts_so_far = explore ((name, min) :: fields_so_far) rest_fields stmts_so_far
-	in explore fields_so_far ((name, (add min one), max) :: rest_fields) stmts_so_far
-    | _ -> stmts_so_far
+let rec print_target_insns best_matches_alist match_data =
+  
+  let bindings  = filter (fun b -> match b with
+			      ExprBinding _ -> true
+			    | _ -> false) match_data.bindings
   in
-    explore [] fields []
-
-let rec uniq lst =
-  match lst with
-      [] -> []
-    | x :: xs ->
-	let uxs = uniq xs
-	in if mem x uxs then
-	    uxs
-	  else
-	    x :: uxs
-
-let simplify_conditions conds =
-  let prune_and_simplify x =
-    fst (cm_yield (simplify_and_prune_expr_until_fixpoint [] x))
-  in uniq (map (fun x -> cfold_expr [] (prune_and_simplify x))
-	     (filter (fun x -> not (is_const (cfold_expr [] x))) conds))
+    print_string match_data.target_insn.name ;
+    match bindings with
+	[] -> ()
+      | _ :: _ ->
+	  print_string "(" ;
+	  iter (fun b ->
+		  match b with
+		      ExprBinding (name, expr) ->
+			print_string name ; print_string " = " ;
+			print_target_insns best_matches_alist (assoc expr best_matches_alist).expr_match_data ;
+			print_string " ; "
+		    | _ -> raise Wrong_binding)
+	    bindings ;
+	  print_string ")"
 
 let test_expore () =
   let r1 = (1, Int)
@@ -112,8 +77,20 @@ let test_expore () =
   let (best_stmt_match, best_sub_matches_alist) = recursively_match_stmt fields stmt alpha_insns
   in print_whole_match best_stmt_match best_sub_matches_alist ;
 *)
-  in let stmts = explore_all_fields stmt6 [("sh", 0L, 32L); ("mb", 0L, 32L); ("me", 0L, 32L)]
-  in iter (fun (s, _) -> print_stmt s) stmts
+  in let stmt_forms = explore_all_fields stmt6 [("sh", 0L, 32L); ("mb", 0L, 32L); ("me", 0L, 32L)] alpha_insns
+  in iter (fun form ->
+	     print_stmt form.stmt ;
+	     iter (fun form_match ->
+		     print_string "  " ;
+		     print_target_insns form_match.best_sub_matches form_match.match_data ;
+		     print_newline () ;
+(*
+		     iter (fun c ->
+			     print_expr c ; print_newline ()) form_match.match_conditions
+*)
+   )
+	       form.matches ;
+	     print_newline ()) stmt_forms
 
 let main () =
   let r1 = (1, Int)
@@ -122,7 +99,7 @@ let main () =
   in let stmt1 = Assign (r1, Binary (BitAnd, Binary (ShiftL, Register r2, IntConst (IntField "sh")),
 				     (make_mask (int_literal_expr 0L) (int_literal_expr 15L))))
      and stmt2 = make_ppc_rlwinm r1 (Register r2) (IntConst (IntField "sh")) (IntConst (IntField "mb")) (IntConst (IntField "me"))
-     and fields = [("sh", 0L); ("mb", 0L); ("me", 31L)]
+     and fields = [("sh", 0L); ("mb", 3L); ("me", 30L)]
   in let (stmt, conds) = cm_yield (simplify_and_prune_stmt_until_fixpoint fields stmt2)
   in let conds = simplify_conditions conds
   in print_stmt stmt2 ; print_string "->\n" ;

@@ -2,57 +2,74 @@ open List
 open Int64
 
 open Expr
+open Cond_monad
 open Matcher
 
 let lda_insn =
-  { pattern = AssignPattern ("rs", IntPattern (AnyInt "i")) ;
+  { name = "lda" ;
+    pattern = AssignPattern ("rs", IntPattern (AnyInt "i")) ;
     matcher = fun f s b ->
-      let i = get_int_const_binding f b "i"
-      in if ((shift_right i 15) = 0L) || ((shift_right i 15) = minus_one) then Some 1 else None }
+      let i = get_const_binding f b "i"
+      in cm_when f (or_expr (is_zero_expr (BinaryWidth (AShiftR, 8, i, int_literal_expr 15L)))
+		      (is_full_mask_expr (BinaryWidth (AShiftR, 8, i, int_literal_expr 15L))))
+	  (fun _ -> cm_return 1) }
 
 let ldah_insn =
-  { pattern = AssignPattern ("rs", IntPattern (AnyInt "i")) ;
+  { name = "ldah" ;
+    pattern = AssignPattern ("rs", IntPattern (AnyInt "i")) ;
     matcher = fun f s b ->
-      let i = get_int_const_binding f b "i"
-      in if ((logand i 0xffffL) = 0L) && (((shift_right i 31) = 0L) || ((shift_right i 31) = minus_one)) then Some 1 else None }
+      let i = get_const_binding f b "i"
+      in cm_when f (and_expr (is_zero_expr (bitand_expr i (int_literal_expr 0xffffL)))
+		      (or_expr (is_zero_expr (BinaryWidth (AShiftR, 8, i, int_literal_expr 31L)))
+			 (is_full_mask_expr (BinaryWidth (AShiftR, 8, i, int_literal_expr 31L)))))
+	  (fun _ -> cm_return 1) }
 
 let load_insn =
-  { pattern = AssignPattern ("rs", IntPattern (AnyInt "i")) ;
-    matcher = fun f s b -> Some 2 }
+  { name = "load_int" ;
+    pattern = AssignPattern ("rs", IntPattern (AnyInt "i")) ;
+    matcher = fun f s b -> cm_return 2 }
 
 let mov_insn =
-  { pattern = AssignPattern ("rs", RegisterPattern "ra") ;
-    matcher = fun f s b -> Some 1 }
+  { name = "mov" ;
+    pattern = AssignPattern ("rs", RegisterPattern "ra") ;
+    matcher = fun f s b -> cm_return 1 }
 
 let and_insn =
-  { pattern = AssignPattern ("rs", BinaryPattern (BitAnd, RegisterPattern "ra", RegisterPattern "rb")) ;
-    matcher = fun f s b -> Some 1 }
+  { name = "and" ;
+    pattern = AssignPattern ("rs", BinaryPattern (BitAnd, RegisterPattern "ra", RegisterPattern "rb")) ;
+    matcher = fun f s b -> cm_return 1 }
 
 let bis_insn =
-  { pattern = AssignPattern ("rs", BinaryPattern (BitOr, RegisterPattern "ra", RegisterPattern "rb")) ;
-    matcher = fun f s b -> Some 1 }
+  { name = "bis" ;
+    pattern = AssignPattern ("rs", BinaryPattern (BitOr, RegisterPattern "ra", RegisterPattern "rb")) ;
+    matcher = fun f s b -> cm_return 1 }
 
 let bic_insn =
-  { pattern = AssignPattern ("rs", BinaryPattern (BitAnd, RegisterPattern "ra", UnaryPattern (BitNeg, RegisterPattern "rb"))) ;
-    matcher = fun f s b -> Some 1 }
+  { name = "bic" ;
+    pattern = AssignPattern ("rs", BinaryPattern (BitAnd, RegisterPattern "ra", UnaryPattern (BitNeg, RegisterPattern "rb"))) ;
+    matcher = fun f s b -> cm_return 1 }
 
 let neg_insn =
-  { pattern = AssignPattern ("rs", UnaryPattern (BitNeg, RegisterPattern "rb")) ;
-    matcher = fun f s b -> Some 1 }
+  { name = "neg" ;
+    pattern = AssignPattern ("rs", UnaryPattern (BitNeg, RegisterPattern "rb")) ;
+    matcher = fun f s b -> cm_return 1 }
 
 let sll_imm_insn =
-  { pattern = AssignPattern ("rs", BinaryPattern (ShiftL, RegisterPattern "ra", IntPattern (AnyInt "a"))) ;
-    matcher = fun f s b -> Some 1 }
+  { name = "sll_imm" ;
+    pattern = AssignPattern ("rs", BinaryPattern (ShiftL, RegisterPattern "ra", IntPattern (AnyInt "a"))) ;
+    matcher = fun f s b -> cm_return 1 }
 
 let zapnot_imm_srl_imm_insn =
-  { pattern = AssignPattern ("rs", BinaryWidthPattern (LShiftR, ([1; 2; 4], "width"),
+  { name = "zapnot_imm->srl_imm" ;
+    pattern = AssignPattern ("rs", BinaryWidthPattern (LShiftR, ([1; 2; 4], "width"),
 						       RegisterPattern "ra", IntPattern (AnyInt "a"))) ;
-    matcher = fun f s b -> Some 2 }
+    matcher = fun f s b -> cm_return 2 }
 
 let srl_imm_insn =
-  { pattern = AssignPattern ("rs", BinaryWidthPattern (LShiftR, ([8], "width"),
+  { name = "srl_imm" ;
+    pattern = AssignPattern ("rs", BinaryWidthPattern (LShiftR, ([8], "width"),
 						       RegisterPattern "ra", IntPattern (AnyInt "a"))) ;
-    matcher = fun f s b -> Some 1 }
+    matcher = fun f s b -> cm_return 1 }
 
 let alpha_insns =
   [ lda_insn ; ldah_insn ; load_insn ;
