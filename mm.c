@@ -912,6 +912,7 @@ mem_flags_union (interpreter_t *intp, word_32 addr, word_32 len)
     return flags;
 }
 
+/* warning: this does not work like strcpy! */
 word_32
 copy_string (interpreter_t *intp, char *str, word_32 p)
 {
@@ -960,4 +961,13 @@ strdup_from_user (interpreter_t *intp, word_32 p)
 	mem[i] = mem_get_8(intp, p + i);
 
     return mem;
+}
+
+void
+strcpy_to_user (interpreter_t *intp, word_32 p, char *s)
+{
+    int i;
+
+    for (i = 0; s[i] != 0; ++i)
+	mem_set_8(intp, p + i, s[i]);
 }

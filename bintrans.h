@@ -230,6 +230,7 @@ word_32 copy_string (interpreter_t *intp, char *str, word_32 p);
 word_32 copy_strings (interpreter_t *intp, int num, char **strs, word_32 p);
 word_32 strlen_user (interpreter_t *intp, word_32 p);
 char* strdup_from_user (interpreter_t *intp, word_32 p);
+void strcpy_to_user (interpreter_t *intp, word_32 p, char *s);
 
 void handle_system_call (interpreter_t *intp);
 

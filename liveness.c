@@ -479,7 +479,7 @@ compute_liveness_for_trace (interpreter_t *intp, word_32 *addrs, int length)
 typedef struct
 {
     word_32 foreign_addr;
-    int depth;
+    /* int depth; */
     word_32 live_cr;
     word_32 live_xer;
     word_32 live_gpr;
@@ -502,7 +502,7 @@ load_liveness_info (void)
 	init_fragment_hash_entry(&entry, &supplement);
 	entry.foreign_addr = info.foreign_addr;
 #if LIVENESS_DEPTH > 0
-	supplement.depth = info.depth;
+	supplement.depth = 0;
 #endif
 	supplement.live_cr = info.live_cr;
 	supplement.live_xer = info.live_xer;
@@ -531,11 +531,13 @@ save_liveness_info (void)
 	    ppc_liveness_info_t info;
 
 	    info.foreign_addr = fragment_hash_table[i].foreign_addr;
+	    /*
 #if LIVENESS_DEPTH > 0
 	    info.depth = fragment_hash_supplement[i].depth;
 #else
 	    info.depth = 0;
 #endif
+	    */
 	    info.live_cr = fragment_hash_supplement[i].live_cr;
 	    info.live_xer = fragment_hash_supplement[i].live_xer;
 	    info.live_gpr = fragment_hash_supplement[i].live_gpr;

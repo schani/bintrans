@@ -3,7 +3,7 @@
  *
  * bintrans
  *
- * Copyright (C) 2001 Mark Probst
+ * Copyright (C) 2001,2002 Mark Probst
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -387,6 +387,18 @@ handle_addd_insn (word_32 insn, word_32 pc)
 }
 
 static void
+handle_addo_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
+}
+
+static void
+handle_addod_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
+}
+
+static void
 handle_addc_insn (word_32 insn, word_32 pc)
 {
     if (KILL_XER_CA)
@@ -449,6 +461,19 @@ handle_addcd_insn (word_32 insn, word_32 pc)
 {
     handle_addc_insn(insn, pc);
 }
+
+static void
+handle_addco_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
+}
+
+static void
+handle_addcod_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
+}
+
 
 static void
 handle_adde_insn (word_32 insn, word_32 pc)
@@ -546,6 +571,19 @@ static void
 handle_added_insn (word_32 insn, word_32 pc)
 {
     handle_adde_insn(insn, pc);
+}
+
+static void
+handle_addeo_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
+}
+
+
+static void
+handle_addeod_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
 }
 
 static void
@@ -707,6 +745,30 @@ handle_addis_insn (word_32 insn, word_32 pc)
 }
 
 static void
+handle_addme_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
+}
+
+static void
+handle_addmed_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
+}
+
+static void
+handle_addmeo_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
+}
+
+static void
+handle_addmeod_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
+}
+
+static void
 handle_addze_insn (word_32 insn, word_32 pc)
 {
     if (KILL_XER_CA)
@@ -745,6 +807,24 @@ handle_addze_insn (word_32 insn, word_32 pc)
 	unref_integer_reg(ca_reg);
 	unref_integer_reg(ra_reg);
     }
+}
+
+static void
+handle_addzed_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
+}
+
+static void
+handle_addzeo_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
+}
+
+static void
+handle_addzeod_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
 }
 
 static void
@@ -1738,9 +1818,45 @@ handle_divw_insn (word_32 insn, word_32 pc)
 }
 
 static void
+handle_divwd_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
+}
+
+static void
+handle_divwo_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
+}
+
+static void
+handle_divwod_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
+}
+
+static void
 handle_divwu_insn (word_32 insn, word_32 pc)
 {
     gen_div_insn(insn, DIV_UNSIGNED_32_CONST);
+}
+
+static void
+handle_divwud_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
+}
+
+static void
+handle_divwuo_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
+}
+
+static void
+handle_divwuod_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
 }
 
 static void
@@ -2729,6 +2845,12 @@ handle_lhax_insn (word_32 insn, word_32 pc)
 }
 
 static void
+handle_lhbrx_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
+}
+
+static void
 handle_lhz_insn (word_32 insn, word_32 pc)
 {
     gen_load_half_imm_insn(insn, 0);
@@ -2744,6 +2866,12 @@ static void
 handle_lhzx_insn (word_32 insn, word_32 pc)
 {
     gen_load_half_indexed_insn(insn, 0);
+}
+
+static void
+handle_lwbrx_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
 }
 
 static void
@@ -3422,6 +3550,18 @@ handle_mullwd_insn (word_32 insn, word_32 pc)
 }
 
 static void
+handle_mullwo_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
+}
+
+static void
+handle_mullwod_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
+}
+
+static void
 emit_nand (reg_t a, reg_t b, reg_t d)
 {
     emit(COMPOSE_AND(a, b, d));
@@ -3462,6 +3602,18 @@ static void
 handle_negd_insn (word_32 insn, word_32 pc)
 {
     handle_neg_insn(insn, pc);
+}
+
+static void
+handle_nego_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
+}
+
+static void
+handle_negod_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
 }
 
 static void
@@ -3714,6 +3866,52 @@ static void
 handle_rlwinmd_insn (word_32 insn, word_32 pc)
 {
     handle_rlwinm_insn(insn, pc);
+}
+
+static void
+handle_rlwnm_insn (word_32 insn, word_32 pc)
+{
+    if (KILL_GPR(FIELD_RA))
+    {
+	word_32 mask = mask_32(31 - FIELD_ME, 31 - FIELD_MB);
+	reg_t ra_reg, rs_reg, rb_reg, tmp;
+
+	rb_reg = ref_ppc_gpr_r(FIELD_RB);
+	tmp = alloc_tmp_integer_reg();
+
+	emit(COMPOSE_AND_IMM(rb_reg, 0x1f, tmp));
+
+	unref_integer_reg(rb_reg);
+
+	rs_reg = ref_ppc_gpr_r(FIELD_RS);
+	ra_reg = ref_ppc_gpr_w(FIELD_RA);
+
+	emit(COMPOSE_ZAPNOT_IMM(rs_reg, 15, ra_reg));
+
+	unref_integer_reg(rs_reg);
+
+	emit(COMPOSE_SLL(ra_reg, tmp, ra_reg));
+	emit(COMPOSE_SRL_IMM(ra_reg, 32, tmp));
+	emit(COMPOSE_BIS(ra_reg, tmp, ra_reg));
+
+	free_tmp_integer_reg(tmp);
+
+	if (mask != 0xffffffff)
+	    gen_and_with_const(ra_reg, ra_reg, mask);
+
+	emit(COMPOSE_ADDL(ra_reg, 31, ra_reg));
+
+	if (FIELD_RC)
+	    gen_rc_code(ra_reg);
+
+	unref_integer_reg(ra_reg);
+    }
+}
+
+static void
+handle_rlwnmd_insn (word_32 insn, word_32 pc)
+{
+    handle_rlwnm_insn(insn, pc);
 }
 
 static void
@@ -4335,6 +4533,12 @@ handle_sth_insn (word_32 insn, word_32 pc)
 }
 
 static void
+handle_sthbrx_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
+}
+
+static void
 handle_sthu_insn (word_32 insn, word_32 pc)
 {
     reg_t ra_reg, rs_reg, addr_reg;
@@ -4427,6 +4631,12 @@ handle_stw_insn (word_32 insn, word_32 pc)
 	unref_integer_reg(rs_reg);
 	unref_integer_reg(ra_reg);
     }
+}
+
+static void
+handle_stwbrx_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
 }
 
 static void
@@ -4545,6 +4755,18 @@ handle_subfd_insn (word_32 insn, word_32 pc)
 }
 
 static void
+handle_subfo_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
+}
+
+static void
+handle_subfod_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
+}
+
+static void
 handle_subfc_insn (word_32 insn, word_32 pc)
 {
     if (KILL_GPR(FIELD_RD) && KILL_XER_CA)
@@ -4620,6 +4842,18 @@ static void
 handle_subfcd_insn (word_32 insn, word_32 pc)
 {
     handle_subfc_insn(insn, pc);
+}
+
+static void
+handle_subfco_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
+}
+
+static void
+handle_subfcod_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
 }
 
 static void
@@ -4765,6 +4999,24 @@ handle_subfe_insn (word_32 insn, word_32 pc)
 }
 
 static void
+handle_subfed_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
+}
+
+static void
+handle_subfeo_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
+}
+
+static void
+handle_subfeod_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
+}
+
+static void
 handle_subfic_insn (word_32 insn, word_32 pc)
 {
     if (KILL_GPR(FIELD_RD) && KILL_XER_CA)
@@ -4843,6 +5095,54 @@ handle_subfic_insn (word_32 insn, word_32 pc)
 	free_tmp_integer_reg(tmp_reg);
 	unref_integer_reg(ra_reg);
     }
+}
+
+static void
+handle_subfme_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
+}
+
+static void
+handle_subfmed_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
+}
+
+static void
+handle_subfmeo_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
+}
+
+static void
+handle_subfmeod_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
+}
+
+static void
+handle_subfze_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
+}
+
+static void
+handle_subfzed_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
+}
+
+static void
+handle_subfzeo_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
+}
+
+static void
+handle_subfzeod_insn (word_32 insn, word_32 pc)
+{
+    assert(0);
 }
 
 static void
@@ -4936,862 +5236,1088 @@ compile_to_alpha_ppc_insn (word_32 insn, word_32 pc, int _optimize_taken_jump, l
     ++num_translated_insns;
 #endif
 
-    switch (((insn >> 26) & 0x3F)) {
-	case 27:
-	    /* XORIS */
-	    assert((insn & 0xFC000000) == 0x6C000000);
-	    handle_xoris_insn(insn, pc);
-	    break;
-	case 26:
-	    /* XORI */
-	    assert((insn & 0xFC000000) == 0x68000000);
-	    handle_xori_insn(insn, pc);
-	    break;
-	case 31:
-	    switch (((insn >> 0) & 0x7FF)) {
-		case 633:
-		    /* XOR. */
-		    assert((insn & 0xFC0007FF) == 0x7C000279);
-		    handle_xord_insn(insn, pc);
-		    break;
-		case 632:
-		    /* XOR */
-		    assert((insn & 0xFC0007FF) == 0x7C000278);
-		    handle_xor_insn(insn, pc);
-		    break;
-		case 1196:
-		    /* SYNC */
-		    assert((insn & 0xFFFFFFFF) == 0x7C0004AC);
-		    handle_sync_insn(insn, pc);
-		    break;
-		case 272:
-		    /* SUBFE */
-		    assert((insn & 0xFC0007FF) == 0x7C000110);
-		    handle_subfe_insn(insn, pc);
-		    break;
-		case 17:
-		    /* SUBFC. */
-		    assert((insn & 0xFC0007FF) == 0x7C000011);
-		    handle_subfcd_insn(insn, pc);
-		    break;
-		case 16:
-		    /* SUBFC */
-		    assert((insn & 0xFC0007FF) == 0x7C000010);
-		    handle_subfc_insn(insn, pc);
-		    break;
-		case 81:
-		    /* SUBF. */
-		    assert((insn & 0xFC0007FF) == 0x7C000051);
-		    handle_subfd_insn(insn, pc);
-		    break;
-		case 80:
-		    /* SUBF */
-		    assert((insn & 0xFC0007FF) == 0x7C000050);
-		    handle_subf_insn(insn, pc);
-		    break;
-		case 302:
-		    /* STWX */
-		    assert((insn & 0xFC0007FF) == 0x7C00012E);
-		    handle_stwx_insn(insn, pc);
-		    break;
-		case 366:
-		    /* STWUX */
-		    assert((insn & 0xFC0007FF) == 0x7C00016E);
-		    handle_stwux_insn(insn, pc);
-		    break;
-		case 814:
-		    /* STHX */
-		    assert((insn & 0xFC0007FF) == 0x7C00032E);
-		    handle_sthx_insn(insn, pc);
-		    break;
-		case 1326:
-		    /* STFSX */
-		    assert((insn & 0xFC0007FF) == 0x7C00052E);
-		    handle_stfsx_insn(insn, pc);
-		    break;
-		case 1454:
-		    /* STFDX */
-		    assert((insn & 0xFC0007FF) == 0x7C0005AE);
-		    handle_stfdx_insn(insn, pc);
-		    break;
-		case 430:
-		    /* STBX */
-		    assert((insn & 0xFC0007FF) == 0x7C0001AE);
-		    handle_stbx_insn(insn, pc);
-		    break;
-		case 1073:
-		    /* SRW. */
-		    assert((insn & 0xFC0007FF) == 0x7C000431);
-		    handle_srwd_insn(insn, pc);
-		    break;
-		case 1072:
-		    /* SRW */
-		    assert((insn & 0xFC0007FF) == 0x7C000430);
-		    handle_srw_insn(insn, pc);
-		    break;
-		case 1649:
-		    /* SRAWI. */
-		    assert((insn & 0xFC0007FF) == 0x7C000671);
-		    handle_srawid_insn(insn, pc);
-		    break;
-		case 1648:
-		    /* SRAWI */
-		    assert((insn & 0xFC0007FF) == 0x7C000670);
-		    handle_srawi_insn(insn, pc);
-		    break;
-		case 1585:
-		    /* SRAW. */
-		    assert((insn & 0xFC0007FF) == 0x7C000631);
-		    handle_srawd_insn(insn, pc);
-		    break;
-		case 1584:
-		    /* SRAW */
-		    assert((insn & 0xFC0007FF) == 0x7C000630);
-		    handle_sraw_insn(insn, pc);
-		    break;
-		case 48:
-		    /* SLW */
-		    assert((insn & 0xFC0007FF) == 0x7C000030);
-		    handle_slw_insn(insn, pc);
-		    break;
-		case 825:
-		    /* ORC. */
-		    assert((insn & 0xFC0007FF) == 0x7C000339);
-		    handle_orcd_insn(insn, pc);
-		    break;
-		case 824:
-		    /* ORC */
-		    assert((insn & 0xFC0007FF) == 0x7C000338);
-		    handle_orc_insn(insn, pc);
-		    break;
-		case 889:
-		    /* OR. */
-		    assert((insn & 0xFC0007FF) == 0x7C000379);
-		    handle_ord_insn(insn, pc);
-		    break;
-		case 888:
-		    /* OR */
-		    assert((insn & 0xFC0007FF) == 0x7C000378);
-		    handle_or_insn(insn, pc);
-		    break;
-		case 249:
-		    /* NOR. */
-		    assert((insn & 0xFC0007FF) == 0x7C0000F9);
-		    handle_nord_insn(insn, pc);
-		    break;
-		case 248:
-		    /* NOR */
-		    assert((insn & 0xFC0007FF) == 0x7C0000F8);
-		    handle_nor_insn(insn, pc);
-		    break;
-		case 209:
-		    /* NEG. */
-		    assert((insn & 0xFC00FFFF) == 0x7C0000D1);
-		    handle_negd_insn(insn, pc);
-		    break;
-		case 208:
-		    /* NEG */
-		    assert((insn & 0xFC00FFFF) == 0x7C0000D0);
-		    handle_neg_insn(insn, pc);
-		    break;
-		case 953:
-		    /* NAND. */
-		    assert((insn & 0xFC0007FF) == 0x7C0003B9);
-		    handle_nandd_insn(insn, pc);
-		    break;
-		case 952:
-		    /* NAND */
-		    assert((insn & 0xFC0007FF) == 0x7C0003B8);
-		    handle_nand_insn(insn, pc);
-		    break;
-		case 471:
-		    /* MULLW. */
-		    assert((insn & 0xFC0007FF) == 0x7C0001D7);
-		    handle_mullwd_insn(insn, pc);
-		    break;
-		case 470:
-		    /* MULLW */
-		    assert((insn & 0xFC0007FF) == 0x7C0001D6);
-		    handle_mullw_insn(insn, pc);
-		    break;
-		case 22:
-		    /* MULHWU */
-		    assert((insn & 0xFC0007FF) == 0x7C000016);
-		    handle_mulhwu_insn(insn, pc);
-		    break;
-		case 150:
-		    /* MULHW */
-		    assert((insn & 0xFC0007FF) == 0x7C000096);
-		    handle_mulhw_insn(insn, pc);
-		    break;
-		case 934:
-		    switch (((insn >> 11) & 0x3FF)) {
-			case 256:
-			    /* MTLR */
-			    assert((insn & 0xFC1FFFFF) == 0x7C0803A6);
-			    handle_mtlr_insn(insn, pc);
-			    break;
-			case 288:
-			    /* MTCTR */
-			    assert((insn & 0xFC1FFFFF) == 0x7C0903A6);
-			    handle_mtctr_insn(insn, pc);
-			    break;
-			default:
-			    assert(0);
-		    }
-		    break;
-		case 288:
-		    /* MTCRF */
-		    assert((insn & 0xFC100FFF) == 0x7C000120);
-		    handle_mtcrf_insn(insn, pc);
-		    break;
-		case 678:
-		    switch (((insn >> 11) & 0x3FF)) {
-			case 32:
-			    /* MFXER */
-			    assert((insn & 0xFC1FFFFF) == 0x7C0102A6);
-			    handle_mfxer_insn(insn, pc);
-			    break;
-			case 256:
-			    /* MFLR */
-			    assert((insn & 0xFC1FFFFF) == 0x7C0802A6);
-			    handle_mflr_insn(insn, pc);
-			    break;
-			case 288:
-			    /* MFCTR */
-			    assert((insn & 0xFC1FFFFF) == 0x7C0902A6);
-			    handle_mfctr_insn(insn, pc);
-			    break;
-			default:
-			    assert(0);
-		    }
-		    break;
-		case 38:
-		    /* MFCR */
-		    assert((insn & 0xFC1FFFFF) == 0x7C000026);
-		    handle_mfcr_insn(insn, pc);
-		    break;
-		case 46:
-		    /* LWZX */
-		    assert((insn & 0xFC0007FF) == 0x7C00002E);
-		    handle_lwzx_insn(insn, pc);
-		    break;
-		case 110:
-		    /* LWZUX */
-		    assert((insn & 0xFC0007FF) == 0x7C00006E);
-		    handle_lwzux_insn(insn, pc);
-		    break;
-		case 558:
-		    /* LHZX */
-		    assert((insn & 0xFC0007FF) == 0x7C00022E);
-		    handle_lhzx_insn(insn, pc);
-		    break;
-		case 686:
-		    /* LHAX */
-		    assert((insn & 0xFC0007FF) == 0x7C0002AE);
-		    handle_lhax_insn(insn, pc);
-		    break;
-		case 1070:
-		    /* LFSX */
-		    assert((insn & 0xFC0007FF) == 0x7C00042E);
-		    handle_lfsx_insn(insn, pc);
-		    break;
-		case 1198:
-		    /* LFDX */
-		    assert((insn & 0xFC0007FF) == 0x7C0004AE);
-		    handle_lfdx_insn(insn, pc);
-		    break;
-		case 174:
-		    /* LBZX */
-		    assert((insn & 0xFC0007FF) == 0x7C0000AE);
-		    handle_lbzx_insn(insn, pc);
-		    break;
-		case 238:
-		    /* LBZUX */
-		    assert((insn & 0xFC0007FF) == 0x7C0000EE);
-		    handle_lbzux_insn(insn, pc);
-		    break;
-		case 1964:
-		    /* ICBI */
-		    assert((insn & 0xFFE007FF) == 0x7C0007AC);
-		    handle_icbi_insn(insn, pc);
-		    break;
-		case 1845:
-		    /* EXTSH. */
-		    assert((insn & 0xFC00FFFF) == 0x7C000735);
-		    handle_extshd_insn(insn, pc);
-		    break;
-		case 1844:
-		    /* EXTSH */
-		    assert((insn & 0xFC00FFFF) == 0x7C000734);
-		    handle_extsh_insn(insn, pc);
-		    break;
-		case 1908:
-		    /* EXTSB */
-		    assert((insn & 0xFC00FFFF) == 0x7C000774);
-		    handle_extsb_insn(insn, pc);
-		    break;
-		case 569:
-		    /* EQV. */
-		    assert((insn & 0xFC0007FF) == 0x7C000239);
-		    handle_eqvd_insn(insn, pc);
-		    break;
-		case 568:
-		    /* EQV */
-		    assert((insn & 0xFC0007FF) == 0x7C000238);
-		    handle_eqv_insn(insn, pc);
-		    break;
-		case 918:
-		    /* DIVWU */
-		    assert((insn & 0xFC0007FF) == 0x7C000396);
-		    handle_divwu_insn(insn, pc);
-		    break;
-		case 982:
-		    /* DIVW */
-		    assert((insn & 0xFC0007FF) == 0x7C0003D6);
-		    handle_divw_insn(insn, pc);
-		    break;
-		case 2028:
-		    /* DCBZ */
-		    assert((insn & 0xFFE007FF) == 0x7C0007EC);
-		    handle_dcbz_insn(insn, pc);
-		    break;
-		case 108:
-		    /* DCBST */
-		    assert((insn & 0xFFE007FF) == 0x7C00006C);
-		    handle_dcbst_insn(insn, pc);
-		    break;
-		case 52:
-		    /* CNTLZW */
-		    assert((insn & 0xFC00FFFF) == 0x7C000034);
-		    handle_cntlzw_insn(insn, pc);
-		    break;
-		case 0:
-		    /* CMPW */
-		    assert((insn & 0xFC6007FF) == 0x7C000000);
-		    handle_cmpw_insn(insn, pc);
-		    break;
-		case 64:
-		    /* CMPLW */
-		    assert((insn & 0xFC6007FF) == 0x7C000040);
-		    handle_cmplw_insn(insn, pc);
-		    break;
-		case 121:
-		    /* ANDC. */
-		    assert((insn & 0xFC0007FF) == 0x7C000079);
-		    handle_andcd_insn(insn, pc);
-		    break;
-		case 120:
-		    /* ANDC */
-		    assert((insn & 0xFC0007FF) == 0x7C000078);
-		    handle_andc_insn(insn, pc);
-		    break;
-		case 57:
-		    /* AND. */
-		    assert((insn & 0xFC0007FF) == 0x7C000039);
-		    handle_andd_insn(insn, pc);
-		    break;
-		case 56:
-		    /* AND */
-		    assert((insn & 0xFC0007FF) == 0x7C000038);
-		    handle_and_insn(insn, pc);
-		    break;
-		case 404:
-		    /* ADDZE */
-		    assert((insn & 0xFC00FFFF) == 0x7C000194);
-		    handle_addze_insn(insn, pc);
-		    break;
-		case 277:
-		    /* ADDE. */
-		    assert((insn & 0xFC0007FF) == 0x7C000115);
-		    handle_added_insn(insn, pc);
-		    break;
-		case 276:
-		    /* ADDE */
-		    assert((insn & 0xFC0007FF) == 0x7C000114);
-		    handle_adde_insn(insn, pc);
-		    break;
-		case 21:
-		    /* ADDC. */
-		    assert((insn & 0xFC0007FF) == 0x7C000015);
-		    handle_addcd_insn(insn, pc);
-		    break;
-		case 20:
-		    /* ADDC */
-		    assert((insn & 0xFC0007FF) == 0x7C000014);
-		    handle_addc_insn(insn, pc);
-		    break;
-		case 533:
-		    /* ADD. */
-		    assert((insn & 0xFC0007FF) == 0x7C000215);
-		    handle_addd_insn(insn, pc);
-		    break;
-		case 532:
-		    /* ADD */
-		    assert((insn & 0xFC0007FF) == 0x7C000214);
-		    handle_add_insn(insn, pc);
-		    break;
-		default:
-		    assert(0);
-	    }
-	    break;
-	case 8:
-	    /* SUBFIC */
-	    assert((insn & 0xFC000000) == 0x20000000);
-	    handle_subfic_insn(insn, pc);
-	    break;
-	case 37:
-	    /* STWU */
-	    assert((insn & 0xFC000000) == 0x94000000);
-	    handle_stwu_insn(insn, pc);
-	    break;
-	case 36:
-	    /* STW */
-	    assert((insn & 0xFC000000) == 0x90000000);
-	    handle_stw_insn(insn, pc);
-	    break;
-	case 45:
-	    /* STHU */
-	    assert((insn & 0xFC000000) == 0xB4000000);
-	    handle_sthu_insn(insn, pc);
-	    break;
-	case 44:
-	    /* STH */
-	    assert((insn & 0xFC000000) == 0xB0000000);
-	    handle_sth_insn(insn, pc);
-	    break;
-	case 52:
-	    /* STFS */
-	    assert((insn & 0xFC000000) == 0xD0000000);
-	    handle_stfs_insn(insn, pc);
-	    break;
-	case 55:
-	    /* STFDU */
-	    assert((insn & 0xFC000000) == 0xDC000000);
-	    handle_stfdu_insn(insn, pc);
-	    break;
-	case 54:
-	    /* STFD */
-	    assert((insn & 0xFC000000) == 0xD8000000);
-	    handle_stfd_insn(insn, pc);
-	    break;
-	case 39:
-	    /* STBU */
-	    assert((insn & 0xFC000000) == 0x9C000000);
-	    handle_stbu_insn(insn, pc);
-	    break;
-	case 38:
-	    /* STB */
-	    assert((insn & 0xFC000000) == 0x98000000);
-	    handle_stb_insn(insn, pc);
-	    break;
-	case 17:
-	    /* SC */
-	    assert((insn & 0xFFFFFFFF) == 0x44000002);
-	    handle_sc_insn(insn, pc);
-	    break;
-	case 21:
-	    switch (((insn >> 0) & 0x1)) {
-		case 1:
-		    /* RLWINM. */
-		    assert((insn & 0xFC000001) == 0x54000001);
-		    handle_rlwinmd_insn(insn, pc);
-		    break;
-		case 0:
-		    /* RLWINM */
-		    assert((insn & 0xFC000001) == 0x54000000);
-		    handle_rlwinm_insn(insn, pc);
-		    break;
-		default:
-		    assert(0);
-	    }
-	    break;
-	case 20:
-	    /* RLWIMI */
-	    assert((insn & 0xFC000001) == 0x50000000);
-	    handle_rlwimi_insn(insn, pc);
-	    break;
-	case 25:
-	    /* ORIS */
-	    assert((insn & 0xFC000000) == 0x64000000);
-	    handle_oris_insn(insn, pc);
-	    break;
-	case 24:
-	    /* ORI */
-	    assert((insn & 0xFC000000) == 0x60000000);
-	    handle_ori_insn(insn, pc);
-	    break;
-	case 7:
-	    /* MULLI */
-	    assert((insn & 0xFC000000) == 0x1C000000);
-	    handle_mulli_insn(insn, pc);
-	    break;
-	case 63:
-	    switch (((insn >> 0) & 0x3F)) {
-		case 12:
-		    switch (((insn >> 6) & 0x3F)) {
-			case 4:
-			    /* MTFSFI */
-			    assert((insn & 0xFC7F0FFF) == 0xFC00010C);
-			    handle_mtfsfi_insn(insn, pc);
-			    break;
-			case 2:
-			    /* MTFSB0 */
-			    assert((insn & 0xFC1FFFFF) == 0xFC00008C);
-			    handle_mtfsb0_insn(insn, pc);
-			    break;
-			default:
-			    assert(0);
-		    }
-		    break;
-		case 14:
-		    switch (((insn >> 6) & 0x1F)) {
-			case 22:
-			    /* MTFSF */
-			    assert((insn & 0xFFFF07FF) == 0xFDFE058E);
-			    handle_mtfsf_insn(insn, pc);
-			    break;
-			case 18:
-			    /* MFFS */
-			    assert((insn & 0xFC1FFFFF) == 0xFC00048E);
-			    handle_mffs_insn(insn, pc);
-			    break;
-			default:
-			    assert(0);
-		    }
-		    break;
-		case 40:
-		    /* FSUB */
-		    assert((insn & 0xFC0007FF) == 0xFC000028);
-		    handle_fsub_insn(insn, pc);
-		    break;
-		case 24:
-		    /* FRSP */
-		    assert((insn & 0xFC1F07FF) == 0xFC000018);
-		    handle_frsp_insn(insn, pc);
-		    break;
-		case 60:
-		    /* FNMSUB */
-		    assert((insn & 0xFC00003F) == 0xFC00003C);
-		    handle_fnmsub_insn(insn, pc);
-		    break;
-		case 16:
-		    switch (((insn >> 6) & 0x1F)) {
-			case 1:
-			    /* FNEG */
-			    assert((insn & 0xFC1F07FF) == 0xFC000050);
-			    handle_fneg_insn(insn, pc);
-			    break;
-			case 2:
-			    /* FMR */
-			    assert((insn & 0xFC1F07FF) == 0xFC000090);
-			    handle_fmr_insn(insn, pc);
-			    break;
-			case 8:
-			    /* FABS */
-			    assert((insn & 0xFC1F07FF) == 0xFC000210);
-			    handle_fabs_insn(insn, pc);
-			    break;
-			default:
-			    assert(0);
-		    }
-		    break;
-		case 50:
-		    /* FMUL */
-		    assert((insn & 0xFC00F83F) == 0xFC000032);
-		    handle_fmul_insn(insn, pc);
-		    break;
-		case 56:
-		    /* FMSUB */
-		    assert((insn & 0xFC00003F) == 0xFC000038);
-		    handle_fmsub_insn(insn, pc);
-		    break;
-		case 58:
-		    /* FMADD */
-		    assert((insn & 0xFC00003F) == 0xFC00003A);
-		    handle_fmadd_insn(insn, pc);
-		    break;
-		case 36:
-		    /* FDIV */
-		    assert((insn & 0xFC0007FF) == 0xFC000024);
-		    handle_fdiv_insn(insn, pc);
-		    break;
-		case 30:
-		    /* FCTIWZ */
-		    assert((insn & 0xFC1F07FF) == 0xFC00001E);
-		    handle_fctiwz_insn(insn, pc);
-		    break;
-		case 0:
-		    /* FCMPU */
-		    assert((insn & 0xFC6007FF) == 0xFC000000);
-		    handle_fcmpu_insn(insn, pc);
-		    break;
-		case 42:
-		    /* FADD */
-		    assert((insn & 0xFC0007FF) == 0xFC00002A);
-		    handle_fadd_insn(insn, pc);
-		    break;
-		default:
-		    assert(0);
-	    }
-	    break;
-	case 19:
-	    switch (((insn >> 0) & 0x7FF)) {
-		case 0:
-		    /* MCRF */
-		    assert((insn & 0xFC63FFFF) == 0x4C000000);
-		    handle_mcrf_insn(insn, pc);
-		    break;
-		case 300:
-		    /* ISYNC */
-		    assert((insn & 0xFFFFFFFF) == 0x4C00012C);
-		    handle_isync_insn(insn, pc);
-		    break;
-		case 386:
-		    /* CRXOR */
-		    assert((insn & 0xFC0007FF) == 0x4C000182);
-		    handle_crxor_insn(insn, pc);
-		    break;
-		case 898:
-		    /* CROR */
-		    assert((insn & 0xFC0007FF) == 0x4C000382);
-		    handle_cror_insn(insn, pc);
-		    break;
-		case 66:
-		    /* CRNOR */
-		    assert((insn & 0xFC0007FF) == 0x4C000042);
-		    handle_crnor_insn(insn, pc);
-		    break;
-		case 578:
-		    /* CREQV */
-		    assert((insn & 0xFC0007FF) == 0x4C000242);
-		    handle_creqv_insn(insn, pc);
-		    break;
-		case 32:
-		    switch (((insn >> 11) & 0x1F)) {
-			case 0:
-			    switch (((insn >> 21) & 0x1F)) {
-				case 5:
-				    /* BNELR+ */
-				    assert((insn & 0xFFE0FFFF) == 0x4CA00020);
-				    handle_bnelrp_insn(insn, pc);
-				    break;
-				case 4:
-				    /* BNELR */
-				    assert((insn & 0xFFE0FFFF) == 0x4C800020);
-				    handle_bnelr_insn(insn, pc);
-				    break;
-				case 20:
-				    /* BLR */
-				    assert((insn & 0xFFE0FFFF) == 0x4E800020);
-				    handle_blr_insn(insn, pc);
-				    break;
-				case 12:
-				    /* BEQLR */
-				    assert((insn & 0xFFE0FFFF) == 0x4D800020);
-				    handle_beqlr_insn(insn, pc);
-				    break;
-				default:
-				    assert(0);
-			    }
-			    break;
-			default:
-			    assert(0);
-		    }
-		    break;
-		case 33:
-		    /* BLRL */
-		    assert((insn & 0xFFE0FFFF) == 0x4E800021);
-		    handle_blrl_insn(insn, pc);
-		    break;
-		case 1056:
-		    /* BCTR */
-		    assert((insn & 0xFFE0FFFF) == 0x4E800420);
-		    handle_bctr_insn(insn, pc);
-		    break;
-		default:
-		    assert(0);
-	    }
-	    break;
-	case 33:
-	    /* LWZU */
-	    assert((insn & 0xFC000000) == 0x84000000);
-	    handle_lwzu_insn(insn, pc);
-	    break;
-	case 32:
-	    /* LWZ */
-	    assert((insn & 0xFC000000) == 0x80000000);
-	    handle_lwz_insn(insn, pc);
-	    break;
-	case 41:
-	    /* LHZU */
-	    assert((insn & 0xFC000000) == 0xA4000000);
-	    handle_lhzu_insn(insn, pc);
-	    break;
-	case 40:
-	    /* LHZ */
-	    assert((insn & 0xFC000000) == 0xA0000000);
-	    handle_lhz_insn(insn, pc);
-	    break;
-	case 43:
-	    /* LHAU */
-	    assert((insn & 0xFC000000) == 0xAC000000);
-	    handle_lhau_insn(insn, pc);
-	    break;
-	case 42:
-	    /* LHA */
-	    assert((insn & 0xFC000000) == 0xA8000000);
-	    handle_lha_insn(insn, pc);
-	    break;
-	case 48:
-	    /* LFS */
-	    assert((insn & 0xFC000000) == 0xC0000000);
-	    handle_lfs_insn(insn, pc);
-	    break;
-	case 50:
-	    /* LFD */
-	    assert((insn & 0xFC000000) == 0xC8000000);
-	    handle_lfd_insn(insn, pc);
-	    break;
-	case 35:
-	    /* LBZU */
-	    assert((insn & 0xFC000000) == 0x8C000000);
-	    handle_lbzu_insn(insn, pc);
-	    break;
-	case 34:
-	    /* LBZ */
-	    assert((insn & 0xFC000000) == 0x88000000);
-	    handle_lbz_insn(insn, pc);
-	    break;
-	case 59:
-	    switch (((insn >> 0) & 0x3F)) {
-		case 40:
-		    /* FSUBS */
-		    assert((insn & 0xFC0007FF) == 0xEC000028);
-		    handle_fsubs_insn(insn, pc);
-		    break;
-		case 50:
-		    /* FMULS */
-		    assert((insn & 0xFC00F83F) == 0xEC000032);
-		    handle_fmuls_insn(insn, pc);
-		    break;
-		case 56:
-		    /* FMSUBS */
-		    assert((insn & 0xFC00003F) == 0xEC000038);
-		    handle_fmsubs_insn(insn, pc);
-		    break;
-		case 58:
-		    /* FMADDS */
-		    assert((insn & 0xFC00003F) == 0xEC00003A);
-		    handle_fmadds_insn(insn, pc);
-		    break;
-		case 36:
-		    /* FDIVS */
-		    assert((insn & 0xFC0007FF) == 0xEC000024);
-		    handle_fdivs_insn(insn, pc);
-		    break;
-		case 42:
-		    /* FADDS */
-		    assert((insn & 0xFC0007FF) == 0xEC00002A);
-		    handle_fadds_insn(insn, pc);
-		    break;
-		default:
-		    assert(0);
-	    }
-	    break;
-	case 11:
-	    /* CMPWI */
-	    assert((insn & 0xFC600000) == 0x2C000000);
-	    handle_cmpwi_insn(insn, pc);
-	    break;
-	case 10:
-	    /* CMPLWI */
-	    assert((insn & 0xFC600000) == 0x28000000);
-	    handle_cmplwi_insn(insn, pc);
-	    break;
-	case 16:
-	    switch (((insn >> 21) & 0x1F)) {
-		case 5:
-		    /* BNE- */
-		    assert((insn & 0xFFE00003) == 0x40A00000);
-		    handle_bne__insn(insn, pc);
-		    break;
-		case 4:
-		    /* BNE */
-		    assert((insn & 0xFFE00003) == 0x40800000);
-		    handle_bne_insn(insn, pc);
-		    break;
-		case 13:
-		    /* BEQ+ */
-		    assert((insn & 0xFFE00003) == 0x41A00000);
-		    handle_beqp_insn(insn, pc);
-		    break;
-		case 12:
-		    /* BEQ */
-		    assert((insn & 0xFFE00003) == 0x41800000);
-		    handle_beq_insn(insn, pc);
-		    break;
-		case 18:
-		    /* BDZ */
-		    assert((insn & 0xFFE00003) == 0x42400000);
-		    handle_bdz_insn(insn, pc);
-		    break;
-		case 16:
-		    /* BDNZ */
-		    assert((insn & 0xFFE00003) == 0x42000000);
-		    handle_bdnz_insn(insn, pc);
-		    break;
-		default:
-		    assert(0);
-	    }
-	    break;
-	case 18:
-	    switch (((insn >> 0) & 0x3)) {
-		case 1:
-		    /* BL */
-		    assert((insn & 0xFC000003) == 0x48000001);
-		    handle_bl_insn(insn, pc);
-		    break;
-		case 0:
-		    /* B */
-		    assert((insn & 0xFC000003) == 0x48000000);
-		    handle_b_insn(insn, pc);
-		    break;
-		default:
-		    assert(0);
-	    }
-	    break;
-	case 29:
-	    /* ANDIS. */
-	    assert((insn & 0xFC000000) == 0x74000000);
-	    handle_andisd_insn(insn, pc);
-	    break;
-	case 28:
-	    /* ANDI. */
-	    assert((insn & 0xFC000000) == 0x70000000);
-	    handle_andid_insn(insn, pc);
-	    break;
-	case 15:
-	    /* ADDIS */
-	    assert((insn & 0xFC000000) == 0x3C000000);
-	    handle_addis_insn(insn, pc);
-	    break;
-	case 13:
-	    /* ADDIC. */
-	    assert((insn & 0xFC000000) == 0x34000000);
-	    handle_addicd_insn(insn, pc);
-	    break;
-	case 12:
-	    /* ADDIC */
-	    assert((insn & 0xFC000000) == 0x30000000);
-	    handle_addic_insn(insn, pc);
-	    break;
-	case 14:
-	    /* ADDI */
-	    assert((insn & 0xFC000000) == 0x38000000);
-	    handle_addi_insn(insn, pc);
-	    break;
-	default:
-	    assert(0);
-    }
+switch (((insn >> 26) & 0x3F)) {
+case 27:
+/* XORIS */
+assert((insn & 0xFC000000) == 0x6C000000);
+handle_xoris_insn(insn, pc);
+break;
+case 26:
+/* XORI */
+assert((insn & 0xFC000000) == 0x68000000);
+handle_xori_insn(insn, pc);
+break;
+case 31:
+switch (((insn >> 0) & 0x7FF)) {
+case 633:
+/* XOR. */
+assert((insn & 0xFC0007FF) == 0x7C000279);
+handle_xord_insn(insn, pc);
+break;
+case 632:
+/* XOR */
+assert((insn & 0xFC0007FF) == 0x7C000278);
+handle_xor_insn(insn, pc);
+break;
+case 1196:
+/* SYNC */
+assert((insn & 0xFFFFFFFF) == 0x7C0004AC);
+handle_sync_insn(insn, pc);
+break;
+case 1425:
+/* SUBFZEO. */
+assert((insn & 0xFC00FFFF) == 0x7C000591);
+handle_subfzeod_insn(insn, pc);
+break;
+case 1424:
+/* SUBFZEO */
+assert((insn & 0xFC00FFFF) == 0x7C000590);
+handle_subfzeo_insn(insn, pc);
+break;
+case 401:
+/* SUBFZE. */
+assert((insn & 0xFC00FFFF) == 0x7C000191);
+handle_subfzed_insn(insn, pc);
+break;
+case 400:
+/* SUBFZE */
+assert((insn & 0xFC00FFFF) == 0x7C000190);
+handle_subfze_insn(insn, pc);
+break;
+case 1489:
+/* SUBFMEO. */
+assert((insn & 0xFC00FFFF) == 0x7C0005D1);
+handle_subfmeod_insn(insn, pc);
+break;
+case 1488:
+/* SUBFMEO */
+assert((insn & 0xFC00FFFF) == 0x7C0005D0);
+handle_subfmeo_insn(insn, pc);
+break;
+case 465:
+/* SUBFME. */
+assert((insn & 0xFC00FFFF) == 0x7C0001D1);
+handle_subfmed_insn(insn, pc);
+break;
+case 464:
+/* SUBFME */
+assert((insn & 0xFC00FFFF) == 0x7C0001D0);
+handle_subfme_insn(insn, pc);
+break;
+case 1297:
+/* SUBFEO. */
+assert((insn & 0xFC0007FF) == 0x7C000511);
+handle_subfeod_insn(insn, pc);
+break;
+case 1296:
+/* SUBFEO */
+assert((insn & 0xFC0007FF) == 0x7C000510);
+handle_subfeo_insn(insn, pc);
+break;
+case 273:
+/* SUBFE. */
+assert((insn & 0xFC0007FF) == 0x7C000111);
+handle_subfed_insn(insn, pc);
+break;
+case 272:
+/* SUBFE */
+assert((insn & 0xFC0007FF) == 0x7C000110);
+handle_subfe_insn(insn, pc);
+break;
+case 1041:
+/* SUBFCO. */
+assert((insn & 0xFC0007FF) == 0x7C000411);
+handle_subfcod_insn(insn, pc);
+break;
+case 1040:
+/* SUBFCO */
+assert((insn & 0xFC0007FF) == 0x7C000410);
+handle_subfco_insn(insn, pc);
+break;
+case 17:
+/* SUBFC. */
+assert((insn & 0xFC0007FF) == 0x7C000011);
+handle_subfcd_insn(insn, pc);
+break;
+case 16:
+/* SUBFC */
+assert((insn & 0xFC0007FF) == 0x7C000010);
+handle_subfc_insn(insn, pc);
+break;
+case 1105:
+/* SUBFO. */
+assert((insn & 0xFC0007FF) == 0x7C000451);
+handle_subfod_insn(insn, pc);
+break;
+case 1104:
+/* SUBFO */
+assert((insn & 0xFC0007FF) == 0x7C000450);
+handle_subfo_insn(insn, pc);
+break;
+case 81:
+/* SUBF. */
+assert((insn & 0xFC0007FF) == 0x7C000051);
+handle_subfd_insn(insn, pc);
+break;
+case 80:
+/* SUBF */
+assert((insn & 0xFC0007FF) == 0x7C000050);
+handle_subf_insn(insn, pc);
+break;
+case 302:
+/* STWX */
+assert((insn & 0xFC0007FF) == 0x7C00012E);
+handle_stwx_insn(insn, pc);
+break;
+case 366:
+/* STWUX */
+assert((insn & 0xFC0007FF) == 0x7C00016E);
+handle_stwux_insn(insn, pc);
+break;
+case 1324:
+/* STWBRX */
+assert((insn & 0xFC0007FF) == 0x7C00052C);
+handle_stwbrx_insn(insn, pc);
+break;
+case 814:
+/* STHX */
+assert((insn & 0xFC0007FF) == 0x7C00032E);
+handle_sthx_insn(insn, pc);
+break;
+case 1836:
+/* STHBRX */
+assert((insn & 0xFC0007FF) == 0x7C00072C);
+handle_sthbrx_insn(insn, pc);
+break;
+case 1326:
+/* STFSX */
+assert((insn & 0xFC0007FF) == 0x7C00052E);
+handle_stfsx_insn(insn, pc);
+break;
+case 1454:
+/* STFDX */
+assert((insn & 0xFC0007FF) == 0x7C0005AE);
+handle_stfdx_insn(insn, pc);
+break;
+case 430:
+/* STBX */
+assert((insn & 0xFC0007FF) == 0x7C0001AE);
+handle_stbx_insn(insn, pc);
+break;
+case 1073:
+/* SRW. */
+assert((insn & 0xFC0007FF) == 0x7C000431);
+handle_srwd_insn(insn, pc);
+break;
+case 1072:
+/* SRW */
+assert((insn & 0xFC0007FF) == 0x7C000430);
+handle_srw_insn(insn, pc);
+break;
+case 1649:
+/* SRAWI. */
+assert((insn & 0xFC0007FF) == 0x7C000671);
+handle_srawid_insn(insn, pc);
+break;
+case 1648:
+/* SRAWI */
+assert((insn & 0xFC0007FF) == 0x7C000670);
+handle_srawi_insn(insn, pc);
+break;
+case 1585:
+/* SRAW. */
+assert((insn & 0xFC0007FF) == 0x7C000631);
+handle_srawd_insn(insn, pc);
+break;
+case 1584:
+/* SRAW */
+assert((insn & 0xFC0007FF) == 0x7C000630);
+handle_sraw_insn(insn, pc);
+break;
+case 48:
+/* SLW */
+assert((insn & 0xFC0007FF) == 0x7C000030);
+handle_slw_insn(insn, pc);
+break;
+case 825:
+/* ORC. */
+assert((insn & 0xFC0007FF) == 0x7C000339);
+handle_orcd_insn(insn, pc);
+break;
+case 824:
+/* ORC */
+assert((insn & 0xFC0007FF) == 0x7C000338);
+handle_orc_insn(insn, pc);
+break;
+case 889:
+/* OR. */
+assert((insn & 0xFC0007FF) == 0x7C000379);
+handle_ord_insn(insn, pc);
+break;
+case 888:
+/* OR */
+assert((insn & 0xFC0007FF) == 0x7C000378);
+handle_or_insn(insn, pc);
+break;
+case 249:
+/* NOR. */
+assert((insn & 0xFC0007FF) == 0x7C0000F9);
+handle_nord_insn(insn, pc);
+break;
+case 248:
+/* NOR */
+assert((insn & 0xFC0007FF) == 0x7C0000F8);
+handle_nor_insn(insn, pc);
+break;
+case 1233:
+/* NEGO. */
+assert((insn & 0xFC00FFFF) == 0x7C0004D1);
+handle_negod_insn(insn, pc);
+break;
+case 1232:
+/* NEGO */
+assert((insn & 0xFC00FFFF) == 0x7C0004D0);
+handle_nego_insn(insn, pc);
+break;
+case 209:
+/* NEG. */
+assert((insn & 0xFC00FFFF) == 0x7C0000D1);
+handle_negd_insn(insn, pc);
+break;
+case 208:
+/* NEG */
+assert((insn & 0xFC00FFFF) == 0x7C0000D0);
+handle_neg_insn(insn, pc);
+break;
+case 953:
+/* NAND. */
+assert((insn & 0xFC0007FF) == 0x7C0003B9);
+handle_nandd_insn(insn, pc);
+break;
+case 952:
+/* NAND */
+assert((insn & 0xFC0007FF) == 0x7C0003B8);
+handle_nand_insn(insn, pc);
+break;
+case 1495:
+/* MULLWO. */
+assert((insn & 0xFC0007FF) == 0x7C0005D7);
+handle_mullwod_insn(insn, pc);
+break;
+case 1494:
+/* MULLWO */
+assert((insn & 0xFC0007FF) == 0x7C0005D6);
+handle_mullwo_insn(insn, pc);
+break;
+case 471:
+/* MULLW. */
+assert((insn & 0xFC0007FF) == 0x7C0001D7);
+handle_mullwd_insn(insn, pc);
+break;
+case 470:
+/* MULLW */
+assert((insn & 0xFC0007FF) == 0x7C0001D6);
+handle_mullw_insn(insn, pc);
+break;
+case 22:
+/* MULHWU */
+assert((insn & 0xFC0007FF) == 0x7C000016);
+handle_mulhwu_insn(insn, pc);
+break;
+case 150:
+/* MULHW */
+assert((insn & 0xFC0007FF) == 0x7C000096);
+handle_mulhw_insn(insn, pc);
+break;
+case 934:
+switch (((insn >> 11) & 0x3FF)) {
+case 256:
+/* MTLR */
+assert((insn & 0xFC1FFFFF) == 0x7C0803A6);
+handle_mtlr_insn(insn, pc);
+break;
+case 288:
+/* MTCTR */
+assert((insn & 0xFC1FFFFF) == 0x7C0903A6);
+handle_mtctr_insn(insn, pc);
+break;
+default:
+assert(0);
+}
+break;
+case 288:
+/* MTCRF */
+assert((insn & 0xFC100FFF) == 0x7C000120);
+handle_mtcrf_insn(insn, pc);
+break;
+case 678:
+switch (((insn >> 11) & 0x3FF)) {
+case 32:
+/* MFXER */
+assert((insn & 0xFC1FFFFF) == 0x7C0102A6);
+handle_mfxer_insn(insn, pc);
+break;
+case 256:
+/* MFLR */
+assert((insn & 0xFC1FFFFF) == 0x7C0802A6);
+handle_mflr_insn(insn, pc);
+break;
+case 288:
+/* MFCTR */
+assert((insn & 0xFC1FFFFF) == 0x7C0902A6);
+handle_mfctr_insn(insn, pc);
+break;
+default:
+assert(0);
+}
+break;
+case 38:
+/* MFCR */
+assert((insn & 0xFC1FFFFF) == 0x7C000026);
+handle_mfcr_insn(insn, pc);
+break;
+case 46:
+/* LWZX */
+assert((insn & 0xFC0007FF) == 0x7C00002E);
+handle_lwzx_insn(insn, pc);
+break;
+case 110:
+/* LWZUX */
+assert((insn & 0xFC0007FF) == 0x7C00006E);
+handle_lwzux_insn(insn, pc);
+break;
+case 1068:
+/* LWBRX */
+assert((insn & 0xFC0007FF) == 0x7C00042C);
+handle_lwbrx_insn(insn, pc);
+break;
+case 558:
+/* LHZX */
+assert((insn & 0xFC0007FF) == 0x7C00022E);
+handle_lhzx_insn(insn, pc);
+break;
+case 1580:
+/* LHBRX */
+assert((insn & 0xFC0007FF) == 0x7C00062C);
+handle_lhbrx_insn(insn, pc);
+break;
+case 686:
+/* LHAX */
+assert((insn & 0xFC0007FF) == 0x7C0002AE);
+handle_lhax_insn(insn, pc);
+break;
+case 1070:
+/* LFSX */
+assert((insn & 0xFC0007FF) == 0x7C00042E);
+handle_lfsx_insn(insn, pc);
+break;
+case 1198:
+/* LFDX */
+assert((insn & 0xFC0007FF) == 0x7C0004AE);
+handle_lfdx_insn(insn, pc);
+break;
+case 174:
+/* LBZX */
+assert((insn & 0xFC0007FF) == 0x7C0000AE);
+handle_lbzx_insn(insn, pc);
+break;
+case 238:
+/* LBZUX */
+assert((insn & 0xFC0007FF) == 0x7C0000EE);
+handle_lbzux_insn(insn, pc);
+break;
+case 1964:
+/* ICBI */
+assert((insn & 0xFFE007FF) == 0x7C0007AC);
+handle_icbi_insn(insn, pc);
+break;
+case 1845:
+/* EXTSH. */
+assert((insn & 0xFC00FFFF) == 0x7C000735);
+handle_extshd_insn(insn, pc);
+break;
+case 1844:
+/* EXTSH */
+assert((insn & 0xFC00FFFF) == 0x7C000734);
+handle_extsh_insn(insn, pc);
+break;
+case 1908:
+/* EXTSB */
+assert((insn & 0xFC00FFFF) == 0x7C000774);
+handle_extsb_insn(insn, pc);
+break;
+case 569:
+/* EQV. */
+assert((insn & 0xFC0007FF) == 0x7C000239);
+handle_eqvd_insn(insn, pc);
+break;
+case 568:
+/* EQV */
+assert((insn & 0xFC0007FF) == 0x7C000238);
+handle_eqv_insn(insn, pc);
+break;
+case 1943:
+/* DIVWUO. */
+assert((insn & 0xFC0007FF) == 0x7C000797);
+handle_divwuod_insn(insn, pc);
+break;
+case 1942:
+/* DIVWUO */
+assert((insn & 0xFC0007FF) == 0x7C000796);
+handle_divwuo_insn(insn, pc);
+break;
+case 919:
+/* DIVWU. */
+assert((insn & 0xFC0007FF) == 0x7C000397);
+handle_divwud_insn(insn, pc);
+break;
+case 918:
+/* DIVWU */
+assert((insn & 0xFC0007FF) == 0x7C000396);
+handle_divwu_insn(insn, pc);
+break;
+case 2007:
+/* DIVWO. */
+assert((insn & 0xFC0007FF) == 0x7C0007D7);
+handle_divwod_insn(insn, pc);
+break;
+case 2006:
+/* DIVWO */
+assert((insn & 0xFC0007FF) == 0x7C0007D6);
+handle_divwo_insn(insn, pc);
+break;
+case 983:
+/* DIVW. */
+assert((insn & 0xFC0007FF) == 0x7C0003D7);
+handle_divwd_insn(insn, pc);
+break;
+case 982:
+/* DIVW */
+assert((insn & 0xFC0007FF) == 0x7C0003D6);
+handle_divw_insn(insn, pc);
+break;
+case 2028:
+/* DCBZ */
+assert((insn & 0xFFE007FF) == 0x7C0007EC);
+handle_dcbz_insn(insn, pc);
+break;
+case 108:
+/* DCBST */
+assert((insn & 0xFFE007FF) == 0x7C00006C);
+handle_dcbst_insn(insn, pc);
+break;
+case 52:
+/* CNTLZW */
+assert((insn & 0xFC00FFFF) == 0x7C000034);
+handle_cntlzw_insn(insn, pc);
+break;
+case 0:
+/* CMPW */
+assert((insn & 0xFC6007FF) == 0x7C000000);
+handle_cmpw_insn(insn, pc);
+break;
+case 64:
+/* CMPLW */
+assert((insn & 0xFC6007FF) == 0x7C000040);
+handle_cmplw_insn(insn, pc);
+break;
+case 121:
+/* ANDC. */
+assert((insn & 0xFC0007FF) == 0x7C000079);
+handle_andcd_insn(insn, pc);
+break;
+case 120:
+/* ANDC */
+assert((insn & 0xFC0007FF) == 0x7C000078);
+handle_andc_insn(insn, pc);
+break;
+case 57:
+/* AND. */
+assert((insn & 0xFC0007FF) == 0x7C000039);
+handle_andd_insn(insn, pc);
+break;
+case 56:
+/* AND */
+assert((insn & 0xFC0007FF) == 0x7C000038);
+handle_and_insn(insn, pc);
+break;
+case 1429:
+/* ADDZEO. */
+assert((insn & 0xFC00FFFF) == 0x7C000595);
+handle_addzeod_insn(insn, pc);
+break;
+case 1428:
+/* ADDZEO */
+assert((insn & 0xFC00FFFF) == 0x7C000594);
+handle_addzeo_insn(insn, pc);
+break;
+case 405:
+/* ADDZE. */
+assert((insn & 0xFC00FFFF) == 0x7C000195);
+handle_addzed_insn(insn, pc);
+break;
+case 404:
+/* ADDZE */
+assert((insn & 0xFC00FFFF) == 0x7C000194);
+handle_addze_insn(insn, pc);
+break;
+case 1493:
+/* ADDMEO. */
+assert((insn & 0xFC00FFFF) == 0x7C0005D5);
+handle_addmeod_insn(insn, pc);
+break;
+case 1492:
+/* ADDMEO */
+assert((insn & 0xFC00FFFF) == 0x7C0005D4);
+handle_addmeo_insn(insn, pc);
+break;
+case 469:
+/* ADDME. */
+assert((insn & 0xFC00FFFF) == 0x7C0001D5);
+handle_addmed_insn(insn, pc);
+break;
+case 468:
+/* ADDME */
+assert((insn & 0xFC00FFFF) == 0x7C0001D4);
+handle_addme_insn(insn, pc);
+break;
+case 1301:
+/* ADDEO. */
+assert((insn & 0xFC0007FF) == 0x7C000515);
+handle_addeod_insn(insn, pc);
+break;
+case 1300:
+/* ADDEO */
+assert((insn & 0xFC0007FF) == 0x7C000514);
+handle_addeo_insn(insn, pc);
+break;
+case 277:
+/* ADDE. */
+assert((insn & 0xFC0007FF) == 0x7C000115);
+handle_added_insn(insn, pc);
+break;
+case 276:
+/* ADDE */
+assert((insn & 0xFC0007FF) == 0x7C000114);
+handle_adde_insn(insn, pc);
+break;
+case 1045:
+/* ADDCO. */
+assert((insn & 0xFC0007FF) == 0x7C000415);
+handle_addcod_insn(insn, pc);
+break;
+case 1044:
+/* ADDCO */
+assert((insn & 0xFC0007FF) == 0x7C000414);
+handle_addco_insn(insn, pc);
+break;
+case 21:
+/* ADDC. */
+assert((insn & 0xFC0007FF) == 0x7C000015);
+handle_addcd_insn(insn, pc);
+break;
+case 20:
+/* ADDC */
+assert((insn & 0xFC0007FF) == 0x7C000014);
+handle_addc_insn(insn, pc);
+break;
+case 1557:
+/* ADDO. */
+assert((insn & 0xFC0007FF) == 0x7C000615);
+handle_addod_insn(insn, pc);
+break;
+case 1556:
+/* ADDO */
+assert((insn & 0xFC0007FF) == 0x7C000614);
+handle_addo_insn(insn, pc);
+break;
+case 533:
+/* ADD. */
+assert((insn & 0xFC0007FF) == 0x7C000215);
+handle_addd_insn(insn, pc);
+break;
+case 532:
+/* ADD */
+assert((insn & 0xFC0007FF) == 0x7C000214);
+handle_add_insn(insn, pc);
+break;
+default:
+assert(0);
+}
+break;
+case 8:
+/* SUBFIC */
+assert((insn & 0xFC000000) == 0x20000000);
+handle_subfic_insn(insn, pc);
+break;
+case 37:
+/* STWU */
+assert((insn & 0xFC000000) == 0x94000000);
+handle_stwu_insn(insn, pc);
+break;
+case 36:
+/* STW */
+assert((insn & 0xFC000000) == 0x90000000);
+handle_stw_insn(insn, pc);
+break;
+case 45:
+/* STHU */
+assert((insn & 0xFC000000) == 0xB4000000);
+handle_sthu_insn(insn, pc);
+break;
+case 44:
+/* STH */
+assert((insn & 0xFC000000) == 0xB0000000);
+handle_sth_insn(insn, pc);
+break;
+case 52:
+/* STFS */
+assert((insn & 0xFC000000) == 0xD0000000);
+handle_stfs_insn(insn, pc);
+break;
+case 55:
+/* STFDU */
+assert((insn & 0xFC000000) == 0xDC000000);
+handle_stfdu_insn(insn, pc);
+break;
+case 54:
+/* STFD */
+assert((insn & 0xFC000000) == 0xD8000000);
+handle_stfd_insn(insn, pc);
+break;
+case 39:
+/* STBU */
+assert((insn & 0xFC000000) == 0x9C000000);
+handle_stbu_insn(insn, pc);
+break;
+case 38:
+/* STB */
+assert((insn & 0xFC000000) == 0x98000000);
+handle_stb_insn(insn, pc);
+break;
+case 17:
+/* SC */
+assert((insn & 0xFFFFFFFF) == 0x44000002);
+handle_sc_insn(insn, pc);
+break;
+case 23:
+switch (((insn >> 0) & 0x1)) {
+case 1:
+/* RLWNM. */
+assert((insn & 0xFC000001) == 0x5C000001);
+handle_rlwnmd_insn(insn, pc);
+break;
+case 0:
+/* RLWNM */
+assert((insn & 0xFC000001) == 0x5C000000);
+handle_rlwnm_insn(insn, pc);
+break;
+default:
+assert(0);
+}
+break;
+case 21:
+switch (((insn >> 0) & 0x1)) {
+case 1:
+/* RLWINM. */
+assert((insn & 0xFC000001) == 0x54000001);
+handle_rlwinmd_insn(insn, pc);
+break;
+case 0:
+/* RLWINM */
+assert((insn & 0xFC000001) == 0x54000000);
+handle_rlwinm_insn(insn, pc);
+break;
+default:
+assert(0);
+}
+break;
+case 20:
+/* RLWIMI */
+assert((insn & 0xFC000001) == 0x50000000);
+handle_rlwimi_insn(insn, pc);
+break;
+case 25:
+/* ORIS */
+assert((insn & 0xFC000000) == 0x64000000);
+handle_oris_insn(insn, pc);
+break;
+case 24:
+/* ORI */
+assert((insn & 0xFC000000) == 0x60000000);
+handle_ori_insn(insn, pc);
+break;
+case 7:
+/* MULLI */
+assert((insn & 0xFC000000) == 0x1C000000);
+handle_mulli_insn(insn, pc);
+break;
+case 63:
+switch (((insn >> 0) & 0x3F)) {
+case 12:
+switch (((insn >> 6) & 0x3F)) {
+case 4:
+/* MTFSFI */
+assert((insn & 0xFC7F0FFF) == 0xFC00010C);
+handle_mtfsfi_insn(insn, pc);
+break;
+case 2:
+/* MTFSB0 */
+assert((insn & 0xFC1FFFFF) == 0xFC00008C);
+handle_mtfsb0_insn(insn, pc);
+break;
+default:
+assert(0);
+}
+break;
+case 14:
+switch (((insn >> 6) & 0x1F)) {
+case 22:
+/* MTFSF */
+assert((insn & 0xFFFF07FF) == 0xFDFE058E);
+handle_mtfsf_insn(insn, pc);
+break;
+case 18:
+/* MFFS */
+assert((insn & 0xFC1FFFFF) == 0xFC00048E);
+handle_mffs_insn(insn, pc);
+break;
+default:
+assert(0);
+}
+break;
+case 40:
+/* FSUB */
+assert((insn & 0xFC0007FF) == 0xFC000028);
+handle_fsub_insn(insn, pc);
+break;
+case 24:
+/* FRSP */
+assert((insn & 0xFC1F07FF) == 0xFC000018);
+handle_frsp_insn(insn, pc);
+break;
+case 60:
+/* FNMSUB */
+assert((insn & 0xFC00003F) == 0xFC00003C);
+handle_fnmsub_insn(insn, pc);
+break;
+case 16:
+switch (((insn >> 6) & 0x1F)) {
+case 1:
+/* FNEG */
+assert((insn & 0xFC1F07FF) == 0xFC000050);
+handle_fneg_insn(insn, pc);
+break;
+case 2:
+/* FMR */
+assert((insn & 0xFC1F07FF) == 0xFC000090);
+handle_fmr_insn(insn, pc);
+break;
+case 8:
+/* FABS */
+assert((insn & 0xFC1F07FF) == 0xFC000210);
+handle_fabs_insn(insn, pc);
+break;
+default:
+assert(0);
+}
+break;
+case 50:
+/* FMUL */
+assert((insn & 0xFC00F83F) == 0xFC000032);
+handle_fmul_insn(insn, pc);
+break;
+case 56:
+/* FMSUB */
+assert((insn & 0xFC00003F) == 0xFC000038);
+handle_fmsub_insn(insn, pc);
+break;
+case 58:
+/* FMADD */
+assert((insn & 0xFC00003F) == 0xFC00003A);
+handle_fmadd_insn(insn, pc);
+break;
+case 36:
+/* FDIV */
+assert((insn & 0xFC0007FF) == 0xFC000024);
+handle_fdiv_insn(insn, pc);
+break;
+case 30:
+/* FCTIWZ */
+assert((insn & 0xFC1F07FF) == 0xFC00001E);
+handle_fctiwz_insn(insn, pc);
+break;
+case 0:
+/* FCMPU */
+assert((insn & 0xFC6007FF) == 0xFC000000);
+handle_fcmpu_insn(insn, pc);
+break;
+case 42:
+/* FADD */
+assert((insn & 0xFC0007FF) == 0xFC00002A);
+handle_fadd_insn(insn, pc);
+break;
+default:
+assert(0);
+}
+break;
+case 19:
+switch (((insn >> 0) & 0x7FF)) {
+case 0:
+/* MCRF */
+assert((insn & 0xFC63FFFF) == 0x4C000000);
+handle_mcrf_insn(insn, pc);
+break;
+case 300:
+/* ISYNC */
+assert((insn & 0xFFFFFFFF) == 0x4C00012C);
+handle_isync_insn(insn, pc);
+break;
+case 386:
+/* CRXOR */
+assert((insn & 0xFC0007FF) == 0x4C000182);
+handle_crxor_insn(insn, pc);
+break;
+case 898:
+/* CROR */
+assert((insn & 0xFC0007FF) == 0x4C000382);
+handle_cror_insn(insn, pc);
+break;
+case 66:
+/* CRNOR */
+assert((insn & 0xFC0007FF) == 0x4C000042);
+handle_crnor_insn(insn, pc);
+break;
+case 578:
+/* CREQV */
+assert((insn & 0xFC0007FF) == 0x4C000242);
+handle_creqv_insn(insn, pc);
+break;
+case 32:
+switch (((insn >> 11) & 0x1F)) {
+case 0:
+switch (((insn >> 21) & 0x1F)) {
+case 5:
+/* BNELR+ */
+assert((insn & 0xFFE0FFFF) == 0x4CA00020);
+handle_bnelrp_insn(insn, pc);
+break;
+case 4:
+/* BNELR */
+assert((insn & 0xFFE0FFFF) == 0x4C800020);
+handle_bnelr_insn(insn, pc);
+break;
+case 20:
+/* BLR */
+assert((insn & 0xFFE0FFFF) == 0x4E800020);
+handle_blr_insn(insn, pc);
+break;
+case 12:
+/* BEQLR */
+assert((insn & 0xFFE0FFFF) == 0x4D800020);
+handle_beqlr_insn(insn, pc);
+break;
+default:
+assert(0);
+}
+break;
+default:
+assert(0);
+}
+break;
+case 33:
+/* BLRL */
+assert((insn & 0xFFE0FFFF) == 0x4E800021);
+handle_blrl_insn(insn, pc);
+break;
+case 1056:
+/* BCTR */
+assert((insn & 0xFFE0FFFF) == 0x4E800420);
+handle_bctr_insn(insn, pc);
+break;
+default:
+assert(0);
+}
+break;
+case 33:
+/* LWZU */
+assert((insn & 0xFC000000) == 0x84000000);
+handle_lwzu_insn(insn, pc);
+break;
+case 32:
+/* LWZ */
+assert((insn & 0xFC000000) == 0x80000000);
+handle_lwz_insn(insn, pc);
+break;
+case 41:
+/* LHZU */
+assert((insn & 0xFC000000) == 0xA4000000);
+handle_lhzu_insn(insn, pc);
+break;
+case 40:
+/* LHZ */
+assert((insn & 0xFC000000) == 0xA0000000);
+handle_lhz_insn(insn, pc);
+break;
+case 43:
+/* LHAU */
+assert((insn & 0xFC000000) == 0xAC000000);
+handle_lhau_insn(insn, pc);
+break;
+case 42:
+/* LHA */
+assert((insn & 0xFC000000) == 0xA8000000);
+handle_lha_insn(insn, pc);
+break;
+case 48:
+/* LFS */
+assert((insn & 0xFC000000) == 0xC0000000);
+handle_lfs_insn(insn, pc);
+break;
+case 50:
+/* LFD */
+assert((insn & 0xFC000000) == 0xC8000000);
+handle_lfd_insn(insn, pc);
+break;
+case 35:
+/* LBZU */
+assert((insn & 0xFC000000) == 0x8C000000);
+handle_lbzu_insn(insn, pc);
+break;
+case 34:
+/* LBZ */
+assert((insn & 0xFC000000) == 0x88000000);
+handle_lbz_insn(insn, pc);
+break;
+case 59:
+switch (((insn >> 0) & 0x3F)) {
+case 40:
+/* FSUBS */
+assert((insn & 0xFC0007FF) == 0xEC000028);
+handle_fsubs_insn(insn, pc);
+break;
+case 50:
+/* FMULS */
+assert((insn & 0xFC00F83F) == 0xEC000032);
+handle_fmuls_insn(insn, pc);
+break;
+case 56:
+/* FMSUBS */
+assert((insn & 0xFC00003F) == 0xEC000038);
+handle_fmsubs_insn(insn, pc);
+break;
+case 58:
+/* FMADDS */
+assert((insn & 0xFC00003F) == 0xEC00003A);
+handle_fmadds_insn(insn, pc);
+break;
+case 36:
+/* FDIVS */
+assert((insn & 0xFC0007FF) == 0xEC000024);
+handle_fdivs_insn(insn, pc);
+break;
+case 42:
+/* FADDS */
+assert((insn & 0xFC0007FF) == 0xEC00002A);
+handle_fadds_insn(insn, pc);
+break;
+default:
+assert(0);
+}
+break;
+case 11:
+/* CMPWI */
+assert((insn & 0xFC600000) == 0x2C000000);
+handle_cmpwi_insn(insn, pc);
+break;
+case 10:
+/* CMPLWI */
+assert((insn & 0xFC600000) == 0x28000000);
+handle_cmplwi_insn(insn, pc);
+break;
+case 16:
+switch (((insn >> 21) & 0x1F)) {
+case 5:
+/* BNE- */
+assert((insn & 0xFFE00003) == 0x40A00000);
+handle_bne__insn(insn, pc);
+break;
+case 4:
+/* BNE */
+assert((insn & 0xFFE00003) == 0x40800000);
+handle_bne_insn(insn, pc);
+break;
+case 13:
+/* BEQ+ */
+assert((insn & 0xFFE00003) == 0x41A00000);
+handle_beqp_insn(insn, pc);
+break;
+case 12:
+/* BEQ */
+assert((insn & 0xFFE00003) == 0x41800000);
+handle_beq_insn(insn, pc);
+break;
+case 18:
+/* BDZ */
+assert((insn & 0xFFE00003) == 0x42400000);
+handle_bdz_insn(insn, pc);
+break;
+case 16:
+/* BDNZ */
+assert((insn & 0xFFE00003) == 0x42000000);
+handle_bdnz_insn(insn, pc);
+break;
+default:
+assert(0);
+}
+break;
+case 18:
+switch (((insn >> 0) & 0x3)) {
+case 1:
+/* BL */
+assert((insn & 0xFC000003) == 0x48000001);
+handle_bl_insn(insn, pc);
+break;
+case 0:
+/* B */
+assert((insn & 0xFC000003) == 0x48000000);
+handle_b_insn(insn, pc);
+break;
+default:
+assert(0);
+}
+break;
+case 29:
+/* ANDIS. */
+assert((insn & 0xFC000000) == 0x74000000);
+handle_andisd_insn(insn, pc);
+break;
+case 28:
+/* ANDI. */
+assert((insn & 0xFC000000) == 0x70000000);
+handle_andid_insn(insn, pc);
+break;
+case 15:
+/* ADDIS */
+assert((insn & 0xFC000000) == 0x3C000000);
+handle_addis_insn(insn, pc);
+break;
+case 13:
+/* ADDIC. */
+assert((insn & 0xFC000000) == 0x34000000);
+handle_addicd_insn(insn, pc);
+break;
+case 12:
+/* ADDIC */
+assert((insn & 0xFC000000) == 0x30000000);
+handle_addic_insn(insn, pc);
+break;
+case 14:
+/* ADDI */
+assert((insn & 0xFC000000) == 0x38000000);
+handle_addi_insn(insn, pc);
+break;
+default:
+assert(0);
+}
 }

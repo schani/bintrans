@@ -44,6 +44,7 @@
 #include <sys/un.h>
 #include <sys/utsname.h>
 #include <sys/resource.h>
+#include <sys/times.h>
 
 #include "bintrans.h"
 #include "fragment_hash.h"
@@ -206,6 +207,7 @@ int emu_errnos[] = { 0,
 #define SYSCALL_GETPID            20
 #define SYSCALL_GETUID            24
 #define SYSCALL_ACCESS            33
+#define SYSCALL_TIMES             43
 #define SYSCALL_BRK               45
 #define SYSCALL_GETGID            47
 #define SYSCALL_GETEUID           49
@@ -230,6 +232,7 @@ int emu_errnos[] = { 0,
 #define SYSCALL_WRITEV           146
 #define SYSCALL_MREMAP           163
 #define SYSCALL_RT_SIGACTION     173
+#define SYSCALL_FSTAT64          197
 #elif defined(EMU_I386)
 int emu_errnos[] = { 0,
 		     EPERM, ENOENT, ESRCH, EINTR, EIO, ENXIO, E2BIG, ENOEXEC, EBADF,
@@ -646,7 +649,7 @@ close_fd (interpreter_t *intp, word_32 fd)
     intp->fd_map[fd].free = 1;
 }
 
-void
+static void
 convert_native_sockaddr_to_ppc (interpreter_t *intp, struct sockaddr *sa, word_32 ppc_addr, word_32 ppc_len, word_32 *used_len)
 {
     switch (sa->sa_family)
@@ -671,7 +674,7 @@ convert_native_sockaddr_to_ppc (interpreter_t *intp, struct sockaddr *sa, word_3
     }
 }
 
-int
+static int
 convert_ppc_fdset_to_native (interpreter_t *intp, int maxfd, fd_set *fds, word_32 addr)
 {
     word_32 bits = 0;
@@ -698,7 +701,7 @@ convert_ppc_fdset_to_native (interpreter_t *intp, int maxfd, fd_set *fds, word_3
     return 0;
 }
 
-void
+static void
 convert_native_fdset_to_ppc (interpreter_t *intp, int maxfd, word_32 addr, fd_set *fds)
 {
     word_32 bits = 0;
@@ -720,14 +723,14 @@ convert_native_fdset_to_ppc (interpreter_t *intp, int maxfd, word_32 addr, fd_se
     }
 }
 
-void
+static void
 convert_ppc_timeval_to_native (interpreter_t *intp, struct timeval *tv, word_32 addr)
 {
     tv->tv_sec = mem_get_32(intp, addr + 0);
     tv->tv_usec = mem_get_32(intp, addr + 4);
 }
 
-void
+static void
 convert_native_timeval_to_ppc (interpreter_t *intp, word_32 addr, struct timeval *tv)
 {
 #ifdef FAKE_TV_SEC
@@ -743,7 +746,7 @@ convert_native_timeval_to_ppc (interpreter_t *intp, word_32 addr, struct timeval
 }
 
 #if defined(EMU_PPC)
-void
+static void
 convert_native_termios_to_emu (interpreter_t *intp, word_32 addr, struct termios *tio)
 {
     mem_set_32(intp, addr + 0, tio->c_iflag);
@@ -758,7 +761,7 @@ convert_native_termios_to_emu (interpreter_t *intp, word_32 addr, struct termios
     */
 }
 #elif defined(EMU_I386)
-void
+static void
 convert_native_termios_to_emu (interpreter_t *intp, word_32 addr, struct termios *tio)
 {
     mem_set_32(intp, addr + 0, tio->c_iflag);
@@ -770,7 +773,7 @@ convert_native_termios_to_emu (interpreter_t *intp, word_32 addr, struct termios
 }
 #endif
 
-void
+static void
 convert_native_stat_to_emu (interpreter_t *intp, word_32 addr, struct stat *buf)
 {
 #if defined(EMU_PPC)
@@ -848,7 +851,29 @@ convert_native_stat_to_emu (interpreter_t *intp, word_32 addr, struct stat *buf)
 #endif
 }
 
-void
+static void
+convert_native_stat_to_emu_stat64 (interpreter_t *intp, word_32 addr, struct stat *buf)
+{
+#if defined(EMU_PPC)
+    mem_set_64(intp, addr + 0, buf->st_dev);
+    mem_set_64(intp, addr + 8, buf->st_ino);
+    mem_set_32(intp, addr + 16, buf->st_mode);
+    mem_set_32(intp, addr + 20, buf->st_nlink);
+    mem_set_32(intp, addr + 24, buf->st_uid);
+    mem_set_32(intp, addr + 28, buf->st_gid);
+    mem_set_64(intp, addr + 32, buf->st_rdev);
+    mem_set_64(intp, addr + 48, buf->st_size);
+    mem_set_32(intp, addr + 56, buf->st_blksize);
+    mem_set_64(intp, addr + 64, buf->st_blocks);
+    mem_set_32(intp, addr + 72, buf->st_atime);
+    mem_set_32(intp, addr + 80, buf->st_mtime);
+    mem_set_32(intp, addr + 88, buf->st_ctime);
+#elif defined(EMU_I386)
+#error not yet supported
+#endif
+}
+
+static void
 convert_native_rusage_to_ppc (interpreter_t *intp, word_32 addr, struct rusage *ru)
 {
     convert_native_timeval_to_ppc(intp, addr + 0, &ru->ru_utime);
@@ -867,6 +892,15 @@ convert_native_rusage_to_ppc (interpreter_t *intp, word_32 addr, struct rusage *
     mem_set_32(intp, addr + 60, ru->ru_nsignals);
     mem_set_32(intp, addr + 64, ru->ru_nvcsw);
     mem_set_32(intp, addr + 68, ru->ru_nivcsw);
+}
+
+static void
+convert_native_tms_to_ppc (interpreter_t *intp, word_32 addr, struct tms *buf)
+{
+    mem_set_32(intp, addr + 0, buf->tms_utime);
+    mem_set_32(intp, addr + 4, buf->tms_stime);
+    mem_set_32(intp, addr + 8, buf->tms_cutime);
+    mem_set_32(intp, addr + 12, buf->tms_cstime);
 }
 
 int
@@ -1061,6 +1095,18 @@ process_system_call (interpreter_t *intp, word_32 number,
 		result = access(name, arg2);
 
 		free(real_name);
+	    }
+	    break;
+
+	case SYSCALL_TIMES :
+	    ANNOUNCE_SYSCALL("times");
+	    {
+		struct tms buf;
+
+		result = times(&buf);
+
+		if (result != -1)
+		    convert_native_tms_to_ppc(intp, arg1, &buf);
 	    }
 	    break;
 
@@ -1567,12 +1613,12 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 		if (result == 0)
 		{
-		    copy_string(intp, "Linux", arg1 + 0 * 65);
-		    copy_string(intp, un.nodename, arg1 + 1 * 65);
-		    copy_string(intp, "2.2.9", arg1 + 2 * 65);
-		    copy_string(intp, "#5 Wed Jun 9 14:10:26 MEST 1999", arg1 + 3 * 65);
-		    copy_string(intp, "ppc", arg1 + 4 * 65);
-		    /* copy_string(intp, "", arg1 + 5 * 65); */
+		    strcpy_to_user(intp, arg1 + 0 * 65, "Linux");
+		    strcpy_to_user(intp, arg1 + 1 * 65, un.nodename);
+		    strcpy_to_user(intp, arg1 + 2 * 65, "2.4.18");
+		    strcpy_to_user(intp, arg1 + 3 * 65, "#1 Sun Apr 7 14:10:26 EDT 2002");
+		    strcpy_to_user(intp, arg1 + 4 * 65, "ppc");
+		    /* strcpy_to_user(intp, arg1 + 5 * 65, ""); */
 		}
 	    }
 	    break;
@@ -1821,6 +1867,24 @@ process_system_call (interpreter_t *intp, word_32 number,
 	    result = 0;		/* FIXME: this is certainly a bit naive. */
 	    break;
 
+	case SYSCALL_FSTAT64 :
+	    ANNOUNCE_SYSCALL("fstat64");
+	    fd = lookup_fd(intp, arg1);
+	    if (fd == -1)
+	    {
+		result = -1;
+		errno = EBADF;
+	    }
+	    else
+	    {
+		struct stat buf;
+
+		result = fstat(fd, &buf);
+		if (result == 0)
+		    convert_native_stat_to_emu_stat64(intp, arg2, &buf);
+	    }
+	    break;
+
 	default :
 	    printf("unhandled system call %d\n", number);
 	    intp->halt = 1;
@@ -1867,6 +1931,7 @@ handle_system_call (interpreter_t *intp)
 	{ SYSCALL_GETPID, 0 },
 	{ SYSCALL_GETUID, 0 },
 	{ SYSCALL_ACCESS, 2 },
+	{ SYSCALL_TIMES, 1 },
 	{ SYSCALL_BRK, 1 },
 	{ SYSCALL_GETGID, 0 },
 	{ SYSCALL_GETEUID, 0 },
@@ -1891,6 +1956,7 @@ handle_system_call (interpreter_t *intp)
 	{ SYSCALL_WRITEV, 3 },
 	{ SYSCALL_MREMAP, 4 },
 	{ SYSCALL_RT_SIGACTION, 3 },
+	{ SYSCALL_FSTAT64, 3 },
 	{ (word_32)-1, 0 }
     };
 

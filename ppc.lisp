@@ -1201,7 +1201,11 @@
   ((set (reg ra gpr) (logand (rotl (reg rs gpr) (zex sh)) (mask (- 31 (zex me)) (- 31 (zex mb))))))
   ("~A r%u,r%u,%u,%u,%u" ra rs sh mb me))
 
-;rlwnm (rotate left word then AND with mask)
+(define-rc-insn rlwnm ra		;rotate left word then AND with mask
+  ((opcd 23))
+  ((set (reg ra gpr) (logand (rotl (reg rs gpr) (logand (reg rb gpr) #x1f))
+			     (mask (- 31 (zex me)) (- 31 (zex mb))))))
+  ("rlwnm r%u,r%u,r%u,%u,%u" ra rs rb mb me))
 
 (define-insn sc
     ((opcd 17)
