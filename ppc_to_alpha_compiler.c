@@ -114,8 +114,8 @@
 
 #define KILL_GPR(x)             1
 #define KILL_FPR(x)             1
-#define KILL_CRFB(x)            1
-#define KILL_XER_CA             1
+#define KILL_CRFB(x)            1 /* (kill_cr & (1 << (31 - (x)))) */
+#define KILL_XER_CA             1 /* (kill_xer & (1 << 29)) */
 
 #define SCRATCH_OFFSET   ((5+32+32+4+2)*8)
 
@@ -300,6 +300,8 @@ move_ppc_regs_compiler_to_interpreter (interpreter_t *intp)
 static int optimize_taken_jump;
 static label_t taken_jump_label;
 static word_32 next_pc;
+
+static word_32 kill_cr, kill_xer;
 
 static void
 gen_rc_code (reg_t reg)
@@ -610,7 +612,7 @@ gen_addic (word_32 insn, reg_t *result_reg)
 	emit(COMPOSE_ADDQ(tmp1_reg, tmp2_reg, tmp1_reg));
 
 	free_tmp_integer_reg(tmp2_reg);
-	ca_reg = ref_ppc_xer_ca_rw();
+	ca_reg = ref_ppc_xer_ca_w();
 
 	emit(COMPOSE_SRL_IMM(tmp1_reg, 32, ca_reg));
 
@@ -4671,7 +4673,7 @@ handle_subfe_insn (word_32 insn, word_32 pc)
 		rb_reg = tmp_reg;
 	    }
 
-	    ca_reg = ref_ppc_xer_ca_w();
+	    ca_reg = ref_ppc_xer_ca_rw();
 	    rd_reg = ref_ppc_gpr_w(FIELD_RD);
 
 	    emit(COMPOSE_XOR_IMM(ca_reg, 1, rd_reg));
@@ -4712,11 +4714,12 @@ handle_subfe_insn (word_32 insn, word_32 pc)
 
 	    assert(FIELD_RD != FIELD_RA && FIELD_RD != FIELD_RB);
 
-	    ca_reg = ref_ppc_xer_ca_w();
+	    ca_reg = ref_ppc_xer_ca_r();
 	    rd_reg = ref_ppc_gpr_w(FIELD_RD);
 
 	    emit(COMPOSE_XOR_IMM(ca_reg, 1, rd_reg));
 
+	    unref_integer_reg(ca_reg);
 	    ra_reg = ref_ppc_gpr_r(FIELD_RA);
 
 	    emit(COMPOSE_ADDL(ra_reg, rd_reg, rd_reg));
@@ -4738,7 +4741,7 @@ handle_subfe_insn (word_32 insn, word_32 pc)
 	{
 	    reg_t ra_reg, rb_reg, ca_reg, tmp_reg, rd_reg;
 
-	    ca_reg = ref_ppc_xer_ca_w();
+	    ca_reg = ref_ppc_xer_ca_rw();
 	    rd_reg = ref_ppc_gpr_w(FIELD_RD);
 	    tmp_reg = alloc_tmp_integer_reg();
 
@@ -4918,11 +4921,14 @@ handle_xoris_insn (word_32 insn, word_32 pc)
 }
 
 void
-compile_to_alpha_ppc_insn (word_32 insn, word_32 pc, int _optimize_taken_jump, label_t _taken_jump_label, word_32 _next_pc)
+compile_to_alpha_ppc_insn (word_32 insn, word_32 pc, int _optimize_taken_jump, label_t _taken_jump_label, word_32 _next_pc,
+			   word_32 _kill_cr, word_32 _kill_xer)
 {
     optimize_taken_jump = _optimize_taken_jump;
     taken_jump_label = _taken_jump_label;
     next_pc = _next_pc;
+    kill_cr = _kill_cr;
+    kill_xer = _kill_xer;
 
 #ifdef COLLECT_STATS
     ++num_translated_insns;

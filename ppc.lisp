@@ -1124,7 +1124,7 @@
 		       0
 		       1)
 		   0))
-   (set (reg ra gpr) (ashiftr (reg rs gpr) (logand (reg rb gpr) #x1f)))) ;this is not correct.  if rb(26)==0, ra must be filled with sign bit of rs
+   (set (reg ra gpr) (ashiftr (reg rs gpr) (logand (reg rb gpr) #x1f)))) ;FIXME: this is not correct.  if rb(26)==0, ra must be filled with sign bit of rs
   ("~A r%u,r%u,r%u" ra rs rb))
 
 (define-rc-insn srawi ra

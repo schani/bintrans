@@ -1996,7 +1996,8 @@ compile_until_jump (word_32 *addr, int optimize_taken_jump, label_t taken_jump_l
 #ifndef USE_HAND_TRANSLATOR
 	compile_ppc_insn(mem_get_32(compiler_intp, insnp), insnp, optimize_taken_jump, taken_jump_label);
 #else
-	compile_to_alpha_ppc_insn(mem_get_32(compiler_intp, insnp), insnp, optimize_taken_jump, taken_jump_label, NO_FOREIGN_ADDR);
+	compile_to_alpha_ppc_insn(mem_get_32(compiler_intp, insnp), insnp, optimize_taken_jump, taken_jump_label,
+				  NO_FOREIGN_ADDR, 0xffffffff, 0xffffffff);
 #endif
 #elif defined(EMU_I386)
 	word_32 insn_addr = compiler_intp->pc;
@@ -2283,6 +2284,7 @@ compile_dynamo_trace (word_32 *addrs, int length)
     old_num_translated_insns = num_translated_insns;
 #endif
 
+    /*
     {
 	compute_liveness_for_trace(compiler_intp, addrs, length);
 
@@ -2301,6 +2303,7 @@ compile_dynamo_trace (word_32 *addrs, int length)
 	}
 	printf("***\n");
     }
+    */
 
     start_timer();
 
@@ -2319,7 +2322,9 @@ compile_dynamo_trace (word_32 *addrs, int length)
     {
 	start_emu_insn(EMU_INSN_INSN, addrs[i]);
 
-	compile_to_alpha_ppc_insn(mem_get_32(compiler_intp, addrs[i]), addrs[i], 0, 0, i + 1 < length ? addrs[i + 1] : NO_FOREIGN_ADDR);
+	compile_to_alpha_ppc_insn(mem_get_32(compiler_intp, addrs[i]), addrs[i], 0, 0,
+				  i + 1 < length ? addrs[i + 1] : NO_FOREIGN_ADDR,
+				  block_insns[i].killed_cr, block_insns[i].killed_xer);
     }
 
     emit_start_direct_jump(1);

@@ -114,7 +114,8 @@ word_64 compile_trace (word_32 addr, int length, int bits);
 word_64 compile_dynamo_trace (word_32 *addrs, int length);
 
 /* ppc_to_alpha_compiler.c */
-void compile_to_alpha_ppc_insn (word_32 insn, word_32 pc, int optimize_taken_jump, label_t taken_jump_label, word_32 next_pc);
+void compile_to_alpha_ppc_insn (word_32 insn, word_32 pc, int optimize_taken_jump, label_t taken_jump_label, word_32 next_pc,
+				word_32 kill_cr, word_32 kill_xer);
 
 /* ppc_jump_analyzer.c */
 void jump_analyze_ppc_insn (word_32 insn, word_32 pc, int *_num_targets, word_32 *targets, int *_can_fall_through, int *_can_jump_indirectly);
