@@ -22,6 +22,9 @@
 
 #ifdef ARCH_ALPHA
 #include "alpha_types.h"
+
+#define NUM_NATIVE_INTEGER_REGS      31
+#define NUM_NATIVE_FLOAT_REGS        31
 #endif
 #ifdef ARCH_I386
 #include "i386_types.h"

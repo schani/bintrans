@@ -149,6 +149,7 @@ typedef struct
     int last_insn_num;
     int live_at_start;
     int live_at_end;
+    reg_t preferred_native_reg;
     reg_t native_reg;
 } emu_register_t;
 
@@ -238,6 +239,9 @@ tmp_register_t tmp_integer_regs[NUM_TMP_INTEGER_REGS];
 tmp_register_t tmp_float_regs[NUM_TMP_FLOAT_REGS];
 
 emu_register_t emu_regs[NUM_EMU_REGISTERS];
+
+reg_t alloced_integer_regs[NUM_NATIVE_INTEGER_REGS];
+reg_t alloced_float_regs[NUM_NATIVE_FLOAT_REGS];
 
 int have_jumped = 0;
 int generated_insn_index;
@@ -854,7 +858,20 @@ simple_reg_alloc (void)
 	if (emu_regs[i].used)
 	{
 	    if (emu_regs[i].type == REG_TYPE_INTEGER)
-		emu_regs[i].native_reg = native_integer_regs[ii++];
+	    {
+		assert(emu_regs[i].preferred_native_reg != NO_REG);
+
+		if (alloced_integer_regs[emu_regs[i].preferred_native_reg] == NO_REG)
+		    emu_regs[i].native_reg = emu_regs[i].preferred_native_reg;
+		else
+		{
+		    while (alloced_integer_regs[native_integer_regs[ii]] != NO_REG)
+			++ii;
+		    assert(ii < NUM_INTEGER_REGS);
+		    emu_regs[i].native_reg = native_integer_regs[ii];
+		}
+		alloced_integer_regs[emu_regs[i].native_reg] = i;
+	    }
 	    else if (emu_regs[i].type == REG_TYPE_FLOAT)
 		emu_regs[i].native_reg = native_float_regs[fi++];
 	    else
@@ -862,25 +879,37 @@ simple_reg_alloc (void)
 	}
 }
 
-reg_t
+void
 alloc_native_reg_for_emu_reg (reg_t emu_reg, int current_insn_num)
 {
-    int l;
+    int l = -1;
     reg_t native_reg;
 
-    for (l = 0; l < NUM_EMU_REGISTERS; ++l)
-	if (emu_regs[l].type == emu_regs[emu_reg].type && emu_regs[l].used
-	    && !emu_regs[l].locked && emu_regs[l].native_reg != NO_REG
-	    && emu_regs[l].last_insn_num <= current_insn_num)
-	    break;
+    if (emu_regs[emu_reg].type == REG_TYPE_INTEGER)
+    {
+	l = alloced_integer_regs[emu_regs[emu_reg].preferred_native_reg];
+	assert(emu_regs[l].type == emu_regs[emu_reg].type);
+	assert(emu_regs[l].native_reg == emu_regs[emu_reg].preferred_native_reg);
+	if (emu_regs[l].locked || emu_regs[l].last_insn_num > current_insn_num)
+	    l = -1;
+    }
 
-    if (l == NUM_EMU_REGISTERS)
+    if (l < 0)
+    {
 	for (l = 0; l < NUM_EMU_REGISTERS; ++l)
 	    if (emu_regs[l].type == emu_regs[emu_reg].type && emu_regs[l].used
-		&& !emu_regs[l].locked && emu_regs[l].native_reg != NO_REG)
+		&& !emu_regs[l].locked && emu_regs[l].native_reg != NO_REG
+		&& emu_regs[l].last_insn_num <= current_insn_num)
 		break;
 
-    assert(l < NUM_EMU_REGISTERS);
+	if (l == NUM_EMU_REGISTERS)
+	    for (l = 0; l < NUM_EMU_REGISTERS; ++l)
+		if (emu_regs[l].type == emu_regs[emu_reg].type && emu_regs[l].used
+		    && !emu_regs[l].locked && emu_regs[l].native_reg != NO_REG)
+		    break;
+    }
+
+    assert(l >= 0 && l < NUM_EMU_REGISTERS);
 
     if (emu_regs[l].dirty)
 	store_reg(emu_regs[l].type, emu_regs[l].native_reg, l);
@@ -888,8 +917,10 @@ alloc_native_reg_for_emu_reg (reg_t emu_reg, int current_insn_num)
     native_reg = emu_regs[l].native_reg;
 
     emu_regs[l].native_reg = NO_REG;
+    emu_regs[emu_reg].native_reg = native_reg;
 
-    return native_reg;
+    if (emu_regs[emu_reg].type == REG_TYPE_INTEGER)
+	alloced_integer_regs[native_reg] = emu_reg;
 }
 
 void
@@ -898,10 +929,16 @@ finish_fragment (void)
     int i;
     int num_integer_regs = 0, num_float_regs = 0;
 #ifdef DUMP_CODE
-    word_64 start = (word_64)emit_loc, body_start;
+    word_64 start = (word_64)emit_loc;
 #endif
+    word_64 body_start;
     int jumps_index;
     int rf, rl;
+
+    for (i = 0; i < NUM_NATIVE_INTEGER_REGS; ++i)
+	alloced_integer_regs[i] = NO_REG;
+    for (i = 0; i < NUM_NATIVE_FLOAT_REGS; ++i)
+	alloced_float_regs[i] = NO_REG;
 
     for (i = 0; i < NUM_EMU_REGISTERS; ++i)
     {
@@ -930,12 +967,27 @@ finish_fragment (void)
 
 	for (i = 0; i < num_reg_fields; ++i)
 	{
-	    if (emu_regs[reg_fields[i].reg].native_reg == NO_REG)
+	    reg_t reg = reg_fields[i].reg;
+
+	    if (emu_regs[reg].native_reg == NO_REG)
 	    {
-		if (emu_regs[reg_fields[i].reg].type == REG_TYPE_INTEGER)
+		if (emu_regs[reg].type == REG_TYPE_INTEGER)
 		{
-		    if (ii < NUM_INTEGER_REGS)
-			emu_regs[reg_fields[i].reg].native_reg = native_integer_regs[ii++];
+		    assert(emu_regs[reg].preferred_native_reg != NO_REG);
+
+		    if (alloced_integer_regs[emu_regs[reg].preferred_native_reg] == NO_REG)
+			emu_regs[reg].native_reg = emu_regs[reg].preferred_native_reg;
+		    else
+		    {
+			while (ii < NUM_INTEGER_REGS && alloced_integer_regs[native_integer_regs[ii]] != NO_REG)
+			    ++ii;
+
+			if (ii < NUM_INTEGER_REGS)
+			    emu_regs[reg].native_reg = native_integer_regs[ii];
+		    }
+
+		    if (emu_regs[reg].native_reg != NO_REG)
+			alloced_integer_regs[emu_regs[reg].native_reg] = reg;
 		}
 		else if (emu_regs[reg_fields[i].reg].type == REG_TYPE_FLOAT)
 		{
@@ -1007,7 +1059,7 @@ finish_fragment (void)
 
 			if (emu_regs[reg_locks[rl].reg].native_reg == NO_REG)
 			{
-			    emu_regs[reg_locks[rl].reg].native_reg = alloc_native_reg_for_emu_reg(reg_locks[rl].reg, j);
+			    alloc_native_reg_for_emu_reg(reg_locks[rl].reg, j);
 
 			    if (reg_locks[rl].type & REG_LOCK_READ)
 				load_reg(emu_regs[reg_locks[rl].reg].type, emu_regs[reg_locks[rl].reg].native_reg,
@@ -1403,11 +1455,18 @@ init_compiler (interpreter_t *intp, interpreter_t *dbg_intp)
 	tmp_float_regs[i].free = 1;
     }
 
+    j = 0;
     for (i = 0; i < NUM_EMU_REGISTERS; ++i)
 	if (i >= 5 + 32 && i < 5 + 32 + 32)
+	{
 	    emu_regs[i].type = REG_TYPE_FLOAT;
+	    emu_regs[i].preferred_native_reg = NO_REG;
+	}
 	else
+	{
 	    emu_regs[i].type = REG_TYPE_INTEGER;
+	    emu_regs[i].preferred_native_reg = native_integer_regs[j++ % NUM_INTEGER_REGS];
+	}
 
     for (i = 0; i < MAX_UNRESOLVED_JUMPS; ++i)
 	unresolved_jump_addrs[i] = 0;
