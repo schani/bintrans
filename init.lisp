@@ -60,3 +60,10 @@
   (generate-livenesser *ppc* (list (lookup-register 'cr) (lookup-register 'xer)) (list (lookup-register-class 'gpr)))
   (generate-killer *ppc* (list (lookup-register 'cr) (lookup-register 'xer)) (list (lookup-register-class 'gpr)))
   (generate-consumer *ppc* (list (lookup-register 'cr) (lookup-register 'xer)) (list (lookup-register-class 'gpr))))
+
+(defun generate-nearly-all-intel-files ()
+  (generate-intel-interpreter)
+  (generate-intel-disassembler)
+  (generate-intel-skeleton)
+  (generate-intel-livenesser)
+  (generate-intel-jump-analyzer))

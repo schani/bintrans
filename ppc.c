@@ -303,11 +303,12 @@ int emu_errnos[] = { 0,
 
 /*
 #define FAKE_PID            0x4851
-
-#define FAKE_FSTAT_DEV      0
-#define FAKE_FSTAT_INO      0x3242bf
+#define FAKE_FSTAT_DEV      2
+#define FAKE_FSTAT_INO      2
 #define FAKE_FSTAT_NLINK    1
-#define FAKE_FSTAT_MODE     0x1180
+*/
+#define FAKE_FSTAT_MODE     020620
+/*
 #define FAKE_FSTAT_RDEV     0x3db
 #define FAKE_FSTAT_SIZE     0
 #define FAKE_FSTAT_BLOCKS   4
@@ -2170,6 +2171,9 @@ setup_stack (interpreter_t *intp, word_32 p, char *argv[], Elf32_Ehdr *ehdr, wor
 
     csp = sp;
     csp -= ((ehdr != 0 ? DLINFO_ITEMS * 2 : 4) + (platform != 0 ? 2 : 0)) * 4;
+    csp -= (envc + 1) * 4;
+    csp -= (argc + 1) * 4;
+    csp -= 1 * 4;		/* ibcs */
     if (csp & 15)
 	sp -= csp & 15;
 
@@ -2204,13 +2208,6 @@ setup_stack (interpreter_t *intp, word_32 p, char *argv[], Elf32_Ehdr *ehdr, wor
 	NEW_AUX_ENT(9, AT_GID, getgid());
 	NEW_AUX_ENT(10, AT_EGID, getegid());
     }
-
-    csp = sp;
-    csp -= (envc + 1) * 4;
-    csp -= (argc + 1) * 4;
-    csp -= 1 * 4;		/* ibcs */
-    if (csp & 15)
-	sp -= csp & 15;
 
     sp -= (envc + 1) * 4;
     envp = sp;
@@ -2938,7 +2935,7 @@ main (int argc, char *argv[])
 #if defined(EMU_PPC)
     ppc_argv[0] = "/bigben/home/schani/a.out";
 #elif defined(EMU_I386)
-    ppc_argv[0] = "/mnt/homes/nethome/hansolo/schani/Work/unix/bintrans/i386-root/bin/go";
+    ppc_argv[0] = "/mnt/homes/nethome/hansolo/schani/Work/unix/bintrans/i386-root/bin/hello.dyn";
 #endif
     for (i = 2; i < argc; ++i)
 	ppc_argv[i - 1] = argv[i];

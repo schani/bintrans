@@ -23,6 +23,7 @@
 #ifdef EMU_I386
 
 #include <stdio.h>
+#include <math.h>
 #include <assert.h>
 
 #include "bintrans.h"

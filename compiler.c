@@ -119,15 +119,20 @@
 #endif
 #endif
 #elif defined(ARCH_PPC)
-#define NUM_REG_CONSTANTS          (NUM_EMU_REGISTERS + 1) /* registers + scratch area */
+#define NUM_REG_CONSTANTS          (NUM_EMU_REGISTERS + 8 + 1) /* registers + floating point stack add (FIXME) + scratch area */
 
 #define DIRECT_DISPATCHER_CONST    (NUM_REG_CONSTANTS + 0)
 #define INDIRECT_DISPATCHER_CONST  (NUM_REG_CONSTANTS + 1)
 #define SYSTEM_CALL_CONST          (NUM_REG_CONSTANTS + 2)
 #define ISYNC_CONST                (NUM_REG_CONSTANTS + 3)
 #define C_STUB_CONST               (NUM_REG_CONSTANTS + 4)
-#define REPNE_SCASB_CONST          (NUM_REG_CONSTANTS + 5)
-#define REP_MOVSD_CONST            (NUM_REG_CONSTANTS + 6)
+#define INTERPRETER_HANDLE_CONST   (NUM_REG_CONSTANTS + 5)
+#define REPE_CMPSB_CONST           (NUM_REG_CONSTANTS + 6)
+#define REP_MOVSB_CONST            (NUM_REG_CONSTANTS + 7)
+#define REP_MOVSD_CONST            (NUM_REG_CONSTANTS + 8)
+#define REPNE_SCASB_CONST          (NUM_REG_CONSTANTS + 9)
+#define REP_STOSB_CONST            (NUM_REG_CONSTANTS + 10)
+#define REP_STOSD_CONST            (NUM_REG_CONSTANTS + 11)
 #else
 #error unsupported target architecture
 #endif
@@ -156,8 +161,8 @@ reg_range_t integer_reg_range[] = { { 4, 16 }, { 18, 26 }, { 0, 0 } };
 #else
 #error unsupported foreign architecture
 #endif
-#define FIRST_TMP_INTEGER_REG                  10
-#define NUM_TMP_INTEGER_REGS                    3
+#define FIRST_TMP_INTEGER_REG                   9
+#define NUM_TMP_INTEGER_REGS                    4
 #else
 #error unsupported target architecture
 #endif
@@ -306,16 +311,10 @@ int emit_alt = 0;
 word_32 *alt_emit_loc;
 #endif
 
-#if defined(ARCH_ALPHA)
-int num_constants = NUM_EMU_REGISTERS * 2 + 2;
-#elif defined(ARCH_PPC)
-int num_constants = NUM_EMU_REGISTERS + 1;
-#else
-#error unsupported target architecture
-#endif
+int num_constants = NUM_REG_CONSTANTS;
 int old_num_constants;
 int num_constants_init;
-word_32 constant_area[NUM_EMU_REGISTERS * 2 + 2 + MAX_CONSTANTS] __attribute__ ((aligned (8)));
+word_32 constant_area[NUM_REG_CONSTANTS + MAX_CONSTANTS] __attribute__ ((aligned (8)));
 
 tmp_register_t tmp_integer_regs[NUM_TMP_INTEGER_REGS];
 tmp_register_t tmp_float_regs[NUM_TMP_FLOAT_REGS];
@@ -373,6 +372,7 @@ unsigned long num_generated_crfx_bits = 0;
 unsigned long num_generated_crf0_bits_save;
 unsigned long num_generated_crfx_bits_save;
 unsigned long num_stub_calls = 0;
+unsigned long num_interpreter_handled_insns = 0;
 unsigned long num_loop_profiler_calls = 0;
 unsigned long num_const_adds = 0;
 unsigned long num_isyncs = 0;
@@ -474,7 +474,7 @@ disassemble_target_code (addr_t start, addr_t end)
 
     for (x = start; x < end; x += 4)
     {
-	printf("%016lx  ", x);
+	printf("%016lx  ", (unsigned long)x);
 	disassemble_target_insn(*(word_32*)x, x);
 	printf("\n");
     }
@@ -504,7 +504,7 @@ dump_fragment_code (word_32 *addrs, addr_t start, addr_t end, addr_t alt_start, 
 #elif defined(EMU_I386)
 		compiler_intp->pc = addrs[fragment_emu_insns[i].addr];
 		disassemble_i386_insn(compiler_intp);
-		printf("       0x%08x", block_insns[i - 1].flags_killed);
+		printf("       0x%08x", block_insns[i].flags_killed);
 #endif
 		break;
 
@@ -1158,8 +1158,8 @@ emit_indirect_jump (void)
 #elif defined(ARCH_PPC)
     /* we assume that the target address is already in r3 */
 
-    emit(COMPOSE_LWZ(0, INDIRECT_DISPATCHER_CONST * 4, CONSTANT_AREA_REG));
-    emit(COMPOSE_MTLR(0));
+    emit(COMPOSE_LWZ(8, INDIRECT_DISPATCHER_CONST * 4, CONSTANT_AREA_REG));
+    emit(COMPOSE_MTLR(8));
     emit(COMPOSE_BLR());
 #else
 #error unsupported target architecture
@@ -1197,6 +1197,18 @@ emit_system_call (void)
 #error unsupported target architecture
 #endif
 }
+
+#ifdef ARCH_PPC
+void
+emit_interpreter_handle (void)
+{
+    /* we assume that the address of the instruction to be interpreted
+       is already in r3 */
+    emit(COMPOSE_LWZ(8, INTERPRETER_HANDLE_CONST * 4, CONSTANT_AREA_REG));
+    emit(COMPOSE_MTLR(8));
+    emit(COMPOSE_BLRL());
+}
+#endif
 
 #ifdef ARCH_ALPHA
 void
@@ -2336,8 +2348,13 @@ init_compiler (interpreter_t *intp, interpreter_t *dbg_intp)
 	insn_infos[i].num_generated_consts = 0;
     }
 #elif defined(ARCH_PPC)
-    add_addr_const((addr_t)repne_scasb_entry);
+    add_addr_const((addr_t)interpreter_handle);
+    add_addr_const((addr_t)repe_cmpsb_entry);
+    add_addr_const((addr_t)rep_movsb_entry);
     add_addr_const((addr_t)rep_movsd_entry);
+    add_addr_const((addr_t)repne_scasb_entry);
+    add_addr_const((addr_t)rep_stosb_entry);
+    add_addr_const((addr_t)rep_stosd_entry);
 #else
 #error unsupported target architecture
 #endif
@@ -2685,7 +2702,7 @@ compile_trace (word_32 *addrs, int length, unsigned char *preferred_alloced_inte
 	    word_32 old_pc = compiler_intp->pc;
 
 	    compiler_intp->pc = addrs[i];
-	    compile_to_ppc_i386_insn(compiler_intp);
+	    compile_to_ppc_i386_insn(compiler_intp, block_insns[i].flags_killed);
 	    compiler_intp->pc = old_pc;
 	}
 #else
@@ -2925,9 +2942,16 @@ compile_fragment_if_needed (word_32 addr, unsigned char *preferred_alloced_integ
 }
 
 addr_t
-provide_fragment (word_32 addr)
+provide_fragment (word_32 addr, addr_t guessed_native_addr)
 {
-    return compile_fragment_if_needed(addr, 0);
+    addr_t native_addr = compile_fragment_if_needed(addr, 0);
+
+    /*
+    if (guessed_native_addr != 0)
+	assert(native_addr == guessed_native_addr);
+    */
+
+    return native_addr;
 }
 
 #ifdef SYNC_BLOCKS
@@ -3222,7 +3246,7 @@ provide_fragment_and_patch (addr_t jump_addr)
 #ifdef SYNC_BLOCKS
 	native_addr = compile_fragment_if_needed(foreign_addr, unresolved_jumps[i].alloced_integer_regs);
 #else
-	native_addr = provide_fragment(foreign_addr);
+	native_addr = provide_fragment(foreign_addr, 0);
 #endif
 #endif
 
@@ -3432,6 +3456,21 @@ isync_handler (word_32 addr)
 }
 
 void
+handle_insn_in_interpreter (addr_t pc)
+{
+    move_regs_compiler_to_interpreter(compiler_intp);
+
+    compiler_intp->pc = pc;
+    interpret_insn(compiler_intp);
+
+    move_regs_interpreter_to_compiler(compiler_intp);
+
+#ifdef COLLECT_STATS
+    ++num_interpreter_handled_insns;
+#endif
+}
+
+void
 print_compiler_stats (void)
 {
 #ifdef COLLECT_STATS
@@ -3463,6 +3502,7 @@ print_compiler_stats (void)
     printf("sync blocks in situ:           %ld\n", num_sync_blocks_in_situ);
     printf("empty sync blocks:             %ld\n", num_empty_sync_blocks);
     printf("stub calls:                    %lu\n", num_stub_calls);
+    printf("interpreter handled insns:     %lu\n", num_interpreter_handled_insns);
     printf("loop profiler calls:           %lu\n", num_loop_profiler_calls);
     printf("isyncs:                        %lu\n", num_isyncs);
 

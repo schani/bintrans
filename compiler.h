@@ -141,3 +141,6 @@ void kill_ppc_insn (word_32 insn, word_32 pc, word_32 *_killed_CR, word_32 *_kil
 
 /* ppc_consumer.c */
 void consume_ppc_insn (word_32 insn, word_32 pc, word_32 *_consumed_CR, word_32 *_consumed_XER, word_32 *_consumed_GPR);
+
+/* i386_to_ppc_compiler.c */
+void compile_to_ppc_i386_insn (interpreter_t *intp, word_32 _flags_killed);

@@ -32,7 +32,10 @@ typedef struct
     word_32 foreign_addr;
     int next;
 #ifdef NEED_COMPILER
-    word_64 native_addr;
+    addr_t native_addr;
+#ifdef ARCH_PPC
+    word_32 __pad;
+#endif
 #endif
 } fragment_hash_entry_t;
 

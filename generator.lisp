@@ -837,6 +837,8 @@
 			      (calc-float value))
 	       (sqrt (value)
 		     (sqrt (calc-float value)))
+	       (atan2 (x y)
+		      (atan (calc-float x) (calc-float y)))
 	       (integer-to-float (value)
 				 (float (calc value)))
 	       (bits-to-float (value)
@@ -1185,7 +1187,7 @@
 				 (error "widths do not match in ~A" expr))
 			       (make-expr :kind (first expr) :type 'integer :width (expr-width op1)
 					  :operands (list op1 op2))))
-			    ((+f -f *f /f)
+			    ((+f -f *f /f atan2)
 			     (let ((op1 (generate-expr (second expr) bindings required-width 'float))
 				   (op2 (generate-expr (third expr) bindings required-width 'float)))
 			       (when (/= (expr-width op1) (expr-width op2))
@@ -1312,6 +1314,7 @@
 		     (format nil "field_~A" (dcs name))
 		     (funcall *insn-field-accessor* name begin end)))
 	  (integer (value) (format nil "~A" value))
+	  (float (value) (format nil "((~A)~A)" (if (= (expr-width expr) 32) "float" "double") value))
 	  (string (value) (format nil "\"~A\"" value))
 	  (pc () "pc")
 	  (addr () "addr")
@@ -1320,7 +1323,7 @@
 	  (ignore (value) "0 /* ignore */")
 	  (let (let-bindings body)
 	    (with-output-to-string (out)
-	      (format out "{~%")
+	      (format out "({~%")
 	      (let ((new-bindings (append (mapcar #'(lambda (binding)
 						      (destructuring-bind (name . expr)
 							  binding
@@ -1333,7 +1336,7 @@
 					  bindings)))
 		(dolist (expr body)
 		  (format out "~A;~%" (generate-interpreter expr new-bindings))))
-	      (format out "}~%")))
+	      (format out "})~%")))
 	  (set (lvalue rhs)
 	       (let ((rhs-name (make-tmp-name)))
 		 (format nil "({ ~A ~A = ~A; ~A; })"
@@ -1483,6 +1486,10 @@
 						       (rotl "rotl") (mask "mask"))))))
 	     (format nil "~A_~A(~A, ~A)" func (expr-width (if (eq (expr-kind expr) 'mask) expr first))
 		     (generate-interpreter first bindings) (generate-interpreter second bindings))))
+	  (atan2 (x y)
+		 (format nil "atan2(~A, ~A)"
+			 (generate-interpreter x bindings)
+			 (generate-interpreter y bindings)))
 	  (member (value matches)
 		  (format nil "({ ~A tmp = ~A; 0~{ || tmp == ~A~}; })"
 			  (c-type (expr-width value) (expr-type value))
@@ -2739,7 +2746,7 @@ unref_~A_reg(~A);
 			(generate-compiler value-reg value bindings) (dcs type)
 			op value-reg
 			(dcs type) value-reg)))
-	     ((+ +f - -f * *s *f /f) (left right)
+	     ((+ +f - -f * *s *f /f atan2) (left right)
 	      (let* ((op (cadr (assoc (expr-kind expr) '((+ "ADD~A") (+f "ADD~A") (- "SUB~A") (-f "SUB~A")
 							 (* "MUL~A") (*s "MUL~A") (*f "MUL~A") (/f "DIV~A")))))
 		     (left-reg (make-tmp-name))
@@ -3598,7 +3605,7 @@ if (can_inv_maskmask(~A, ~A))
 			   (generate-binary expr op1 op2)))
 		      ((logand bit-set-p +carry mask
 			       = =f < <f <s <= <=f <=s > >f >s >= >=f >=s
-			       + +f - -f * *s *f /f / /s) (op1 op2)
+			       + +f - -f * *s *f /f atan2 / /s) (op1 op2)
 		       (generate-binary expr op1 op2))
 		      ((nop system-call not-implemented) ()
 			   (c (list expr nil)))))))
@@ -4351,8 +4358,8 @@ live_~A &= ~~~A;
 						(format nil "0x~X" (1- (ash 1 (register-width register))))
 						rhs-bitss))
 	       (array-register (class number)
-			       (assert nil)
-			       (assert (not (eq class (register-register-class reg)))))
+			       (assert (and (notany #'(lambda (r) (eq class (register-register-class r))) regs)
+					    (notany #'(lambda (c) (eq class c)) classes))))
 	       (subregister (register class number begin end named)
 			    (generate-for-register register class number
 						   (format nil "0x~X" (- (1- (ash 2 end)) (1- (ash 1 begin))))
@@ -4401,8 +4408,8 @@ killed_~A |= ~A;
 	       (register (register class number)
 			 (generate-for-class-register register class number nil rhs-bitss))
 	       (array-register (class number)
-			       (assert nil)
-			       (assert (not (eq class (register-register-class reg)))))
+			       (assert (and (notany #'(lambda (r) (eq class (register-register-class r))) regs)
+					    (notany #'(lambda (c) (eq class c)) classes))))
 	       (subregister (register class number begin end named)
 			    (generate-for-class-register register class number t rhs-bitss))
 	       (numbered-subregister (register class number width index)
@@ -4481,19 +4488,22 @@ killed_~:*~A = save_killed_~:*~A | killed_~:*~A | tmp_killed_~:*~A;~^~%~}
 		   (format t "break;~%"))
 		 (format t "}~%"))
 	       (dowhile (cond body)	;FIXME: does not work with more than one reg or with classes!
-			(assert nil)
-			(let ((reg nil)) ;just to make it compile
+			(assert (and (= (length regs) 1) (null classes)))
+			(let* ((reg (car regs))
+			       (name (register-name reg)))
 			  (format t "{
 ~A last_live, save_live = 0;
 do {
 last_live = save_live;
-save_live = live;~%"
-				  (c-type (register-width reg) 'integer))
-			  (format t "live |= ~A;~%" (generate-used-reg-bits reg cond))
-			  (generate-live-killed reg classes body)
-			  (format t "live = live | save_live;
-} while (last_live != live);
-}~%")))
+save_live = live_~A;~%"
+				  (c-type (register-width reg) 'integer)
+				  name)
+			  (format t "live_~A |= ~A;~%" name (generate-used-reg-bits reg cond))
+			  (generate-live-killed regs classes body)
+			  (format t "live_~A |= save_live;
+} while (last_live != live_~A);
+}~%"
+				  name name)))
 	       (nop ()
 		    (format t "/* nop */~%"))
 	       (not-implemented ()
@@ -4542,7 +4552,7 @@ save_live = live;~%"
 			  (ignore (value)
 				  (format t "/* ignore */~%"))
 			  (system-call ()
-				       (format t "/* syscall */~%")))))
+				       (format t "killed = 0x~X; /* syscall */~%" (1- (ash 1 var-width)))))))
 	       (format t "{
 ~A killed = 0;~%"
 		       (c-type var-width 'integer))

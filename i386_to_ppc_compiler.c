@@ -59,14 +59,17 @@
 #define MODE_R32_RM32 34
 #define MODE_R16_RM8 35
 #define MODE_R32_RM8 36
-#define MODE_AX_MOFFS32 37
-#define MODE_EAX_MOFFS32 38
-#define MODE_MOFFS32_AX 39
-#define MODE_MOFFS32_EAX 40
-#define MODE_PR8_IMM8 41
-#define MODE_PR16_IMM16 42
-#define MODE_PR32_IMM32 43
-#define MODE_PST 44
+#define MODE_R32_RM16 37
+#define MODE_AX_MOFFS32 38
+#define MODE_EAX_MOFFS32 39
+#define MODE_MOFFS32_AX 40
+#define MODE_MOFFS32_EAX 41
+#define MODE_PR16_AX 42
+#define MODE_PR32_EAX 43
+#define MODE_PR8_IMM8 44
+#define MODE_PR16_IMM16 45
+#define MODE_PR32_IMM32 46
+#define MODE_PST 47
 
 #define REG_EAX                   0
 #define REG_ECX                   1
@@ -90,22 +93,22 @@
 #define ref_i386_eflags_w()       ref_integer_reg_for_writing(REG_EFLAGS)
 #define ref_i386_eflags_rw()      ref_integer_reg_for_reading_and_writing(REG_EFLAGS)
 
-#define KILL_OF                   1
-#define KILL_CF                   1
-#define KILL_SF                   1
-#define KILL_ZF                   1
+#define KILL_OF                   ((flags_killed >> 11) & 1)
+#define KILL_CF                   (flags_killed & 1)
+#define KILL_SF                   ((flags_killed >> 7) & 1)
+#define KILL_ZF                   ((flags_killed >> 6) & 1)
 #define KILL_SZF                  (KILL_SF || KILL_ZF)
 
 void
 move_i386_regs_interpreter_to_compiler (interpreter_t *intp)
 {
-    *(double*)&constant_area[21] = (intp->regs_FPST[7]);
-    *(double*)&constant_area[20] = (intp->regs_FPST[6]);
-    *(double*)&constant_area[19] = (intp->regs_FPST[5]);
-    *(double*)&constant_area[18] = (intp->regs_FPST[4]);
-    *(double*)&constant_area[17] = (intp->regs_FPST[3]);
-    *(double*)&constant_area[16] = (intp->regs_FPST[2]);
-    *(double*)&constant_area[15] = (intp->regs_FPST[1]);
+    *(double*)&constant_area[28] = (intp->regs_FPST[7]);
+    *(double*)&constant_area[26] = (intp->regs_FPST[6]);
+    *(double*)&constant_area[24] = (intp->regs_FPST[5]);
+    *(double*)&constant_area[22] = (intp->regs_FPST[4]);
+    *(double*)&constant_area[20] = (intp->regs_FPST[3]);
+    *(double*)&constant_area[18] = (intp->regs_FPST[2]);
+    *(double*)&constant_area[16] = (intp->regs_FPST[1]);
     *(double*)&constant_area[14] = (intp->regs_FPST[0]);
     *(word_16*)&constant_area[9] = (intp->regs_FSPR[0]);
     *(word_32*)&constant_area[8] = (intp->regs_SPR[0]);
@@ -126,13 +129,13 @@ move_i386_regs_interpreter_to_compiler (interpreter_t *intp)
 void
 move_i386_regs_compiler_to_interpreter (interpreter_t *intp)
 {
-    (intp->regs_FPST[7]) = *(double*)&constant_area[21];
-    (intp->regs_FPST[6]) = *(double*)&constant_area[20];
-    (intp->regs_FPST[5]) = *(double*)&constant_area[19];
-    (intp->regs_FPST[4]) = *(double*)&constant_area[18];
-    (intp->regs_FPST[3]) = *(double*)&constant_area[17];
-    (intp->regs_FPST[2]) = *(double*)&constant_area[16];
-    (intp->regs_FPST[1]) = *(double*)&constant_area[15];
+    (intp->regs_FPST[7]) = *(double*)&constant_area[28];
+    (intp->regs_FPST[6]) = *(double*)&constant_area[26];
+    (intp->regs_FPST[5]) = *(double*)&constant_area[24];
+    (intp->regs_FPST[4]) = *(double*)&constant_area[22];
+    (intp->regs_FPST[3]) = *(double*)&constant_area[20];
+    (intp->regs_FPST[2]) = *(double*)&constant_area[18];
+    (intp->regs_FPST[1]) = *(double*)&constant_area[16];
     (intp->regs_FPST[0]) = *(double*)&constant_area[14];
     (intp->regs_FSPR[0]) = *(word_16*)&constant_area[9];
     (intp->regs_SPR[0]) = *(word_32*)&constant_area[8];
@@ -150,13 +153,21 @@ move_i386_regs_compiler_to_interpreter (interpreter_t *intp)
     (intp->regs_SPR[0] = (intp->regs_SPR[0] & 0xFFFFFFFE) | ((*(word_32*)&constant_area[10]) << 0));
 }
 
-static word_32 pc;
+static word_32 pc, this_pc;
 static int prefix_flags;
 static word_8 mod, reg, rm, sib_scale, sib_index, sib_base, disp8, opcode_reg, imm8;
 static word_16 imm16;
 static word_32 disp32, imm32;
 static int op_width;
 static int mode;
+static word_32 flags_killed;
+
+static void
+gen_interpreter_handle (void)
+{
+    emit_load_integer_32(3, this_pc);
+    emit_interpreter_handle();
+}
 
 static reg_t
 ref_i386_gpr (reg_t num, int for_reading, int for_writing)
@@ -198,6 +209,7 @@ src_is_imm (word_32 *val)
 
 	case MODE_AL_IMM8 :
 	case MODE_RM8_IMM8 :
+	case MODE_RM16_IMM8 :
 	case MODE_RM32_IMM8 :
 	case MODE_PR8_IMM8 :
 	    *val = imm8;
@@ -525,23 +537,13 @@ extract_hreg (reg_t num, int for_reading, int for_writing)
     else
     {
 	reg_t ereg = ref_i386_gpr(num, 1, for_writing);
+	reg_t tmp = alloc_tmp_integer_reg();
 
-	if (for_writing)
-	{
-	    emit(COMPOSE_EXTRWI(ereg, ereg, 8, 16));
+	emit(COMPOSE_EXTRWI(tmp, ereg, 8, 16));
 
-	    return ereg;
-	}
-	else
-	{
-	    reg_t tmp = alloc_tmp_integer_reg();
+	unref_integer_reg(ereg);
 
-	    emit(COMPOSE_EXTRWI(tmp, ereg, 8, 16));
-
-	    unref_integer_reg(ereg);
-
-	    return tmp;
-	}
+	return tmp;
     }
 }
 
@@ -622,6 +624,7 @@ ref_src_op (int zexed, word_32 *imm, int imm_width, int is_simm)
 	    }
 
 	case MODE_R16_RM16 :
+	case MODE_R32_RM16 :
 	    if (mod == 3)
 		return ref_i386_gpr_extended(rm, 1, 0, zexed, 16);
 	    else
@@ -912,6 +915,7 @@ ref_dst_op (int for_reading, int for_writing, int zexed,
 
 	case MODE_R32_RM32 :
 	case MODE_R32_RM8 :
+	case MODE_R32_RM16 :
 	    return ref_i386_gpr(reg, for_reading, for_writing);
 
 	case MODE_PR8_IMM8 :
@@ -1112,6 +1116,7 @@ commit_and_dispose_dst_op (reg_t dst_reg, int for_reading, int zexed, int own_re
 
 	case MODE_R32_RM32 :
 	case MODE_R32_RM8 :
+	case MODE_R32_RM16 :
 	    if (own_reg)
 	    {
 		reg_t ereg = ref_i386_gpr_w(reg);
@@ -1137,6 +1142,29 @@ commit_and_dispose_dst_op (reg_t dst_reg, int for_reading, int zexed, int own_re
     }
 
     dispose_integer_reg(dst_reg);
+}
+
+static reg_t
+ref_fpsw_top (void)
+{
+    reg_t fpsw = ref_i386_fpsw_r();
+    reg_t top = alloc_tmp_integer_reg();
+
+    emit(COMPOSE_EXTRWI(top, fpsw, 3, 18));
+
+    unref_integer_reg(fpsw);
+
+    return top;
+}
+
+static void
+commit_fpsw_top (reg_t top)
+{
+    reg_t fpsw = ref_i386_fpsw_rw();
+
+    emit(COMPOSE_INSRWI(fpsw, top, 3, 18));
+
+    unref_integer_reg(fpsw);
 }
 
 static void
@@ -1283,6 +1311,27 @@ static void
 handle_and_insn (void)
 {
     gen_bit_insn(&gen_andi, &gen_andd, &gen_andid, &gen_and);
+}
+
+static void
+handle_bsr_insn (void)
+{
+    reg_t src = ref_src_op(1, 0, 0, 0);
+    reg_t dst = ref_dst_op_to_reg(0, 1, 0);
+
+    if (KILL_ZF)
+	emit(COMPOSE_CMPWI(0, src, 0));
+    emit(COMPOSE_CNTLZW(dst, src));
+    emit(COMPOSE_SUBFIC(dst, dst, 31));
+
+    commit_and_dispose_dst_op(dst, 0, 1, 0);
+    dispose_integer_reg(src);
+}
+
+static void
+handle_bt_insn (void)
+{
+    gen_interpreter_handle();
 }
 
 static void
@@ -1455,37 +1504,82 @@ handle_div_insn (void)
 static void
 handle_fadd_insn (void)
 {
-    assert(0);
+    gen_interpreter_handle();
+}
+
+static void
+handle_faddp_insn (void)
+{
+    gen_interpreter_handle();
 }
 
 static void
 handle_fcom_insn (void)
 {
-    assert(0);
+    gen_interpreter_handle();
 }
 
 static void
 handle_fcomp_insn (void)
 {
-    assert(0);
+    gen_interpreter_handle();
+}
+
+static void
+handle_fcompp_insn (void)
+{
+    gen_interpreter_handle();
+}
+
+static void
+handle_fdiv_insn (void)
+{
+    gen_interpreter_handle();
+}
+
+static void
+handle_fdivp_insn (void)
+{
+    gen_interpreter_handle();
+}
+
+static void
+handle_fdivrp_insn (void)
+{
+    gen_interpreter_handle();
 }
 
 static void
 handle_fidivr_insn (void)
 {
-    assert(0);
+    gen_interpreter_handle();
 }
 
 static void
 handle_fild_insn (void)
 {
-    assert(0);
+    /*
+    reg_t top = ref_fpsw_top();
+    reg_t dst = ref_dst_op_to_reg(1, 0, 1);
+
+    emit(COMPOSE_ADDI(top, top, (word_16)-1));
+    emit(COMPOSE_CLRLWI(top, top, 29));
+    commit_fpsw_top(top);
+    */
+
+    gen_interpreter_handle();
+}
+
+static void
+handle_fistp_insn (void)
+{
+    gen_interpreter_handle();
 }
 
 static void
 handle_fld_insn (void)
 {
-    assert(0);
+    gen_interpreter_handle();
 }
 
 static void
@@ -1501,9 +1595,27 @@ handle_fldcw_insn (void)
 }
 
 static void
+handle_fldz_insn (void)
+{
+    gen_interpreter_handle();
+}
+
+static void
+handle_fmul_insn (void)
+{
+    gen_interpreter_handle();
+}
+
+static void
+handle_fmulp_insn (void)
+{
+    gen_interpreter_handle();
+}
+
+static void
 handle_fnstsw_insn (void)
 {
-    assert(0);
+    gen_interpreter_handle();
 }
 
 static void
@@ -1517,7 +1629,25 @@ handle_fstcw_insn (void)
 static void
 handle_fstp_insn (void)
 {
-    assert(0);
+    gen_interpreter_handle();
+}
+
+static void
+handle_fsub_insn (void)
+{
+    gen_interpreter_handle();
+}
+
+static void
+handle_fucompp_insn (void)
+{
+    gen_interpreter_handle();
+}
+
+static void
+handle_fxch_insn (void)
+{
+    gen_interpreter_handle();
 }
 
 static void
@@ -1605,13 +1735,16 @@ handle_inc_insn (void)
 {
     reg_t dst = ref_dst_op_to_reg(1, 1, 0);
     reg_t tmp;
+    int shift = op_width != 32 && (KILL_CF || KILL_OF || KILL_SZF)
+	? 32 - op_width : 0;
 
-    assert(op_width == 32);
+    if (shift != 0)
+	emit(COMPOSE_SLWI(dst, dst, shift));
 
     if (KILL_OF)
     {
 	tmp = alloc_tmp_integer_reg();
-	emit(COMPOSE_LI(tmp, 1));
+	emit_load_integer_32(tmp, 1 << shift);
     }
 
     if (KILL_OF && KILL_SZF)
@@ -1627,6 +1760,9 @@ handle_inc_insn (void)
 
     if (KILL_OF)
 	free_tmp_integer_reg(tmp);
+
+    if (shift != 0)
+	emit(COMPOSE_SRWI(dst, dst, shift));
 
     commit_and_dispose_dst_op(dst, 1, 0, 0);
 }
@@ -1877,9 +2013,17 @@ handle_movsx_insn (void)
 {
     reg_t src = ref_src_op(0, 0, 0, 0);
     reg_t dst = ref_dst_op_to_reg(0, 1, 0);
+    int width;
 
-    emit(COMPOSE_SLWI(dst, src, 24));
-    emit(COMPOSE_SRAWI(dst, dst, 24));
+    if (mode == MODE_R16_RM8 || mode == MODE_R32_RM8)
+	width = 8;
+    else if (mode == MODE_R32_RM16)
+	width = 16;
+    else
+	assert(0);
+
+    emit(COMPOSE_SLWI(dst, src, 32 - width));
+    emit(COMPOSE_SRAWI(dst, dst, 32 - width));
 
     dispose_integer_reg(src);
     commit_and_dispose_dst_op(dst, 0, 0, 0);
@@ -1928,11 +2072,6 @@ handle_neg_insn (void)
 	emit(COMPOSE_NEG(dst, dst));
 
     commit_and_dispose_dst_op(dst, 1, 0, 0);
-}
-
-static void
-handle_nop_insn (void)
-{
 }
 
 static void
@@ -2043,21 +2182,39 @@ gen_asm_func (int num)
 }
 
 static void
-handle_repne_scasb_insn (void)
+handle_repe_cmpsb_insn (void)
 {
-    gen_asm_func(REPNE_SCASB_CONST);
+    gen_asm_func(REPE_CMPSB_CONST);
 }
 
 static void
 handle_rep_movsb_insn (void)
 {
-    assert(0);
+    gen_asm_func(REP_MOVSB_CONST);
 }
 
 static void
 handle_rep_movsd_insn (void)
 {
     gen_asm_func(REP_MOVSD_CONST);
+}
+
+static void
+handle_repne_scasb_insn (void)
+{
+    gen_asm_func(REPNE_SCASB_CONST);
+}
+
+static void
+handle_rep_stosb_insn (void)
+{
+    gen_asm_func(REP_STOSB_CONST);
+}
+
+static void
+handle_rep_stosd_insn (void)
+{
+    gen_asm_func(REP_STOSD_CONST);
 }
 
 static void
@@ -2092,11 +2249,9 @@ gen_shift_insn (void (*gen_id) (reg_t, reg_t, word_32),
     reg_t src = ref_src_op(0, &imm, 8, 0);
     reg_t dst = ref_dst_op_to_reg(1, 1, 1);
 
-    assert(op_width == 32);
-
     if (src == NO_REG)
     {
-	if (KILL_SZF)
+	if (KILL_SZF && op_width == 32)
 	    gen_id(dst, dst, imm & 0x1f);
 	else
 	    gen_i(dst, dst, imm & 0x1f);
@@ -2106,13 +2261,24 @@ gen_shift_insn (void (*gen_id) (reg_t, reg_t, word_32),
 	reg_t tmp = alloc_tmp_integer_reg();
 
 	emit(COMPOSE_ANDID(tmp, src, 0x1f));
-	if (KILL_SZF)
+	if (KILL_SZF && op_width == 32)
 	    gen_d(dst, dst, tmp);
 	else
 	    gen(dst, dst, tmp);
 
 	free_tmp_integer_reg(tmp);
 	dispose_integer_reg(src);
+    }
+
+    /* this can be implemented faster if !KILL_SF, namely
+       by using the dot form of the shift above.  */
+    if (op_width != 32 && KILL_SZF)
+    {
+	reg_t tmp = alloc_tmp_integer_reg();
+
+	emit(COMPOSE_RLWINMD(tmp, dst, 32 - op_width, 0, 31));
+
+	free_tmp_integer_reg(tmp);
     }
 
     commit_and_dispose_dst_op(dst, 1, 1, 0);
@@ -2224,6 +2390,12 @@ handle_shl_insn (void)
 }
 
 static void
+handle_shld_insn (void)
+{
+    gen_interpreter_handle();
+}
+
+static void
 gen_srwid (reg_t dst, reg_t src, word_32 n)
 {
     emit(COMPOSE_SRWID(dst, src, n));
@@ -2254,6 +2426,12 @@ handle_shr_insn (void)
 }
 
 static void
+handle_shrd_insn (void)
+{
+    gen_interpreter_handle();
+}
+
+static void
 handle_sub_insn (void)
 {
     word_32 imm;
@@ -2261,6 +2439,9 @@ handle_sub_insn (void)
     reg_t dst = ref_dst_op_to_reg(1, 1, 0);
 
     assert(op_width == 32);
+
+    if (src == NO_REG)
+	imm = SEX16(imm, 15);
 
     if (KILL_CF)
     {
@@ -2274,6 +2455,9 @@ handle_sub_insn (void)
 
 	free_tmp_integer_reg(tmp);
     }
+
+    if (src == NO_REG)
+	imm = -SEX32(imm, 16) & 0xffff;
 
     if (src == NO_REG)
     {
@@ -2332,6 +2516,47 @@ handle_test_insn (void)
 }
 
 static void
+handle_xchg_insn (void)
+{
+    reg_t src, dst, tmp;
+
+    if ((mode == MODE_PR16_AX || mode == MODE_PR32_EAX) && opcode_reg == 0)
+	return;			/* nop */
+
+    dst = ref_dst_op_to_reg(1, 1, 0);
+
+    if (mode == MODE_PR16_AX || mode == MODE_PR32_EAX)
+	src = ref_i386_gpr_rw(REG_EAX);
+    else if (mode == MODE_RM8_R8 && reg >= 4)
+	src = ref_i386_gpr_rw(reg - 4);
+    else
+	src = ref_i386_gpr_rw(reg);
+
+    tmp = alloc_tmp_integer_reg();
+
+    emit(COMPOSE_MR(tmp, dst));
+    emit(COMPOSE_MR(dst, src));
+
+    if (op_width == 32)
+	emit(COMPOSE_MR(src, tmp));
+    else if (op_width == 16)
+	emit(COMPOSE_INSRWI(src, tmp, 16, 16));
+    else
+    {
+	assert(op_width == 8);
+
+	if (reg < 4)
+	    emit(COMPOSE_INSRWI(src, tmp, 8, 24));
+	else
+	    emit(COMPOSE_INSRWI(src, tmp, 8, 16));
+    }
+
+    commit_and_dispose_dst_op(dst, 1, 0, 0);
+    dispose_integer_reg(src);
+    free_tmp_integer_reg(tmp);
+}
+
+static void
 gen_xori (reg_t ra, reg_t rs, word_16 imm)
 {
     emit(COMPOSE_XORI(ra, rs, imm));
@@ -2355,2367 +2580,12 @@ handle_xor_insn (void)
     gen_bit_insn(&gen_xori, &gen_xord, 0, &gen_xor);
 }
 
-void compile_to_ppc_i386_insn (interpreter_t *intp) {
-word_8 opcode, opcode2;
-word_32 next_pc;
-i386_decode_opcode(intp, &prefix_flags, &opcode, &opcode2);
-switch (opcode) {
-case 51 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-next_pc = pc = intp->pc;
-mode = MODE_R16_RM16; op_width = 16;
-handle_xor_insn();
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_R32_RM32; op_width = 32;
-handle_xor_insn();
-}
-break;
-case 50 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_R8_RM8; op_width = 8;
-handle_xor_insn();
-}
-break;
-case 49 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-next_pc = pc = intp->pc;
-mode = MODE_RM16_R16; op_width = 16;
-handle_xor_insn();
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM32_R32; op_width = 32;
-handle_xor_insn();
-}
-break;
-case 48 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM8_R8; op_width = 8;
-handle_xor_insn();
-}
-break;
-case 53 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-imm16 = i386_decode_imm16(intp);
-next_pc = pc = intp->pc;
-mode = MODE_AX_IMM16; op_width = 16;
-handle_xor_insn();
-} else {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_EAX_IMM32; op_width = 32;
-handle_xor_insn();
-}
-break;
-case 52 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_AL_IMM8; op_width = 8;
-handle_xor_insn();
-}
-break;
-case 133 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-next_pc = pc = intp->pc;
-mode = MODE_RM16_R16; op_width = 16;
-handle_test_insn();
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM32_R32; op_width = 32;
-handle_test_insn();
-}
-break;
-case 132 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM8_R8; op_width = 8;
-handle_test_insn();
-}
-break;
-case 169 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-imm16 = i386_decode_imm16(intp);
-next_pc = pc = intp->pc;
-mode = MODE_AX_IMM16; op_width = 16;
-handle_test_insn();
-} else {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_EAX_IMM32; op_width = 32;
-handle_test_insn();
-}
-break;
-case 168 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_AL_IMM8; op_width = 8;
-handle_test_insn();
-}
-break;
-case 43 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-next_pc = pc = intp->pc;
-mode = MODE_R16_RM16; op_width = 16;
-handle_sub_insn();
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_R32_RM32; op_width = 32;
-handle_sub_insn();
-}
-break;
-case 42 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_R8_RM8; op_width = 8;
-handle_sub_insn();
-}
-break;
-case 41 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-next_pc = pc = intp->pc;
-mode = MODE_RM16_R16; op_width = 16;
-handle_sub_insn();
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM32_R32; op_width = 32;
-handle_sub_insn();
-}
-break;
-case 40 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM8_R8; op_width = 8;
-handle_sub_insn();
-}
-break;
-case 45 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-imm16 = i386_decode_imm16(intp);
-next_pc = pc = intp->pc;
-mode = MODE_AX_IMM16; op_width = 16;
-handle_sub_insn();
-} else {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_EAX_IMM32; op_width = 32;
-handle_sub_insn();
-}
-break;
-case 44 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_AL_IMM8; op_width = 8;
-handle_sub_insn();
-}
-break;
-case 193 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-switch (opcode2) {
-default :
-switch (reg) {
-case 5 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM16_IMM8; op_width = 16;
-handle_shr_insn();
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM32_IMM8; op_width = 32;
-handle_shr_insn();
-}
-break;
-case 4 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM16_IMM8; op_width = 16;
-handle_shl_insn();
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM32_IMM8; op_width = 32;
-handle_shl_insn();
-}
-break;
-case 7 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM16_IMM8; op_width = 16;
-handle_sar_insn();
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM32_IMM8; op_width = 32;
-handle_sar_insn();
-}
-break;
-default :
-assert(0);
-}
-}
-break;
-case 211 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-switch (opcode2) {
-default :
-switch (reg) {
-case 5 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-next_pc = pc = intp->pc;
-mode = MODE_RM16_CL; op_width = 16;
-handle_shr_insn();
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM32_CL; op_width = 32;
-handle_shr_insn();
-}
-break;
-case 4 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-next_pc = pc = intp->pc;
-mode = MODE_RM16_CL; op_width = 16;
-handle_shl_insn();
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM32_CL; op_width = 32;
-handle_shl_insn();
-}
-break;
-case 7 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-next_pc = pc = intp->pc;
-mode = MODE_RM16_CL; op_width = 16;
-handle_sar_insn();
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM32_CL; op_width = 32;
-handle_sar_insn();
-}
-break;
-default :
-assert(0);
-}
-}
-break;
-case 209 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-switch (opcode2) {
-default :
-switch (reg) {
-case 5 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-next_pc = pc = intp->pc;
-mode = MODE_RM16_1; op_width = 16;
-handle_shr_insn();
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM32_1; op_width = 32;
-handle_shr_insn();
-}
-break;
-case 4 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-next_pc = pc = intp->pc;
-mode = MODE_RM16_1; op_width = 16;
-handle_shl_insn();
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM32_1; op_width = 32;
-handle_shl_insn();
-}
-break;
-case 7 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-next_pc = pc = intp->pc;
-mode = MODE_RM16_1; op_width = 16;
-handle_sar_insn();
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM32_1; op_width = 32;
-handle_sar_insn();
-}
-break;
-default :
-assert(0);
-}
-}
-break;
-case 192 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-switch (opcode2) {
-default :
-switch (reg) {
-case 5 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM8_IMM8; op_width = 8;
-handle_shr_insn();
-}
-break;
-case 4 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM8_IMM8; op_width = 8;
-handle_shl_insn();
-}
-break;
-case 7 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM8_IMM8; op_width = 8;
-handle_sar_insn();
-}
-break;
-default :
-assert(0);
-}
-}
-break;
-case 210 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-switch (opcode2) {
-default :
-switch (reg) {
-case 5 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM8_CL; op_width = 8;
-handle_shr_insn();
-}
-break;
-case 4 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM8_CL; op_width = 8;
-handle_shl_insn();
-}
-break;
-case 7 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM8_CL; op_width = 8;
-handle_sar_insn();
-}
-break;
-default :
-assert(0);
-}
-}
-break;
-case 208 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-switch (opcode2) {
-default :
-switch (reg) {
-case 5 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM8_1; op_width = 8;
-handle_shr_insn();
-}
-break;
-case 4 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM8_1; op_width = 8;
-handle_shl_insn();
-}
-break;
-case 7 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM8_1; op_width = 8;
-handle_sar_insn();
-}
-break;
-default :
-assert(0);
-}
-}
-break;
-case 194 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm16 = i386_decode_imm16(intp);
-next_pc = pc = intp->pc;
-mode = MODE_IMM16; op_width = 16;
-handle_ret_insn();
-}
-break;
-case 195 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_NIL;
-handle_ret_insn();
-}
-break;
-case 243 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-switch (opcode2) {
-case 165 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_NIL;
-handle_rep_movsd_insn();
-}
-break;
-case 164 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_NIL;
-handle_rep_movsb_insn();
-}
-break;
-default :
-switch (reg) {
-default :
-assert(0);
-}
-}
-break;
-case 242 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-switch (opcode2) {
-case 174 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_NIL;
-handle_repne_scasb_insn();
-}
-break;
-default :
-switch (reg) {
-default :
-assert(0);
-}
-}
-break;
-case 104 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_IMM32; op_width = 32;
-handle_push_insn();
-}
-break;
-case 106 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_SIMM8; op_width = 32;
-handle_push_insn();
-}
-break;
-case 80 :
-case 81 :
-case 82 :
-case 83 :
-case 84 :
-case 85 :
-case 86 :
-case 87 :
-opcode_reg = opcode - 80;
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_PR32; op_width = 32;
-handle_push_insn();
-}
-break;
-case 88 :
-case 89 :
-case 90 :
-case 91 :
-case 92 :
-case 93 :
-case 94 :
-case 95 :
-opcode_reg = opcode - 88;
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_PR32; op_width = 32;
-handle_pop_insn();
-}
-break;
-case 143 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-switch (opcode2) {
-default :
-switch (reg) {
-case 0 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_M32; op_width = 32;
-handle_pop_insn();
-}
-break;
-default :
-assert(0);
-}
-}
-break;
-case 11 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-next_pc = pc = intp->pc;
-mode = MODE_R16_RM16; op_width = 16;
-handle_or_insn();
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_R32_RM32; op_width = 32;
-handle_or_insn();
-}
-break;
-case 10 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_R8_RM8; op_width = 8;
-handle_or_insn();
-}
-break;
-case 9 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-next_pc = pc = intp->pc;
-mode = MODE_RM16_R16; op_width = 16;
-handle_or_insn();
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM32_R32; op_width = 32;
-handle_or_insn();
-}
-break;
-case 8 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM8_R8; op_width = 8;
-handle_or_insn();
-}
-break;
-case 13 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-imm16 = i386_decode_imm16(intp);
-next_pc = pc = intp->pc;
-mode = MODE_AX_IMM16; op_width = 16;
-handle_or_insn();
-} else {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_EAX_IMM32; op_width = 32;
-handle_or_insn();
-}
-break;
-case 12 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_AL_IMM8; op_width = 8;
-handle_or_insn();
-}
-break;
-case 144 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_NIL;
-handle_nop_insn();
-}
-break;
-case 199 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-switch (opcode2) {
-default :
-switch (reg) {
-case 0 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-imm16 = i386_decode_imm16(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM16_IMM16; op_width = 16;
-handle_mov_insn();
-} else {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM32_IMM32; op_width = 32;
-handle_mov_insn();
-}
-break;
-default :
-assert(0);
-}
-}
-break;
-case 198 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-switch (opcode2) {
-default :
-switch (reg) {
-case 0 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM8_IMM8; op_width = 8;
-handle_mov_insn();
-}
-break;
-default :
-assert(0);
-}
-}
-break;
-case 184 :
-case 185 :
-case 186 :
-case 187 :
-case 188 :
-case 189 :
-case 190 :
-case 191 :
-opcode_reg = opcode - 184;
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-imm16 = i386_decode_imm16(intp);
-next_pc = pc = intp->pc;
-mode = MODE_PR16_IMM16; op_width = 16;
-handle_mov_insn();
-} else {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_PR32_IMM32; op_width = 32;
-handle_mov_insn();
-}
-break;
-case 176 :
-case 177 :
-case 178 :
-case 179 :
-case 180 :
-case 181 :
-case 182 :
-case 183 :
-opcode_reg = opcode - 176;
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_PR8_IMM8; op_width = 8;
-handle_mov_insn();
-}
-break;
-case 163 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_MOFFS32_AX; op_width = 16;
-handle_mov_insn();
-} else {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_MOFFS32_EAX; op_width = 32;
-handle_mov_insn();
-}
-break;
-case 161 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_AX_MOFFS32; op_width = 16;
-handle_mov_insn();
-} else {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_EAX_MOFFS32; op_width = 32;
-handle_mov_insn();
-}
-break;
-case 139 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-next_pc = pc = intp->pc;
-mode = MODE_R16_RM16; op_width = 16;
-handle_mov_insn();
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_R32_RM32; op_width = 32;
-handle_mov_insn();
-}
-break;
-case 138 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_R8_RM8; op_width = 8;
-handle_mov_insn();
-}
-break;
-case 137 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-next_pc = pc = intp->pc;
-mode = MODE_RM16_R16; op_width = 16;
-handle_mov_insn();
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM32_R32; op_width = 32;
-handle_mov_insn();
-}
-break;
-case 136 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM8_R8; op_width = 8;
-handle_mov_insn();
-}
-break;
-case 141 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_R32_RM32; op_width = 32;
-handle_lea_insn();
-}
-break;
-case 121 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_SIMM8; op_width = 32;
-handle_jns_insn();
-}
-break;
-case 117 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_SIMM8; op_width = 32;
-handle_jne_insn();
-}
-break;
-case 233 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_IMM32; op_width = 32;
-handle_jmp_insn();
-}
-break;
-case 235 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_SIMM8; op_width = 32;
-handle_jmp_insn();
-}
-break;
-case 126 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_SIMM8; op_width = 32;
-handle_jle_insn();
-}
-break;
-case 124 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_SIMM8; op_width = 32;
-handle_jl_insn();
-}
-break;
-case 125 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_SIMM8; op_width = 32;
-handle_jge_insn();
-}
-break;
-case 127 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_SIMM8; op_width = 32;
-handle_jg_insn();
-}
-break;
-case 116 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_SIMM8; op_width = 32;
-handle_je_insn();
-}
-break;
-case 118 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_SIMM8; op_width = 32;
-handle_jbe_insn();
-}
-break;
-case 114 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_SIMM8; op_width = 32;
-handle_jb_insn();
-}
-break;
-case 115 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_SIMM8; op_width = 32;
-handle_jae_insn();
-}
-break;
-case 119 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_SIMM8; op_width = 32;
-handle_ja_insn();
-}
-break;
-case 205 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_IMM8; op_width = 8;
-handle_int_insn();
-}
-break;
-case 64 :
-case 65 :
-case 66 :
-case 67 :
-case 68 :
-case 69 :
-case 70 :
-case 71 :
-opcode_reg = opcode - 64;
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-next_pc = pc = intp->pc;
-mode = MODE_PR16; op_width = 16;
-handle_inc_insn();
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_PR32; op_width = 32;
-handle_inc_insn();
-}
-break;
-case 105 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM32_IMM32; op_width = 32;
-handle_imul_insn();
-}
-break;
-case 15 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-switch (opcode2) {
-case 149 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM8; op_width = 8;
-handle_setne_insn();
-}
-break;
-case 158 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM8; op_width = 8;
-handle_setle_insn();
-}
-break;
-case 156 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM8; op_width = 8;
-handle_setl_insn();
-}
-break;
-case 159 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM8; op_width = 8;
-handle_setg_insn();
-}
-break;
-case 148 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM8; op_width = 8;
-handle_sete_insn();
-}
-break;
-case 182 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-next_pc = pc = intp->pc;
-mode = MODE_R16_RM8; op_width = 16;
-handle_movzx_insn();
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_R32_RM8; op_width = 32;
-handle_movzx_insn();
-}
-break;
-case 190 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-next_pc = pc = intp->pc;
-mode = MODE_R16_RM8; op_width = 16;
-handle_movsx_insn();
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_R32_RM8; op_width = 32;
-handle_movsx_insn();
-}
-break;
-case 137 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_IMM32; op_width = 32;
-handle_jns_insn();
-}
-break;
-case 133 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_IMM32; op_width = 32;
-handle_jne_insn();
-}
-break;
-case 142 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_IMM32; op_width = 32;
-handle_jle_insn();
-}
-break;
-case 140 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_IMM32; op_width = 32;
-handle_jl_insn();
-}
-break;
-case 141 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_IMM32; op_width = 32;
-handle_jge_insn();
-}
-break;
-case 143 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_IMM32; op_width = 32;
-handle_jg_insn();
-}
-break;
-case 132 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_IMM32; op_width = 32;
-handle_je_insn();
-}
-break;
-case 134 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_IMM32; op_width = 32;
-handle_jbe_insn();
-}
-break;
-case 130 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_IMM32; op_width = 32;
-handle_jb_insn();
-}
-break;
-case 131 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_IMM32; op_width = 32;
-handle_jae_insn();
-}
-break;
-case 135 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_IMM32; op_width = 32;
-handle_ja_insn();
-}
-break;
-case 175 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_R32_RM32; op_width = 32;
-handle_imul_insn();
-}
-break;
-default :
-switch (reg) {
-default :
-assert(0);
-}
-}
-break;
-case 217 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-switch (opcode2) {
-case 192 :
-case 193 :
-case 194 :
-case 195 :
-case 196 :
-case 197 :
-case 198 :
-case 199 :
-opcode_reg = opcode2 - 192;
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_PST; op_width = 3;
-handle_fld_insn();
-}
-break;
-default :
-switch (reg) {
-case 7 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_M16_NOPREFIX; op_width = 16;
-handle_fstcw_insn();
-}
-break;
-case 5 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_M16_NOPREFIX; op_width = 16;
-handle_fldcw_insn();
-}
-break;
-default :
-assert(0);
-}
-}
-break;
-case 221 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-switch (opcode2) {
-case 216 :
-case 217 :
-case 218 :
-case 219 :
-case 220 :
-case 221 :
-case 222 :
-case 223 :
-opcode_reg = opcode2 - 216;
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_PST; op_width = 3;
-handle_fstp_insn();
-}
-break;
-default :
-switch (reg) {
-case 3 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_M64; op_width = 64;
-handle_fstp_insn();
-}
-break;
-case 0 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_M64; op_width = 64;
-handle_fld_insn();
-}
-break;
-default :
-assert(0);
-}
-}
-break;
-case 219 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-switch (opcode2) {
-default :
-switch (reg) {
-case 0 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_M32; op_width = 32;
-handle_fild_insn();
-}
-break;
-default :
-assert(0);
-}
-}
-break;
-case 223 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-switch (opcode2) {
-case 224 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_NIL;
-handle_fnstsw_insn();
-}
-break;
-default :
-switch (reg) {
-case 0 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_M16_NOPREFIX; op_width = 16;
-handle_fild_insn();
-}
-break;
-default :
-assert(0);
-}
-}
-break;
-case 218 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-switch (opcode2) {
-default :
-switch (reg) {
-case 7 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_M32; op_width = 32;
-handle_fidivr_insn();
-}
-break;
-default :
-assert(0);
-}
-}
-break;
-case 216 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-switch (opcode2) {
-case 217 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_NIL;
-handle_fcomp_insn();
-}
-break;
-case 208 :
-case 209 :
-case 210 :
-case 211 :
-case 212 :
-case 213 :
-case 214 :
-case 215 :
-opcode_reg = opcode2 - 208;
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_PST; op_width = 3;
-handle_fcom_insn();
-}
-break;
-default :
-switch (reg) {
-default :
-assert(0);
-}
-}
-break;
-case 220 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-switch (opcode2) {
-default :
-switch (reg) {
-case 2 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_M64; op_width = 64;
-handle_fcom_insn();
-}
-break;
-case 0 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_M64; op_width = 64;
-handle_fadd_insn();
-}
-break;
-default :
-assert(0);
-}
-}
-break;
-case 247 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-switch (opcode2) {
-default :
-switch (reg) {
-case 0 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-imm16 = i386_decode_imm16(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM16_IMM16; op_width = 16;
-handle_test_insn();
-} else {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM32_IMM32; op_width = 32;
-handle_test_insn();
-}
-break;
-case 2 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-next_pc = pc = intp->pc;
-mode = MODE_RM16; op_width = 16;
-handle_not_insn();
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM32; op_width = 32;
-handle_not_insn();
-}
-break;
-case 3 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-next_pc = pc = intp->pc;
-mode = MODE_RM16; op_width = 16;
-handle_neg_insn();
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM32; op_width = 32;
-handle_neg_insn();
-}
-break;
-case 4 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM32; op_width = 32;
-handle_mul_insn();
-}
-break;
-case 5 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM32; op_width = 32;
-handle_imul_insn();
-}
-break;
-case 7 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM32; op_width = 32;
-handle_idiv_insn();
-}
-break;
-case 6 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM32; op_width = 32;
-handle_div_insn();
-}
-break;
-default :
-assert(0);
-}
-}
-break;
-case 246 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-switch (opcode2) {
-default :
-switch (reg) {
-case 0 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM8_IMM8; op_width = 8;
-handle_test_insn();
-}
-break;
-case 2 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM8; op_width = 8;
-handle_not_insn();
-}
-break;
-case 3 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM8; op_width = 8;
-handle_neg_insn();
-}
-break;
-case 4 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM8; op_width = 8;
-handle_mul_insn();
-}
-break;
-case 5 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM8; op_width = 8;
-handle_imul_insn();
-}
-break;
-case 7 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM8; op_width = 8;
-handle_idiv_insn();
-}
-break;
-case 6 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM8; op_width = 8;
-handle_div_insn();
-}
-break;
-default :
-assert(0);
-}
-}
-break;
-case 72 :
-case 73 :
-case 74 :
-case 75 :
-case 76 :
-case 77 :
-case 78 :
-case 79 :
-opcode_reg = opcode - 72;
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-next_pc = pc = intp->pc;
-mode = MODE_PR16; op_width = 16;
-handle_dec_insn();
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_PR32; op_width = 32;
-handle_dec_insn();
-}
-break;
-case 254 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-switch (opcode2) {
-default :
-switch (reg) {
-case 0 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM8; op_width = 8;
-handle_inc_insn();
-}
-break;
-case 1 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM8; op_width = 8;
-handle_dec_insn();
-}
-break;
-default :
-assert(0);
-}
-}
-break;
-case 59 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-next_pc = pc = intp->pc;
-mode = MODE_R16_RM16; op_width = 16;
-handle_cmp_insn();
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_R32_RM32; op_width = 32;
-handle_cmp_insn();
-}
-break;
-case 58 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_R8_RM8; op_width = 8;
-handle_cmp_insn();
-}
-break;
-case 57 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-next_pc = pc = intp->pc;
-mode = MODE_RM16_R16; op_width = 16;
-handle_cmp_insn();
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM32_R32; op_width = 32;
-handle_cmp_insn();
-}
-break;
-case 56 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM8_R8; op_width = 8;
-handle_cmp_insn();
-}
-break;
-case 61 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-imm16 = i386_decode_imm16(intp);
-next_pc = pc = intp->pc;
-mode = MODE_AX_IMM16; op_width = 16;
-handle_cmp_insn();
-} else {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_EAX_IMM32; op_width = 32;
-handle_cmp_insn();
-}
-break;
-case 60 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_AL_IMM8; op_width = 8;
-handle_cmp_insn();
-}
-break;
-case 252 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_NIL;
-handle_cld_insn();
-}
-break;
-case 153 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_NIL;
-handle_cdq_insn();
-}
-break;
-case 255 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-switch (opcode2) {
-default :
-switch (reg) {
-case 6 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM32; op_width = 32;
-handle_push_insn();
-}
-break;
-case 4 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM32; op_width = 32;
-handle_jmp_insn();
-}
-break;
-case 0 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-next_pc = pc = intp->pc;
-mode = MODE_RM16; op_width = 16;
-handle_inc_insn();
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM32; op_width = 32;
-handle_inc_insn();
-}
-break;
-case 1 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-next_pc = pc = intp->pc;
-mode = MODE_RM16; op_width = 16;
-handle_dec_insn();
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM32; op_width = 32;
-handle_dec_insn();
-}
-break;
-case 2 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM32; op_width = 32;
-handle_call_insn();
-}
-break;
-default :
-assert(0);
-}
-}
-break;
-case 232 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_IMM32; op_width = 32;
-handle_call_insn();
-}
-break;
-case 35 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-next_pc = pc = intp->pc;
-mode = MODE_R16_RM16; op_width = 16;
-handle_and_insn();
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_R32_RM32; op_width = 32;
-handle_and_insn();
-}
-break;
-case 34 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_R8_RM8; op_width = 8;
-handle_and_insn();
-}
-break;
-case 33 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-next_pc = pc = intp->pc;
-mode = MODE_RM16_R16; op_width = 16;
-handle_and_insn();
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM32_R32; op_width = 32;
-handle_and_insn();
-}
-break;
-case 32 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM8_R8; op_width = 8;
-handle_and_insn();
-}
-break;
-case 37 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-imm16 = i386_decode_imm16(intp);
-next_pc = pc = intp->pc;
-mode = MODE_AX_IMM16; op_width = 16;
-handle_and_insn();
-} else {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_EAX_IMM32; op_width = 32;
-handle_and_insn();
-}
-break;
-case 36 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_AL_IMM8; op_width = 8;
-handle_and_insn();
-}
-break;
-case 19 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-next_pc = pc = intp->pc;
-mode = MODE_R16_RM16; op_width = 16;
-handle_adc_insn();
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_R32_RM32; op_width = 32;
-handle_adc_insn();
-}
-break;
-case 18 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_R8_RM8; op_width = 8;
-handle_adc_insn();
-}
-break;
-case 17 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-next_pc = pc = intp->pc;
-mode = MODE_RM16_R16; op_width = 16;
-handle_adc_insn();
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM32_R32; op_width = 32;
-handle_adc_insn();
-}
-break;
-case 16 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM8_R8; op_width = 8;
-handle_adc_insn();
-}
-break;
-case 21 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-imm16 = i386_decode_imm16(intp);
-next_pc = pc = intp->pc;
-mode = MODE_AX_IMM16; op_width = 16;
-handle_adc_insn();
-} else {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_EAX_IMM32; op_width = 32;
-handle_adc_insn();
-}
-break;
-case 20 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_AL_IMM8; op_width = 8;
-handle_adc_insn();
-}
-break;
-case 3 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-next_pc = pc = intp->pc;
-mode = MODE_R16_RM16; op_width = 16;
-handle_add_insn();
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_R32_RM32; op_width = 32;
-handle_add_insn();
-}
-break;
-case 2 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_R8_RM8; op_width = 8;
-handle_add_insn();
-}
-break;
-case 1 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-next_pc = pc = intp->pc;
-mode = MODE_RM16_R16; op_width = 16;
-handle_add_insn();
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM32_R32; op_width = 32;
-handle_add_insn();
-}
-break;
-case 0 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-next_pc = pc = intp->pc;
-mode = MODE_RM8_R8; op_width = 8;
-handle_add_insn();
-}
-break;
-case 131 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-switch (opcode2) {
-default :
-switch (reg) {
-case 6 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM16_SIMM8; op_width = 16;
-handle_xor_insn();
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM32_SIMM8; op_width = 32;
-handle_xor_insn();
-}
-break;
-case 5 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM16_SIMM8; op_width = 16;
-handle_sub_insn();
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM32_SIMM8; op_width = 32;
-handle_sub_insn();
-}
-break;
-case 1 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM16_SIMM8; op_width = 16;
-handle_or_insn();
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM32_SIMM8; op_width = 32;
-handle_or_insn();
-}
-break;
-case 7 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM16_SIMM8; op_width = 16;
-handle_cmp_insn();
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM32_SIMM8; op_width = 32;
-handle_cmp_insn();
-}
-break;
-case 4 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM16_SIMM8; op_width = 16;
-handle_and_insn();
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM32_SIMM8; op_width = 32;
-handle_and_insn();
-}
-break;
-case 2 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM16_SIMM8; op_width = 16;
-handle_adc_insn();
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM32_SIMM8; op_width = 32;
-handle_adc_insn();
-}
-break;
-case 0 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM16_SIMM8; op_width = 16;
-handle_add_insn();
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM32_SIMM8; op_width = 32;
-handle_add_insn();
-}
-break;
-default :
-assert(0);
-}
-}
-break;
-case 129 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-switch (opcode2) {
-default :
-switch (reg) {
-case 6 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-imm16 = i386_decode_imm16(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM16_IMM16; op_width = 16;
-handle_xor_insn();
-} else {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM32_IMM32; op_width = 32;
-handle_xor_insn();
-}
-break;
-case 5 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-imm16 = i386_decode_imm16(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM16_IMM16; op_width = 16;
-handle_sub_insn();
-} else {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM32_IMM32; op_width = 32;
-handle_sub_insn();
-}
-break;
-case 1 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-imm16 = i386_decode_imm16(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM16_IMM16; op_width = 16;
-handle_or_insn();
-} else {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM32_IMM32; op_width = 32;
-handle_or_insn();
-}
-break;
-case 7 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-imm16 = i386_decode_imm16(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM16_IMM16; op_width = 16;
-handle_cmp_insn();
-} else {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM32_IMM32; op_width = 32;
-handle_cmp_insn();
-}
-break;
-case 4 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-imm16 = i386_decode_imm16(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM16_IMM16; op_width = 16;
-handle_and_insn();
-} else {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM32_IMM32; op_width = 32;
-handle_and_insn();
-}
-break;
-case 2 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-imm16 = i386_decode_imm16(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM16_IMM16; op_width = 16;
-handle_adc_insn();
-} else {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM32_IMM32; op_width = 32;
-handle_adc_insn();
-}
-break;
-case 0 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-imm16 = i386_decode_imm16(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM16_IMM16; op_width = 16;
-handle_add_insn();
-} else {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM32_IMM32; op_width = 32;
-handle_add_insn();
-}
-break;
-default :
-assert(0);
-}
-}
-break;
-case 128 :
-i386_decode_modrm(intp, &opcode2, &mod, &reg, &rm);
-switch (opcode2) {
-default :
-switch (reg) {
-case 6 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM8_IMM8; op_width = 8;
-handle_xor_insn();
-}
-break;
-case 5 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM8_IMM8; op_width = 8;
-handle_sub_insn();
-}
-break;
-case 1 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM8_IMM8; op_width = 8;
-handle_or_insn();
-}
-break;
-case 7 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM8_IMM8; op_width = 8;
-handle_cmp_insn();
-}
-break;
-case 4 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM8_IMM8; op_width = 8;
-handle_and_insn();
-}
-break;
-case 2 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM8_IMM8; op_width = 8;
-handle_adc_insn();
-}
-break;
-case 0 :
-i386_decode_sib(intp, opcode2, &sib_scale, &sib_index, &sib_base, &disp8, &disp32);
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_RM8_IMM8; op_width = 8;
-handle_add_insn();
-}
-break;
-default :
-assert(0);
-}
-}
-break;
-case 5 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-imm16 = i386_decode_imm16(intp);
-next_pc = pc = intp->pc;
-mode = MODE_AX_IMM16; op_width = 16;
-handle_add_insn();
-} else {
-imm32 = i386_decode_imm32(intp);
-next_pc = pc = intp->pc;
-mode = MODE_EAX_IMM32; op_width = 32;
-handle_add_insn();
-}
-break;
-case 4 :
-if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {
-assert(0);
-} else {
-imm8 = i386_decode_imm8(intp);
-next_pc = pc = intp->pc;
-mode = MODE_AL_IMM8; op_width = 8;
-handle_add_insn();
-}
-break;
-default:
-assert(0);
-}
-intp->pc = next_pc;
-}
+#define SKELETON_FUNC_NAME    compile_to_ppc_i386_insn
+#define SKELETON_FUNC_ARGS    , word_32 _flags_killed
+#ifdef COLLECT_STATS
+#define SKELETON_PRE_DECODE   ++num_translated_insns; flags_killed = _flags_killed; this_pc = intp->pc;
+#else
+#define SKELETON_PRE_DECODE   flags_killed = _flags_killed; this_pc = intp->pc;
+#endif
+
+#include "i386_skeleton.c"

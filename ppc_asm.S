@@ -137,6 +137,21 @@ direct_dispatcher:
 	.align	2	
 	.globl	indirect_dispatcher
 indirect_dispatcher:
+#ifdef COMPILER
+	lis	8,fragment_hash_table@ha
+	la	8,fragment_hash_table@l(8)
+	rlwinm	9,3,2,12,27
+	add	9,8,9
+	lwz	8,8(9)		# r8 = native_addr
+	cmpwi	1,8,0
+	mtlr	8
+	beq	1,call_provide_fragment
+	lwz	7,0(9)		# r7 = foreign_addr
+	cmpw	1,3,7
+	beqlr	1
+#endif
+
+call_provide_fragment:
 	STORE_NATIVE_HOST_REGISTERS
 	bl	provide_fragment
 	# r3 now holds the native target address
@@ -172,32 +187,66 @@ c_stub:
 	blr
 
 
+	# r3 holds the address of the instruction to be interpreted.
 	.align	2
-	.globl	repne_scasb_entry
-repne_scasb_entry:
-	cmpwi	ecx,0
-	beqlr			# finish if ecx == 0
-	andi.	8,eax,0xff	# 8 = al
-	addi	edi,edi,-1
-repne_scasb_loop:
-	lbzu	9,1(edi)	# 9 = mem(edi)
-	addic.	ecx,ecx,-1	# --ecx	,  ecx == 0 ?
-	cmpw	1,9,8		# tmp == al ?
-	cror	2,6,2		# tmp == al || ecx == 0
-	bne	repne_scasb_loop	# repeat unless tmp == al || ecx != 0
-	addi	edi,edi,1
-	slwi	9,9,24
-	slwi	8,8,24
-	subf.	7,9,8		# set sf,zf
-	neg	8,8
-	addc	7,8,9		# set cf
+	.globl	interpreter_handle
+interpreter_handle:
+	mflr	30
+	STORE_NATIVE_HOST_REGISTERS
+	bl	handle_insn_in_interpreter
+
+	li	0,0
+	LOAD_NATIVE_HOST_REGISTERS
+	mtlr	30
 	blr
 
 
 	.align	2
+	.globl	repe_cmpsb_entry
+repe_cmpsb_entry:
+	cmpwi	ecx,0
+	beqlr			# finish if ecx == 0
+	addi	esi,esi,-1
+	addi	edi,edi,-1
+repe_cmpsb_loop:
+	lbzu	8,1(esi)	# 8 = mem(++esi)
+	lbzu	9,1(edi)	# 9 = mem(++edi)
+	addic.	ecx,ecx,-1	# --ecx, ecx == 0
+	cmpw	1,8,9		# src == dst
+	crorc	2,2,6		# ecx == 0 || src == dst
+	bne	repe_cmpsb_loop	# repeat unless ecx == 0 || src == dst
+	addi	esi,esi,1
+	addi	edi,edi,1
+	slwi	8,8,24
+	slwi	9,9,24
+	nor	7,9,9		# calc cf
+	addc	7,8,7		# calc cf
+	subfo.	7,8,9		# calc sf,zf,of
+	blr
+
+
+	.align	2
+	.globl	rep_movsb_entry
+rep_movsb_entry:
+	cmpwi	ecx,0
+	beqlr			# finish if ecx == 0
+	mtctr	ecx
+	addi	esi,esi,-1
+	addi	edi,edi,-1
+rep_movsb_loop:
+	lbzu	9,1(esi)
+	stbu	9,1(edi)
+	bdnz	rep_movsb_loop
+	li	ecx,0
+	addi	esi,esi,1
+	addi	edi,edi,1
+	blr
+
+	
+	.align	2
 	.globl	rep_movsd_entry
 rep_movsd_entry:
-	cmpwi	ecx,8
+	cmpwi	ecx,0
 	beqlr			# finish if ecx == 0
 	mtctr	ecx
 	addi	esi,esi,-4
@@ -208,6 +257,58 @@ rep_movsd_loop:
 	bdnz	rep_movsd_loop
 	li	ecx,0
 	addi	esi,esi,4
+	addi	edi,edi,4
+	blr
+
+
+	.align	2
+	.globl	repne_scasb_entry
+repne_scasb_entry:
+	cmpwi	ecx,0
+	beqlr			# finish if ecx == 0
+	andi.	8,eax,0xff	# 8 = al
+	addi	edi,edi,-1
+repne_scasb_loop:
+	lbzu	9,1(edi)	# 9 = mem(++edi)
+	addic.	ecx,ecx,-1	# --ecx	,  ecx == 0 ?
+	cmpw	1,9,8		# tmp == al ?
+	cror	2,6,2		# tmp == al || ecx == 0
+	bne	repne_scasb_loop	# repeat unless tmp == al || ecx == 0
+	addi	edi,edi,1
+	slwi	9,9,24
+	slwi	8,8,24
+	subf.	7,9,8		# set sf,zf
+	neg	8,8
+	addc	7,8,9		# set cf
+	blr
+
+
+	.align	2
+	.globl	rep_stosb_entry
+rep_stosb_entry:
+	cmpwi	ecx,0
+	beqlr			# finish if ecx == 0
+	mtctr	ecx		# repeat ecx times
+	addi	edi,edi,-1
+rep_stosb_loop:
+	stbu	eax,1(edi)
+	bdnz	rep_stosb_loop
+	li	ecx,0
+	addi	edi,edi,1
+	blr
+
+
+	.align	2
+	.globl	rep_stosd_entry
+rep_stosd_entry:
+	cmpwi	ecx,0
+	beqlr			# finish if ecx == 0
+	mtctr	ecx		# repeat ecx times
+	addi	edi,edi,-4
+rep_stosd_loop:
+	stwu	eax,4(edi)
+	bdnz	rep_stosd_loop
+	li	ecx,0
 	addi	edi,edi,4
 	blr
 

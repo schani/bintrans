@@ -52,7 +52,12 @@ compute_liveness (interpreter_t *intp, word_32 addr, word_32 *addrs,
 
 	jump_analyze_i386_insn(intp, &num_targets, targets, &can_fall_through, &can_jump_indirectly);
 
+#ifdef NOP_UNCONDITIONAL_BRANCHES
+	if (can_jump_indirectly
+	    || (can_fall_through && num_targets > 0))
+#else
 	if (num_targets > 0 || can_jump_indirectly || !can_fall_through)
+#endif
 	    break;
     }
 

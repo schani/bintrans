@@ -34,7 +34,8 @@ DEFINES = -DUSE_HAND_TRANSLATOR -DCOLLECT_STATS -DCOLLECT_LIVENESS -DLIVENESS_DE
 # 
 #  -DFAST_PPC_FPR
 #  -DCOLLECT_PPC_FPR_STATS
-#DEFINES = -DUSE_HAND_TRANSLATOR -DDUMP_CODE
+DEFINES = -DUSE_HAND_TRANSLATOR -DCOLLECT_STATS
+#-DDUMP_CODE
 #DEFINES =
 #DEFINES = -O -DPROFILE_LOOPS -DPROFILE_FRAGMENTS -DCOLLECT_STATS
 #DEFINES = -DEMULATED_MEM
@@ -118,10 +119,10 @@ count_liveness : count_liveness.c bintrans.h compiler.h
 ppc.o : ppc.c ppc_interpreter.c ppc_disassembler.c alpha_types.h bintrans.h ppc_jump_analyzer.c
 	$(DIET) gcc $(CFLAGS) -Wall -g -c ppc.c
 
-i386.o : i386.c i386_interpreter.c i386_disassembler.c i386_livenesser.c bintrans.h
+i386.o : i386.c i386_interpreter.c i386_disassembler.c i386_livenesser.c i386_jump_analyzer.c bintrans.h
 	$(DIET) gcc $(CFLAGS) -Wall -g -c i386.c
 
-compiler.o : compiler.c alpha_composer.h ppc_to_alpha_compiler.c i386_compiler.c i386_to_ppc_compiler.c alpha_disassembler.c alpha_types.h bintrans.h fragment_hash.h compiler.h
+compiler.o : compiler.c alpha_composer.h ppc_to_alpha_compiler.c ppc_jump_analyzer.c i386_compiler.c i386_to_ppc_compiler.c i386_skeleton.c alpha_disassembler.c alpha_types.h bintrans.h fragment_hash.h compiler.h
 	$(DIET) gcc $(CFLAGS) -Wall -g -c compiler.c
 
 mm.o : mm.c bintrans.h alpha_types.h ppc_defines.h

@@ -472,7 +472,8 @@ emulated_mem_set_16 (interpreter_t *intp, word_32 addr, word_16 value)
 void
 emulated_mem_set_64 (interpreter_t *intp, word_32 addr, word_64 value)
 {
-    assert((addr & PPC_PAGE_MASK) + 8 <= PPC_PAGE_SIZE);
+    if (!((addr & PPC_PAGE_MASK) + 8 <= PPC_PAGE_SIZE))
+	printf("cross-page write 64 access at 0x%08x (pc=0x%08x)\n", addr, intp->pc);
 
 #ifdef EMU_BIG_ENDIAN
     emulated_mem_set_32(intp, addr, value >> 32);
@@ -601,7 +602,8 @@ emulated_mem_get_16 (interpreter_t *intp, word_32 addr)
 word_64
 emulated_mem_get_64 (interpreter_t *intp, word_32 addr)
 {
-    assert((addr & PPC_PAGE_MASK) + 8 <= PPC_PAGE_SIZE);
+    if (!((addr & PPC_PAGE_MASK) + 8 <= PPC_PAGE_SIZE))
+	printf("cross-page read 64 access at 0x%08x (pc=0x%08x)\n", addr, intp->pc);
 
 #ifdef EMU_BIG_ENDIAN
     return ((word_64)emulated_mem_get_32(intp, addr) << 32) | emulated_mem_get_32(intp, addr + 4);

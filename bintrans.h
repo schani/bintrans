@@ -55,8 +55,13 @@ void system_call_entry (void);
 void c_stub (void);
 void isync_entry (void);
 #ifdef ARCH_PPC
-void repne_scasb_entry (void);
+void interpreter_handle (void);
+void repe_cmpsb_entry (void);
+void rep_movsb_entry (void);
 void rep_movsd_entry (void);
+void repne_scasb_entry (void);
+void rep_stosb_entry (void);
+void rep_stosd_entry (void);
 #endif
 
 #define PAGE_READABLE         1
