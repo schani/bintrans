@@ -12,7 +12,6 @@
 	.globl	provide_fragment_and_patch
 	.globl	provide_fragment
 	.globl	constant_area
-	.globl	register_save_area
 	.globl	leading_zeros
 	.globl	handle_compiler_system_call
 
@@ -46,14 +45,13 @@ direct_dispatcher:
 	# v0 now holds the native target address
 
 	lda	pv,constant_area
-	lda	$6,register_save_area
 
 	jmp	$31,(v0)
 	.end	direct_dispatcher
 
 
 	# we enter here from the generated machine code.
-	# $7 holds the address of the jump target.  we call
+	# a0 holds the address of the jump target.  we call
 	# a c function which looks up the native target
 	# address.  if it isnt found, that function generates
 	# the code.  either way, it returns the address of
@@ -64,13 +62,11 @@ direct_dispatcher:
 indirect_dispatcher:
 	ldgp	gp,0(pv)
 
-	mov	$7,a0
 	jsr	ra,provide_fragment
 	ldgp	gp,0(ra)
 	# v0 now holds the native target address
 
 	lda	pv,constant_area
-	lda	$6,register_save_area
 
 	jmp	$31,(v0)
 	.end	indirect_dispatcher
@@ -92,7 +88,6 @@ system_call_entry:
 	ldgp	gp,0(ra)
 
 	lda	pv,constant_area
-	lda	$6,register_save_area
 
 	ldq	ra,0(sp)
 	lda	sp,16(sp)
@@ -110,7 +105,6 @@ start_execution:
 	ldgp	gp,0(pv)
 
 	lda	pv,constant_area
-	lda	$6,register_save_area
 
 	jmp	$31,(a0)
 	.end	start_execution
@@ -119,6 +113,7 @@ start_execution:
 	# passed in $0.  arguments to the c function are passed in the
 	# standard argument registers.  the return value is passed back
 	# in $0.
+	# FIXME: we have to save a lot more registers here!
 	.align	4
 	.globl	c_stub
 	.ent	c_stub
@@ -142,7 +137,6 @@ c_stub:
 	ldgp	gp,0(ra)
 
 	lda	pv,constant_area
-	lda	$6,register_save_area
 
 	ldq	ra,0(sp)
 	ldq	$1,8(sp)
