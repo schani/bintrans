@@ -11,6 +11,7 @@
 #include <termios.h>
 #include <sys/types.h>
 #include <ctype.h>
+#include <asm/param.h>
 
 /* Symbolic values for the entries in the auxiliary table
    put on the initial stack */
@@ -39,6 +40,14 @@
 #define SEGMENT_EXECUTABLE 4
 #define SEGMENT_MMAPPED    8
 
+#define DIRECT_MEMORY
+
+#ifdef DIRECT_MEMORY
+#define MEM_BASE  0x000000000
+
+#define REAL_ADDR(a)        ((addr_t)(a) + MEM_BASE)
+#endif
+
 #define STACK_TOP  0x80000000
 #define PAGE_SIZE        4096
 #define STACK_SIZE        128
@@ -56,12 +65,19 @@ typedef unsigned char byte;
 typedef signed int sword_32;
 typedef signed long sword_64;
 
+typedef unsigned long addr_t;
+
 typedef struct
 {
     word addr;
     word len;
     int flags;
     byte *mem;
+#ifdef DIRECT_MEMORY
+    word real_addr;
+    word real_len;
+    byte *real_mem;
+#endif
 } segment_t;
 
 typedef struct _breakpoint_t
@@ -81,6 +97,67 @@ word mmap_addr = MMAP_START;
 
 breakpoint_t *breakpoints = 0;
 
+void
+align_segment (word addr, word len, word *real_addr, word *real_len)
+{
+    word aligned_addr = addr & ~(EXEC_PAGESIZE - 1);
+    word min_len = len + (addr - aligned_addr);
+    word aligned_len;
+
+    if ((min_len & (EXEC_PAGESIZE - 1)) == 0)
+	aligned_len = min_len;
+    else
+	aligned_len = (min_len | (EXEC_PAGESIZE - 1)) + 1;
+
+    *real_addr = aligned_addr;
+    *real_len = aligned_len;
+
+    assert((aligned_addr & (EXEC_PAGESIZE - 1)) == 0);
+    assert((aligned_len & (EXEC_PAGESIZE - 1)) == 0);
+}
+
+segment_t*
+setup_segment (word addr, word len, int flags)
+{
+    segment_t *segment = &segments[num_segments];
+
+    assert(num_segments < MAX_SEGMENTS);
+
+    segment->addr = addr;
+    segment->len = len;
+    segment->flags = flags;
+#ifdef DIRECT_MEMORY
+    align_segment(addr, len, &segment->real_addr, &segment->real_len);
+    segment->real_mem = (byte*)mmap((void*)REAL_ADDR(segment->real_addr), segment->real_len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    assert((addr_t)segment->real_mem == REAL_ADDR(segment->real_addr));
+    segment->mem = segment->real_mem + (addr - segment->real_addr);
+#else
+    segment->mem = (byte*)malloc(len);
+    assert(segment->mem != 0);
+#endif
+
+    ++num_segments;
+
+    return segment;
+}
+
+#ifdef DIRECT_MEMORY
+void
+protect_segment (segment_t *segment)
+{
+    int prot = 0;
+    int result;
+
+    if (segment->flags & SEGMENT_READABLE)
+	prot |= PROT_READ;
+    if (segment->flags & SEGMENT_WRITEABLE)
+	prot |= PROT_WRITE;
+
+    result = mprotect((void*)REAL_ADDR(segment->real_addr), segment->real_len, prot);
+    assert(result == 0);
+}
+#endif
+
 segment_t*
 find_segment (word addr)
 {
@@ -99,6 +176,12 @@ segfault (word addr)
     halt = 1;
 }
 
+#ifdef DIRECT_MEMORY
+#define mem_set(addr,value)     (*(word*)REAL_ADDR(addr) = (value))
+#define mem_set_8(addr,value)   (*(byte*)REAL_ADDR((addr) ^ 3) = (value))
+#define mem_set_16(addr,value)  (*(word_16*)REAL_ADDR((addr) ^ 2) = (value))
+#define mem_set_64(addr,value)  ({ word a = (addr); word_64 v = (value); mem_set(a, v >> 32); mem_set(a + 4, v & 0xffffffff); })
+#else
 void
 mem_set (word addr, word value)
 {
@@ -116,8 +199,6 @@ mem_set (word addr, word value)
 	*(word*)(seg->mem + (addr - seg->addr)) = value;
     }
 }
-
-#define mem_set_32 mem_set
 
 void
 mem_set_8 (word addr, word value)
@@ -154,6 +235,9 @@ mem_set_64 (word addr, word_64 value)
     mem_set(addr, value >> 32);
     mem_set(addr + 4, value & 0xffffffff);
 }
+#endif
+
+#define mem_set_32 mem_set
 
 void
 mem_copy (word addr, byte *buf, word len)
@@ -167,6 +251,12 @@ mem_copy (word addr, byte *buf, word len)
 	mem_set(addr + w, *(word*)(buf + w));
 }
 
+#ifdef DIRECT_MEMORY
+#define mem_get(addr)          (*(word*)REAL_ADDR(addr))
+#define mem_get_8(addr)        (*(byte*)REAL_ADDR((addr) ^ 3))
+#define mem_get_16(addr)       (*(word_16*)REAL_ADDR((addr) ^ 2))
+#define mem_get_64(addr)       ({ word a = (addr); ((word_64)mem_get(a) << 32) | mem_get(a + 4); })
+#else
 word
 mem_get (word addr)
 {
@@ -189,8 +279,6 @@ mem_get (word addr)
 	return *(word*)(seg->mem + (addr - seg->addr));
     }
 }
-
-#define mem_get_32 mem_get
 
 word
 mem_get_8 (word addr)
@@ -229,6 +317,9 @@ mem_get_64 (word addr)
 {
     return ((word_64)mem_get(addr) << 32) | mem_get(addr + 4);
 }
+#endif
+
+#define mem_get_32 mem_get
 
 word
 rotl (word x, word i)
@@ -346,18 +437,38 @@ void handle_system_call (void);
 segment_t*
 mmap_anonymous_segment (word len, int prot)
 {
-    byte *mem = (byte*)malloc(len);
+#ifdef DIRECT_MEMORY
+    word real_addr, real_len;
+#endif
+    byte *mem;
     segment_t *segment;
 
+#ifndef DIRECT_MEMORY
+    mem = (byte*)malloc(len);
     if (mem == 0)
 	return 0;
+#endif
 
     assert(num_segments < MAX_SEGMENTS);
 
     segment = &segments[num_segments++];
 
     segment->addr = mmap_addr;
+
+#ifdef DIRECT_MEMORY
+    align_segment(mmap_addr, len, &real_addr, &real_len);
+    assert(mmap_addr == real_addr);
+    mem = (byte*)mmap((void*)REAL_ADDR(real_addr), real_len, prot, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    assert((addr_t)mem == REAL_ADDR(real_addr));
+
+    segment->real_addr = real_addr;
+    segment->real_len = real_len;
+    segment->real_mem = mem;
+
+    mmap_addr += real_len;
+#else
     mmap_addr += len;
+#endif
 
     segment->len = len;
 
@@ -423,6 +534,32 @@ handle_system_call (void)
 		regs_GPR[3] = data_segment->addr + data_segment->len;
 	    else
 	    {
+#ifdef DIRECT_MEMORY
+		assert(regs_GPR[3] > data_segment->addr + data_segment->len);
+
+		if (data_segment->real_addr + data_segment->real_len < regs_GPR[3])
+		{
+		    word real_addr, real_len;
+		    int prot = 0;
+		    void *p;
+
+		    align_segment(data_segment->real_addr, regs_GPR[3] - data_segment->real_addr, &real_addr, &real_len);
+		    assert(real_addr == data_segment->real_addr);
+
+		    if (data_segment->flags & SEGMENT_READABLE)
+			prot |= PROT_READ;
+		    if (data_segment->flags & SEGMENT_WRITEABLE)
+			prot |= PROT_WRITE;
+
+		    p = mmap((void*)REAL_ADDR(data_segment->real_addr + data_segment->real_len), real_len - data_segment->real_len,
+			     prot, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		    assert((addr_t)p == REAL_ADDR(data_segment->real_addr + data_segment->real_len));
+
+		    data_segment->real_len = real_len;
+		}
+		
+		data_segment->len = regs_GPR[3] - data_segment->addr;
+#else
 		byte *new_mem;
 		word new_len;
 
@@ -437,6 +574,7 @@ handle_system_call (void)
 
 		data_segment->mem = new_mem;
 		data_segment->len = new_len;
+#endif
 
 		/* gpr3 untouched */
 	    }
@@ -517,7 +655,16 @@ handle_system_call (void)
 		    segments[i].addr = 0;
 		    segments[i].len = 0;
 		    segments[i].flags = 0;
+#ifdef DIRECT_MEMORY
+		    {
+			int result;
+
+			result = munmap((void*)REAL_ADDR(segments[i].real_addr), segments[i].real_len);
+			assert(result == 0);
+		    }
+#else
 		    free(segments[i].mem);
+#endif
 		    regs_GPR[3] = 0;
 		}
 		else
@@ -993,6 +1140,7 @@ main (int argc, char *argv[])
     size_t num_read;
     int i;
     char **ppc_argv;
+    segment_t *stack_segment;
 
     assert(argc >= 2);
 
@@ -1038,37 +1186,42 @@ main (int argc, char *argv[])
     for (i = 0; i < ehdr.e_phnum; ++i)
     {
 	word w;
+	int flags = 0;
+	segment_t *segment;
 
-	segments[i].addr = phdrs[i].p_vaddr;
-	segments[i].len = phdrs[i].p_memsz;
-	segments[i].flags = 0;
+	if (phdrs[i].p_type != PT_LOAD)
+	    continue;
+
 	if (phdrs[i].p_flags & PF_R)
-	    segments[i].flags |= SEGMENT_READABLE;
+	    flags |= SEGMENT_READABLE;
 	if (phdrs[i].p_flags & PF_W)
-	    segments[i].flags |= SEGMENT_WRITEABLE;
+	    flags |= SEGMENT_WRITEABLE;
 	if (phdrs[i].p_flags & PF_X)
-	    segments[i].flags |= SEGMENT_EXECUTABLE;
-	segments[i].mem = (byte*)malloc(segments[i].len);
-	memset(segments[i].mem, 0, segments[i].len);
+	    flags |= SEGMENT_EXECUTABLE;
+
+	segment = setup_segment(phdrs[i].p_vaddr, phdrs[i].p_memsz, flags);
+	assert(segment != 0);
+
+	memset(segment->mem, 0, segment->len);
 
 	fseek(file, phdrs[i].p_offset, SEEK_SET);
-	num_read = fread(segments[i].mem, 1, phdrs[i].p_filesz, file);
+	num_read = fread(segment->mem, 1, phdrs[i].p_filesz, file);
 	assert(num_read = phdrs[i].p_filesz);
 
-	for (w = 0; w < segments[i].len; w += 4)
-	    *(word*)(segments[i].mem + w) = ntohl(*(word*)(segments[i].mem + w));
+	for (w = 0; w < segment->len; w += 4)
+	    *(word*)(segment->mem + w) = ntohl(*(word*)(segment->mem + w));
+
+#ifdef DIRECT_MEMORY
+	protect_segment(segment);
+#endif
 
 	if (phdrs[i].p_type == PT_LOAD && phdrs[i].p_flags == (PF_W | PF_R))
-	    data_segment = &segments[i];
+	    data_segment = segment;
     }
 
-    segments[ehdr.e_phnum].addr = STACK_TOP - STACK_SIZE * PAGE_SIZE;
-    segments[ehdr.e_phnum].len = STACK_SIZE * PAGE_SIZE;
-    segments[ehdr.e_phnum].flags = SEGMENT_READABLE | SEGMENT_WRITEABLE;
-    segments[ehdr.e_phnum].mem = (byte*)malloc(STACK_SIZE * PAGE_SIZE);
-    memset(segments[ehdr.e_phnum].mem, 0, STACK_SIZE * PAGE_SIZE);
+    stack_segment = setup_segment(STACK_TOP - STACK_SIZE * PAGE_SIZE, STACK_SIZE * PAGE_SIZE, SEGMENT_READABLE | SEGMENT_WRITEABLE);
 
-    num_segments = ehdr.e_phnum + 1;
+    memset(stack_segment->mem, 0, STACK_SIZE * PAGE_SIZE);
 
     assert(data_segment != 0);
 
@@ -1098,7 +1251,7 @@ main (int argc, char *argv[])
 
     /* debug = 1; */
 
-#if 1
+#if 0
     debugger();
 #else
     for (;;)
