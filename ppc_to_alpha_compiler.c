@@ -130,11 +130,14 @@
 #endif
 
 #ifdef COLLECT_STATS
-#define GEN_CRF0_BIT()             ++num_generated_crf0_bits
-#define GEN_CRFX_BIT()             ++num_generated_crfx_bits
+#define GEN_CRF0_BITS(n)           num_generated_crf0_bits += n
+#define GEN_CRF0_BIT()             GEN_CRF0_BITS(1)
+#define GEN_CRFX_BITS(n)           num_generated_crfx_bits += n
+#define GEN_CRFX_BIT()             GEN_CRFX_BITS(1)
 #else
 #define GEN_CRF0_BIT()
 #define GEN_CRFX_BIT()
+#define GEN_CRFX_BITS(n)
 #endif
 
 void
@@ -1531,6 +1534,8 @@ gen_cmp_insn (reg_t ra_reg, reg_t rb_reg, int crfd, int is_unsigned, int with_im
 
 	unref_integer_reg(cr_reg);
 	free_tmp_integer_reg(crf_reg);
+
+	GEN_CRFX_BITS(4);
     }
 }
 
@@ -1684,6 +1689,8 @@ gen_crop_insn (word_32 insn, void (*emitter) (reg_t, reg_t, reg_t))
 	    emit(COMPOSE_AND_IMM(crfb_reg, 1, crfb_reg));
 
 	unref_integer_reg(crfb_reg);
+
+	GEN_CRF0_BIT();
     }
     else
     {
@@ -1705,6 +1712,8 @@ gen_crop_insn (word_32 insn, void (*emitter) (reg_t, reg_t, reg_t))
 	emit(COMPOSE_BIS(cr_reg, bit_a_reg, cr_reg));
 
 	unref_integer_reg(cr_reg);
+
+	GEN_CRFX_BIT();
     }
 
     if (FIELD_CRBB < 4)
@@ -2038,6 +2047,8 @@ handle_fcmpu_insn (word_32 insn, word_32 pc)
 	emit(COMPOSE_MOV(31, bit3_reg));
 
 	unref_integer_reg(bit3_reg);
+
+	GEN_CRF0_BITS(4);
     }
     else
     {
@@ -2084,6 +2095,8 @@ handle_fcmpu_insn (word_32 insn, word_32 pc)
 
 	unref_integer_reg(cr_reg);
 	free_tmp_integer_reg(crf_reg);
+
+	GEN_CRFX_BITS(4);
     }
 
     unref_float_reg(frb_reg);
@@ -3236,6 +3249,8 @@ handle_mcrf_insn (word_32 insn, word_32 pc)
 
 		free_tmp_integer_reg(field_reg);
 		unref_integer_reg(cr_reg);
+
+		GEN_CRFX_BITS(4);
 	    }
 	}
     }
@@ -3372,7 +3387,7 @@ handle_mtcrf_insn (word_32 insn, word_32 pc)
 	    }
     }
 
-    /* FIXME: we don't have to the all the following if FIELD_CRM ==
+    /* FIXME: we don't have to do all the following if FIELD_CRM ==
        0x80 */
 
     mask_reg = alloc_tmp_integer_reg();
@@ -3390,6 +3405,8 @@ handle_mtcrf_insn (word_32 insn, word_32 pc)
 
     free_tmp_integer_reg(mask_reg);
     unref_integer_reg(cr_reg);
+
+    GEN_CRFX_BITS(4);
 }
 
 static void
@@ -3439,6 +3456,8 @@ handle_mtfsb0_insn (word_32 insn, word_32 pc)
 
 	free_tmp_integer_reg(tmp_reg);
 	unref_integer_reg(cr_reg);
+
+	GEN_CRFX_BIT();
     }
 }
 

@@ -114,6 +114,8 @@
 #elif defined(COUNT_LOAD_STORES)
 #define LOAD_INSNS_COUNT           (NUM_REG_CONSTANTS + 56)
 #define STORE_INSNS_COUNT          (NUM_REG_CONSTANTS + 58)
+#define CRF0_INSNS_COUNT           (NUM_REG_CONSTANTS + 60)
+#define CRFX_INSNS_COUNT           (NUM_REG_CONSTANTS + 62)
 #endif
 #endif
 #elif defined(ARCH_PPC)
@@ -364,9 +366,12 @@ unsigned long num_translated_blocks = 0;
 unsigned long num_translated_traces = 0;
 unsigned long num_translated_insns = 0;
 unsigned long num_translated_trace_insns = 0;
-unsigned long num_load_store_reg_insns = 0;
+unsigned long num_load_reg_insns = 0;
+unsigned long num_store_reg_insns = 0;
 unsigned long num_generated_crf0_bits = 0;
 unsigned long num_generated_crfx_bits = 0;
+unsigned long num_generated_crf0_bits_save;
+unsigned long num_generated_crfx_bits_save;
 unsigned long num_stub_calls = 0;
 unsigned long num_loop_profiler_calls = 0;
 unsigned long num_const_adds = 0;
@@ -647,7 +652,7 @@ void
 load_reg (reg_t native_reg, reg_t foreign_reg)
 {
 #ifdef COLLECT_STATS
-    ++num_load_store_reg_insns;
+    ++num_load_reg_insns;
 #endif
 #ifdef COUNT_LOAD_STORES
     ++num_load_insns;
@@ -672,7 +677,7 @@ void
 store_reg (reg_t native_reg, reg_t foreign_reg)
 {
 #ifdef COLLECT_STATS
-    ++num_load_store_reg_insns;
+    ++num_store_reg_insns;
 #endif
 #ifdef COUNT_LOAD_STORES
     ++num_store_insns;
@@ -1253,6 +1258,11 @@ start_fragment (void)
 	emu_regs[i].native_reg = NO_REG;
     }
 #endif
+
+#ifdef COLLECT_STATS
+    num_generated_crf0_bits_save = num_generated_crf0_bits;
+    num_generated_crfx_bits_save = num_generated_crfx_bits;
+#endif
 }
 
 #ifdef NEED_REGISTER_ALLOCATOR
@@ -1457,9 +1467,6 @@ finish_fragment (word_32 *addrs, unsigned char *preferred_alloced_integer_regs)
 #define EMIT_LOC           emit_loc
 #define START              body_start
 #endif
-#ifdef COUNT_LOAD_STORES
-    int num_load_insns_save = -1, num_store_insns_save;
-#endif
 
 #ifdef DYNAMO_TRACES
     emit_alt = 0;
@@ -1646,17 +1653,41 @@ finish_fragment (word_32 *addrs, unsigned char *preferred_alloced_integer_regs)
 
 		    assert(i > 0);
 
-#ifdef COUNT_LOAD_STORES
-		    num_load_insns_save = num_load_insns;
-		    num_store_insns_save = num_store_insns;
-#endif
-
 #ifdef NEED_REGISTER_ALLOCATOR
 		    execute_reg_locks(&rl, first, fragment_emu_insns[i - 1].addr);
 #endif
 
 		    /* the dummy insn is replaced by its code_area index */
 		    fragment_insns[first] = EMIT_LOC - code_area;
+
+#ifdef COUNT_LOAD_STORES
+		    {
+			int stores = 0;
+
+			for (j = 0; j < NUM_EMU_REGISTERS; ++j)
+			    if (emu_regs[j].used && emu_regs[j].dirty && emu_regs[j].live_at_end && emu_regs[j].native_reg != NO_REG)
+			    {
+				int live = 1;
+
+#ifdef COLLECT_LIVENESS
+				live = emu_reg_live(j, live_cr, live_xer, live_gpr);
+#endif
+
+				if (live)
+				    ++stores;
+			    }
+
+			if (num_generated_crf0_bits > num_generated_crf0_bits_save)
+			    direct_emit_const_add(CRF0_INSNS_COUNT, num_generated_crf0_bits - num_generated_crf0_bits_save, 0);
+			if (num_generated_crfx_bits > num_generated_crfx_bits_save)
+			    direct_emit_const_add(CRFX_INSNS_COUNT, num_generated_crfx_bits - num_generated_crfx_bits_save, 0);
+
+			if (num_load_insns > 0)
+			    direct_emit_const_add(LOAD_INSNS_COUNT, num_load_insns, 0);
+			if (num_store_insns + stores > 0)
+			    direct_emit_const_add(STORE_INSNS_COUNT, num_store_insns + stores, 0);
+		    }
+#endif
 
 #ifdef NEED_REGISTER_ALLOCATOR
 		    for (j = 0; j < NUM_EMU_REGISTERS; ++j)
@@ -1671,15 +1702,6 @@ finish_fragment (word_32 *addrs, unsigned char *preferred_alloced_integer_regs)
 			    if (live)
 				store_reg(emu_regs[j].native_reg, j);
 			}
-#endif
-#ifdef COUNT_LOAD_STORES
-		    if (num_load_insns > 0)
-			direct_emit_const_add(LOAD_INSNS_COUNT, num_load_insns, 0);
-		    if (num_store_insns > 0)
-			direct_emit_const_add(STORE_INSNS_COUNT, num_store_insns, 0);
-
-		    num_load_insns = num_load_insns_save;
-		    num_store_insns = num_store_insns_save;
 #endif
 		}
 		break;
@@ -2302,6 +2324,8 @@ init_compiler (interpreter_t *intp, interpreter_t *dbg_intp)
 #elif defined(COUNT_LOAD_STORES)
     add_const_64(0);		/* load insns */
     add_const_64(0);		/* store insns */
+    add_const_64(0);		/* crf0 insns */
+    add_const_64(0);		/* crfx insns */
 #endif
 #endif
 
@@ -3100,30 +3124,47 @@ patch_store_regs (word_32 *jump, word_32 foreign_addr)
 #ifdef PATCH_STORE_REGS
     fragment_hash_supplement_t *supplement;
     fragment_hash_entry_t *entry = fragment_hash_get(foreign_addr, &supplement);
-    word_32 *next;
+    word_32 *next, *begin;
+    int patched = 0;
 
     assert(entry != 0);
 
-    while ((*--jump & 0xfc1f0000) == COMPOSE_STL(0,0,CONSTANT_AREA_REG))
-	;
-    ++jump;
+    do
+    {
+	--jump;
+    } while ((*jump & 0xfc1f0000) == COMPOSE_STL(0,0,CONSTANT_AREA_REG)
+	     || (*jump & 0xfc1f0000) == COMPOSE_STT(0,0,CONSTANT_AREA_REG));
+    begin = ++jump;
 
     next = jump;
-    while ((*jump & 0xfc1f0000) == COMPOSE_STL(0,0,CONSTANT_AREA_REG))
+    while ((*jump & 0xfc1f0000) == COMPOSE_STL(0,0,CONSTANT_AREA_REG)
+	   || (*jump & 0xfc1f0000) == COMPOSE_STT(0,0,CONSTANT_AREA_REG))
     {
 	int native_reg = (*jump >> 21) & 0x1f;
 	int foreign_reg = (*jump & 0xffff) >> 3;
 
 	assert(foreign_reg < NUM_EMU_REGISTERS);
 
-	if (emu_reg_live(foreign_reg, supplement->live_cr, supplement->live_xer, supplement->live_gpr))
+	if (emu_regs[foreign_reg].type != REG_TYPE_INTEGER
+	    || emu_reg_live(foreign_reg, supplement->live_cr, supplement->live_xer, supplement->live_gpr))
 	    *next++ = *jump++;
 	else
 	{
 	    ++jump;
 	    ++num_patched_stores;
+	    ++patched;
 	}
     }
+
+#ifdef COUNT_LOAD_STORES
+    if (patched > 0)
+    {
+	begin -= 2;
+	assert((*begin & 0xffff0000) == COMPOSE_LDA(28,0,28));
+	assert((*begin & 0xffff) >= patched);
+	*begin = COMPOSE_LDA(28, (*begin & 0xffff) - patched, 28);
+    }
+#endif
 
     return next;
 #else
@@ -3410,7 +3451,8 @@ print_compiler_stats (void)
     printf("translated insns:              %lu\n", num_translated_insns);
     printf("translated insns in traces:    %lu\n", num_translated_trace_insns);
     printf("generated insns:               %lu\n", emit_loc - code_area - 3 * num_const_adds);
-    printf("load/store reg insns:          %lu\n", num_load_store_reg_insns);
+    printf("load reg insns:                %lu\n", num_load_reg_insns);
+    printf("store reg insns:               %lu\n", num_store_reg_insns);
     printf("generated crf0 bits:           %lu\n", num_generated_crf0_bits);
     printf("generated crfx bits:           %lu\n", num_generated_crfx_bits);
 #ifdef COLLECT_LIVENESS
@@ -3447,6 +3489,8 @@ print_compiler_stats (void)
 #elif defined(COUNT_LOAD_STORES)
     printf("executed load insns:           %lu\n", get_const_64(LOAD_INSNS_COUNT));
     printf("executed store insns:          %lu\n", get_const_64(STORE_INSNS_COUNT));
+    printf("executed crf0 insns:           %lu\n", get_const_64(CRF0_INSNS_COUNT));
+    printf("executed crfx insns:           %lu\n", get_const_64(CRFX_INSNS_COUNT));
 #endif
 #endif
 
