@@ -136,6 +136,23 @@ typedef struct
 
 typedef unsigned int trace_count_t;
 
+#ifdef CROSSDEBUGGER
+#define MAX_MEM_TRACES         128
+
+typedef struct
+{
+    word_32 addr;
+    word_32 len;
+} mem_write_t;
+
+extern int trace_mem;
+extern int num_mem_trace_entries;
+extern mem_write_t mem_trace[MAX_MEM_TRACES];
+
+void reset_mem_trace (void);
+int compare_mem_writes (interpreter_t *intp1, interpreter_t *intp2);
+#endif
+
 #define MAX_TRACE_JUMPS     6
 #define MAX_TRACE_BLOCKS    (MAX_TRACE_JUMPS + 1)
 

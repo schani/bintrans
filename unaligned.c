@@ -92,6 +92,14 @@ load_unaligned_16_bigendian (unsigned long addr)
     return load_unaligned_32_bigendian(addr) >> 16;
 }
 
+void
+store_unaligned_16_bigendian (unsigned long addr, unsigned short val)
+{
+    *(unsigned char*)(addr ^ 3) = val >> 8;
+    *(unsigned char*)((addr + 1) ^ 3) = val & 0xff;
+}
+
+
 unsigned int
 convert_float_64_to_32 (unsigned long val)
 {
@@ -146,6 +154,11 @@ sigbus_handler (int signo, siginfo_t *si, struct ucontext *uc)
 		f64 = (double)*(float*)&val32;
 		uc->uc_mcontext.sc_fpregs[target_reg] = *(long*)&f64;
 	    }
+	    break;
+
+	case 0x0d :		/* STW */
+	    printf("stw\n");
+	    store_unaligned_16_bigendian(uc->uc_mcontext.sc_traparg_a0 ^ 2, uc->uc_mcontext.sc_regs[target_reg]);
 	    break;
 
 	case 0x2c :		/* STL */

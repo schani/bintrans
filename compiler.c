@@ -1602,11 +1602,15 @@ provide_fragment (word_32 addr)
 
 #ifdef CROSSDEBUGGER
     printf("*** jumping to %08x\n", addr);
+    reset_mem_trace();
+    trace_mem = 1;
     debugger_intp->have_jumped = 0;
     while (!debugger_intp->have_jumped)
 	interpret_insn(debugger_intp);
+    trace_mem = 0;
     move_regs_compiler_to_interpreter(compiler_intp);
     compare_register_sets();
+    compare_mem_writes(debugger_intp, compiler_intp);
     assert(debugger_intp->pc == addr);
 #endif
 

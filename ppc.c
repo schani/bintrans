@@ -273,7 +273,7 @@ int emu_errnos[] = { 0,
 #define SYSCALL_RT_SIGACTION     173
 #endif
 
-#define SYSCALL_OUTPUT
+#undef SYSCALL_OUTPUT
 #ifdef SYSCALL_OUTPUT
 #define ANNOUNCE_SYSCALL(n)         printf("%s\n", (n))
 #else
@@ -294,6 +294,8 @@ int emu_errnos[] = { 0,
 #define FAKE_FSTAT_ATIME    0x3b4cdcac
 #define FAKE_FSTAT_MTIME    0x3b4cdcac
 #define FAKE_FSTAT_CTIME    0x3b4cdcac
+#define FAKE_TV_SEC         1001813473
+#define FAKE_TV_USEC        0
 */
 
 int debug = 0;
@@ -710,8 +712,16 @@ convert_ppc_timeval_to_native (interpreter_t *intp, struct timeval *tv, word_32 
 void
 convert_native_timeval_to_ppc (interpreter_t *intp, word_32 addr, struct timeval *tv)
 {
+#ifdef FAKE_TV_SEC
+    mem_set_32(intp, addr + 0, FAKE_TV_SEC);
+#else
     mem_set_32(intp, addr + 0, tv->tv_sec);
+#endif
+#ifdef FAKE_TV_USEC
+    mem_set_32(intp, addr + 4, FAKE_TV_USEC);
+#else
     mem_set_32(intp, addr + 4, tv->tv_usec);
+#endif
 }
 
 #if defined(EMU_PPC)
@@ -826,6 +836,11 @@ process_system_call (interpreter_t *intp, word_32 number,
 {
     int result;
     int fd;
+#ifdef CROSSDEBUGGER
+    int save_trace_mem = trace_mem;
+
+    trace_mem = 0;
+#endif
 
     switch (number)
     {
@@ -899,6 +914,10 @@ process_system_call (interpreter_t *intp, word_32 number,
 		char *name = translate_filename(real_name);
 		word_32 ppc_flags = arg2;
 		int flags;
+
+#ifdef SYSCALL_OUTPUT
+		printf("name: %s\n", name);
+#endif
 
 		if ((ppc_flags & EMU_O_ACCMODE) == EMU_O_RDONLY)
 		    flags = O_RDONLY;
@@ -1728,6 +1747,10 @@ process_system_call (interpreter_t *intp, word_32 number,
 
 #ifdef SYSCALL_OUTPUT
     printf("  %08x\n", (word_32)result);
+#endif
+
+#ifdef CROSSDEBUGGER
+    trace_mem = save_trace_mem;
 #endif
 
     return result;

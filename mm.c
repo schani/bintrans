@@ -41,10 +41,47 @@ extern int debug;
 #define NATIVE_PAGE_SHIFT       13
 #define NATIVE_PAGE_MASK    0x1fff
 
-#ifdef DEBUGGER
+#if defined(DEBUGGER)
 #define touch_mem(i,a,l)      check_watchpoints(i,a,l)
+#elif defined(CROSSDEBUGGER)
+#define touch_mem(i,a,l)      if (trace_mem) \
+			      { \
+				  assert(num_mem_trace_entries < MAX_MEM_TRACES); \
+				  mem_trace[num_mem_trace_entries].addr = (a); \
+				  mem_trace[num_mem_trace_entries].len = (l); \
+				  ++num_mem_trace_entries; \
+			      }
 #else
 #define touch_mem(i,a,l)
+#endif
+
+#ifdef CROSSDEBUGGER
+int trace_mem = 0;
+int num_mem_trace_entries = 0;
+mem_write_t mem_trace[MAX_MEM_TRACES];
+
+void
+reset_mem_trace (void)
+{
+    num_mem_trace_entries = 0;
+}
+
+int
+compare_mem_writes (interpreter_t *intp1, interpreter_t *intp2)
+{
+    int i;
+
+    for (i = 0; i < num_mem_trace_entries; ++i)
+    {
+	word_32 addr = mem_trace[i].addr;
+	word_32 j;
+
+	for (j = 0; j < mem_trace[i].len; ++j)
+	    assert(mem_get_8(intp1, addr + j) == mem_get_8(intp2, addr + j));
+    }
+
+    return 1;
+}
 #endif
 
 int

@@ -2194,7 +2194,7 @@ handle_lbzu_insn (word_32 insn, word_32 pc)
 
 	ra_reg = ref_ppc_gpr_rw(FIELD_RA);
 
-	emit(COMPOSE_LDA(ra_reg, FIELD_D, ra_reg));
+	emit(COMPOSE_LDA(ra_reg, FIELD_D ^ 3, ra_reg));
 
 	unref_integer_reg(ra_reg);
     }
@@ -2487,6 +2487,43 @@ static void
 handle_lhz_insn (word_32 insn, word_32 pc)
 {
     gen_load_half_imm_insn(insn, 0);
+}
+
+static void
+handle_lhzu_insn (word_32 insn, word_32 pc)
+{
+    assert(FIELD_RD != FIELD_RA);
+
+    if (KILL_GPR(FIELD_RD))
+    {
+	reg_t ra_reg, rd_reg, addr_reg;
+
+	ra_reg = ref_ppc_gpr_rw(FIELD_RA);
+
+	emit(COMPOSE_LDA(ra_reg, FIELD_D, ra_reg));
+
+	addr_reg = ref_integer_reg_for_writing(-1);
+
+	emit(COMPOSE_XOR_IMM(ra_reg, 2, addr_reg));
+
+	unref_integer_reg(ra_reg);
+	rd_reg = ref_ppc_gpr_w(FIELD_RD);
+
+	emit(COMPOSE_LDWU(rd_reg, 0, addr_reg));
+
+	unref_integer_reg(rd_reg);
+	unref_integer_reg(addr_reg);
+    }
+    else if (KILL_GPR(FIELD_RA))
+    {
+	reg_t ra_reg;
+
+	ra_reg = ref_ppc_gpr_rw(FIELD_RA);
+
+	emit(COMPOSE_LDA(ra_reg, FIELD_D ^ 2, ra_reg));
+
+	unref_integer_reg(ra_reg);
+    }
 }
 
 static void
@@ -4077,6 +4114,30 @@ handle_sth_insn (word_32 insn, word_32 pc)
 }
 
 static void
+handle_sthu_insn (word_32 insn, word_32 pc)
+{
+    reg_t ra_reg, rs_reg, addr_reg;
+
+    assert(FIELD_RS != FIELD_RA);
+
+    ra_reg = ref_ppc_gpr_rw(FIELD_RA);
+
+    emit(COMPOSE_LDA(ra_reg, FIELD_D, ra_reg));
+
+    addr_reg = ref_integer_reg_for_writing(-1);
+
+    emit(COMPOSE_XOR_IMM(ra_reg, 2, addr_reg));
+
+    unref_integer_reg(ra_reg);
+    rs_reg = ref_ppc_gpr_r(FIELD_RS);
+
+    emit(COMPOSE_STW(rs_reg, 0, addr_reg));
+
+    unref_integer_reg(rs_reg);
+    unref_integer_reg(addr_reg);
+}
+
+static void
 handle_sthx_insn (word_32 insn, word_32 pc)
 {
     reg_t rb_reg, rs_reg, addr_reg;
@@ -5047,6 +5108,11 @@ compile_to_alpha_ppc_insn (word_32 insn, word_32 pc, int _optimize_taken_jump, l
 	    assert((insn & 0xFC000000) == 0x90000000);
 	    handle_stw_insn(insn, pc);
 	    break;
+	case 45:
+	    /* STHU */
+	    assert((insn & 0xFC000000) == 0xB4000000);
+	    handle_sthu_insn(insn, pc);
+	    break;
 	case 44:
 	    /* STH */
 	    assert((insn & 0xFC000000) == 0xB0000000);
@@ -5314,6 +5380,11 @@ compile_to_alpha_ppc_insn (word_32 insn, word_32 pc, int _optimize_taken_jump, l
 	    /* LWZ */
 	    assert((insn & 0xFC000000) == 0x80000000);
 	    handle_lwz_insn(insn, pc);
+	    break;
+	case 41:
+	    /* LHZU */
+	    assert((insn & 0xFC000000) == 0xA4000000);
+	    handle_lhzu_insn(insn, pc);
 	    break;
 	case 40:
 	    /* LHZ */
