@@ -130,12 +130,22 @@ let cm_yield m =
     CMSuccess (value, conds) -> (value, conds)
   | CMFailureWithReason _ | CMFailure -> raise No_value
 
-(*** various expr functions specialized for cond monads ***)
+(*** stmt_or_expr cond monads ***)
 
-(*
-let apply_to_expr_subs_with_cm =
-  apply_to_expr_subs_with_monad cm_return cm_bind
+let expr_cond_monad_to_stmt_or_expr_cond_monad m =
+  match m with
+      CMSuccess (value, conds) -> CMSuccess (Expr value, conds)
+    | CMFailureWithReason (conds, fcond) -> CMFailureWithReason (conds, fcond)
+    | CMFailure -> CMFailure
 
-let apply_to_stmt_subs_with_cm =
-  apply_to_stmt_subs_with_monad cm_return cm_bind
-*)
+let stmt_or_expr_cond_monad_to_stmt_cond_monad m =
+  match m with
+      CMSuccess (value, conds) -> CMSuccess (get_stmt value, conds)
+    | CMFailureWithReason (conds, fcond) -> CMFailureWithReason (conds, fcond)
+    | CMFailure -> CMFailure
+
+let apply_to_stmt_subs_with_cond_monad modify stmt =
+  stmt_or_expr_cond_monad_to_stmt_cond_monad
+    (apply_to_stmt_subs_with_monad cm_return cm_bind
+       (fun expr -> expr_cond_monad_to_stmt_or_expr_cond_monad (modify expr))
+       stmt)

@@ -79,7 +79,7 @@ let lookup_intermediate_reg allocation expr =
 let int_const_to_c int_const =
   match int_const with
       IntLiteral const -> (to_string const) ^ "LL"
-    | IntField input_name -> "FIELD_" ^ (uppercase input_name)
+    | IntField input_name -> "PPC_FIELD_" ^ (uppercase input_name)
 
 let register_to_c allocation reg =
   match reg with
@@ -87,6 +87,7 @@ let register_to_c allocation reg =
     | GuestRegister (IntField name, _) -> "guest_reg_" ^ name
     | HostRegister (num, _) -> "host_reg_" ^ (string_of_int num)
     | IntermediateRegister expr -> "interm_reg_" ^ (string_of_int (lookup_intermediate_reg allocation expr))
+    | LetRegister (name, value_type, width) -> "let_reg_" ^ name
 
 let expr_to_c allocation expr =
   let unary_to_c op arg =
@@ -123,13 +124,18 @@ let expr_to_c allocation expr =
 	    "userop_" ^ name ^ "(" ^ (join_strings ", " (map expr_to_c args)) ^ ")"
   in expr_to_c expr
 
-let stmt_to_c allocation stmt =
+let rec stmt_to_c allocation stmt =
   match stmt with
       Store (byte_order, width, addr, value) ->
 	"store_" ^ (byte_order_string byte_order) ^ "_" ^ (string_of_int width) ^ "("
 	^ (expr_to_c allocation addr) ^ "," ^ (expr_to_c allocation value) ^ ");"
     | Assign (reg, src) ->
 	(register_to_c allocation reg) ^ "=" ^ (expr_to_c allocation src) ^ ";"
+    | Let (name, _, rhs, sub) ->
+	(* FIXME: not only integer types are possible! *)
+	"{ word_64 let_reg_" ^ name ^ " = " ^ (expr_to_c allocation rhs) ^ ";\n" ^ (stmt_to_c allocation sub) ^ "\n}"
+    | Seq (sub1, sub2) ->
+	"{ " ^ (stmt_to_c allocation sub1) ^ "\n" ^ (stmt_to_c allocation sub2) ^ "\n}"
 
 (*** generating generators ***)
 

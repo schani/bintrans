@@ -69,7 +69,7 @@ let uc_bind = cm_bind
 let uc_if = cm_if
 
 let uc_when fields condition consequent =
-  if is_register_const condition then
+  if is_register_const fields condition then
     let ccond = cfold_expr fields condition
     in if is_const ccond then
 	cm_when fields condition consequent

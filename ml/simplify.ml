@@ -41,5 +41,5 @@ let rec simplify_expr fields expr =
 	  | [] -> cm_return sexpr
 	in try_simplifiers simplifiers)
 
-let simplify_stmt fields =
-  apply_to_stmt_subs_with_monad cm_return cm_bind (simplify_expr fields)
+let simplify_stmt fields stmt =
+  apply_to_stmt_subs_with_cond_monad (simplify_expr fields) stmt

@@ -30,10 +30,14 @@ type machine =
     { addr_width : int ;
       register_width : register -> int }
 
+type field_range_spec =
+    FromTo of int64 * int64		(* exhaustive *)
+  | SomeValues of int64 list		(* not exhaustive *)
+
 type machine_insn =
     { machine_insn_name : string ;
       insn_stmt : stmt ;
-      explore_fields : (string * int64 * int64) list }
+      explore_fields : (string * field_range_spec) list }
 
 let machine_ppc =
   { addr_width = 4 ;

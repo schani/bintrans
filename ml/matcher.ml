@@ -164,72 +164,73 @@ let match_expr_generic register_const_func fields expr pattern =
 	      (fun _ -> return [])
 	| _ -> raise Expression_not_const
   and match_rec expr pattern =
-    match (cfold_expr fields expr, pattern) with
-	(_, IntPattern (AnyInt input_name)) when is_register_const expr ->
-	  return [ ConstBinding (input_name, expr) ]
-      | (IntConst (IntLiteral const1), IntPattern (TheInt const2)) ->
-	  when_cfold (BinaryWidth (IntEqual, 8, expr, const2))
-	    (fun _ -> (return []))
-      | (_, IntPattern (TheInt const2)) when is_register_const expr ->
-	  register_const_func fields expr const2
-      | (FloatConst const, FloatPattern (AnyFloat input_name)) ->
-	  return [ ConstBinding (input_name, expr) ]
-      | (FloatConst const1, FloatPattern (TheFloat const2)) ->
-	  when_cfold (Binary (FloatEqual, expr, FloatConst const2))
-	    (fun _ -> (return []))
-      | (ConditionConst const, ConditionPattern (AnyBool input_name)) ->
-	  return [ ConstBinding (input_name, expr) ]
-      | (ConditionConst const1, ConditionPattern (TheBool const2)) ->
-	  when_cfold (Unary (ConditionNeg, Binary (ConditionXor, expr, ConditionConst const2)))
-	    (fun _ -> (return []))
-      | _ ->
-	  match (expr, pattern) with
-	      (_, ExprPattern input_name) ->
-		return [ ExprBinding (input_name, expr) ]
-	    | (Register register, RegisterPattern input_name) ->
-		return [ RegisterBinding (input_name, register) ]
-	    | (_, RegisterPattern input_name) ->
-		return [ ExprBinding (input_name, expr) ]
-	    | (LoadBO (byte_order1, width, addr),
-	       LoadBOPattern (byte_order2, (widths, width_input_name), addr_pattern)) when
-		byte_order1 = byte_order2 && (mem width widths) ->
+      let cexpr = cfold_expr fields expr
+      in match (cexpr, pattern) with
+	  (_, IntPattern (AnyInt input_name)) when is_register_const fields expr ->
+	    return [ ConstBinding (input_name, expr) ]
+	| (IntConst (IntLiteral const1), IntPattern (TheInt const2)) ->
+	    when_cfold (BinaryWidth (IntEqual, 8, expr, const2))
+	      (fun _ -> (return []))
+	| (_, IntPattern (TheInt const2)) when is_register_const fields expr ->
+	    register_const_func fields expr const2
+	| (FloatConst const, FloatPattern (AnyFloat input_name)) ->
+	    return [ ConstBinding (input_name, expr) ]
+	| (FloatConst const1, FloatPattern (TheFloat const2)) ->
+	    when_cfold (Binary (FloatEqual, expr, FloatConst const2))
+	      (fun _ -> (return []))
+	| (ConditionConst const, ConditionPattern (AnyBool input_name)) ->
+	    return [ ConstBinding (input_name, expr) ]
+	| (ConditionConst const1, ConditionPattern (TheBool const2)) ->
+	    when_cfold (Unary (ConditionNeg, Binary (ConditionXor, expr, ConditionConst const2)))
+	      (fun _ -> (return []))
+	| _ ->
+	    match (expr, pattern) with
+		(_, ExprPattern input_name) ->
+		  return [ ExprBinding (input_name, expr) ]
+	      | (Register register, RegisterPattern input_name) ->
+		  return [ RegisterBinding (input_name, register) ]
+	      | (_, RegisterPattern input_name) ->
+		  return [ ExprBinding (input_name, expr) ]
+	      | (LoadBO (byte_order1, width, addr),
+		 LoadBOPattern (byte_order2, (widths, width_input_name), addr_pattern)) when
+		  byte_order1 = byte_order2 && (mem width widths) ->
 		  combine_bindings
 		    (return [ WidthBinding (width_input_name, width) ])
 		    (match_rec addr addr_pattern)
-	    | (Unary (op1, arg), UnaryPattern (op2, arg_pattern)) when
-		op1 = op2 -> match_rec arg arg_pattern
-	    | (UnaryWidth (op1, width, arg),
-	       UnaryWidthPattern (op2, (widths, width_input_name), arg_pattern)) when
-		op1 = op2 && (mem width widths) ->
+	      | (Unary (op1, arg), UnaryPattern (op2, arg_pattern)) when
+		  op1 = op2 -> match_rec arg arg_pattern
+	      | (UnaryWidth (op1, width, arg),
+		 UnaryWidthPattern (op2, (widths, width_input_name), arg_pattern)) when
+		  op1 = op2 && (mem width widths) ->
 		  combine_bindings
 		    (return [ WidthBinding (width_input_name, width) ])
 		    (match_rec arg arg_pattern)
-	    | (Binary (op1, arg1, arg2),
-	       BinaryPattern (op2, arg_pattern1, arg_pattern2)) when
-		op1 == op2 ->
-		combine_bindings (match_rec arg1 arg_pattern1) (match_rec arg2 arg_pattern2)
-	    | (BinaryWidth (op1, width, arg1, arg2),
-	       BinaryWidthPattern (op2, (widths, width_input_name), arg_pattern1, arg_pattern2)) when
-		op1 = op2 && (mem width widths) ->
+	      | (Binary (op1, arg1, arg2),
+		 BinaryPattern (op2, arg_pattern1, arg_pattern2)) when
+		  op1 == op2 ->
+		  combine_bindings (match_rec arg1 arg_pattern1) (match_rec arg2 arg_pattern2)
+	      | (BinaryWidth (op1, width, arg1, arg2),
+		 BinaryWidthPattern (op2, (widths, width_input_name), arg_pattern1, arg_pattern2)) when
+		  op1 = op2 && (mem width widths) ->
 		  combine_bindings
 		    (return [ WidthBinding (width_input_name, width) ])
 		    (combine_bindings (match_rec arg1 arg_pattern1) (match_rec arg2 arg_pattern2))
-	    | (TernaryWidth (op1, width, arg1, arg2, arg3),
-	       TernaryWidthPattern (op2, (widths, width_input_name), arg_pattern1, arg_pattern2, arg_pattern3)) when
-		op1 = op2 && (mem width widths) ->
+	      | (TernaryWidth (op1, width, arg1, arg2, arg3),
+		 TernaryWidthPattern (op2, (widths, width_input_name), arg_pattern1, arg_pattern2, arg_pattern3)) when
+		  op1 = op2 && (mem width widths) ->
 		  combine_bindings (return [ WidthBinding (width_input_name, width) ])
 		    (combine_bindings (match_rec arg1 arg_pattern1)
 		       (combine_bindings (match_rec arg2 arg_pattern2) (match_rec arg3 arg_pattern3)))
-	    | (Extract (arg, start, length),
-	       ExtractPattern (arg_pattern, start_pattern, length_pattern)) ->
-		combine_bindings (match_rec arg arg_pattern)
-		  (combine_bindings (match_int_const start start_pattern) (match_int_const length length_pattern))
-	    | (Insert (arg1, arg2, start, length),
-	       InsertPattern (arg_pattern1, arg_pattern2, start_pattern, length_pattern)) ->
-		combine_bindings
-		  (combine_bindings (match_rec arg1 arg_pattern1) (match_rec arg2 arg_pattern2))
-		  (combine_bindings (match_int_const start start_pattern) (match_int_const length length_pattern))
-	    | _ -> fail
+	      | (Extract (arg, start, length),
+		 ExtractPattern (arg_pattern, start_pattern, length_pattern)) ->
+		  combine_bindings (match_rec arg arg_pattern)
+		    (combine_bindings (match_int_const start start_pattern) (match_int_const length length_pattern))
+	      | (Insert (arg1, arg2, start, length),
+		 InsertPattern (arg_pattern1, arg_pattern2, start_pattern, length_pattern)) ->
+		  combine_bindings
+		    (combine_bindings (match_rec arg1 arg_pattern1) (match_rec arg2 arg_pattern2))
+		    (combine_bindings (match_int_const start start_pattern) (match_int_const length length_pattern))
+	      | _ -> fail
   in
     match_rec expr pattern
 

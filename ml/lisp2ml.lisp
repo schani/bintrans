@@ -238,7 +238,18 @@
 	       ((set ?reg ?value)
 		(format nil "Assign (GuestRegister (~A, Int), ~A)"
 			(convert-int-const reg)
-			(convert-expr value '())))
+			(convert value)))
+	       ((let (?name ?width ?rhs) ?stmt)
+		(format nil "Let (\"~A\", ~A, ~A, ~A)"
+			(dcs name) width (convert rhs)
+			(convert-expr stmt
+				      (cons (list name ;FIXME: handle other types than Int as well!
+						  (format nil "Register (LetRegister (\"~A\", Int, ~A))" (dcs name) width)
+						  'expr)
+					    bindings))))
+	       ((seq ?stmt1 ?stmt2)
+		(format nil "Seq (~A, ~A)"
+			(convert stmt1) (convert stmt2)))
 	       ((?op . ?args)
 		(multiple-value-bind (ml-name kind-ml-name num-args need-width)
 		    (lookup-operator op)
@@ -616,9 +627,15 @@
     (dolist (insn (reverse *insns*))
       (destructuring-bind (name field-ranges stmt)
 	  insn
-	(format out "  { machine_insn_name = \"~A\" ;~%    insn_stmt = ~A ;~%    explore_fields = [ ~{(\"~A\", ~AL, ~AL)~^ ; ~} ] } ;~%"
+	(format out "  { machine_insn_name = \"~A\" ;~%    insn_stmt = ~A ;~%    explore_fields = [ ~{~A~^ ; ~} ] } ;~%"
 		(dcs name) (convert-expr stmt '())
-		(mappend #'(lambda (r)
-			     (list (dcs (first r)) (second r) (third r)))
-			 field-ranges))))
+		(mapcar #'(lambda (r)
+			    (case-match r
+			      ((?name ?begin ?end)
+			       (format nil "(\"~A\", FromTo (~AL, ~AL))" (dcs name) begin end))
+			      ((?name ?values)
+			       (format nil "(\"~A\", SomeValues [ ~{~AL~^; ~} ])" (dcs name) values))
+			      (t
+			       (error "illegal field range specificiation ~A" r))))
+			field-ranges))))
     (format out "    ]~%")))

@@ -43,9 +43,9 @@ let mapping_ppc_to_alpha =
 
 let dummy_mapping =
   { source_machine = dummy_machine ;
-    needed_target_width = (fun _ -> raise Not_supported_in_dummy_mapping) ;
-    register_known = (fun _ -> raise Not_supported_in_dummy_mapping) ;
-    register_bits = (fun _ -> raise Not_supported_in_dummy_mapping) }
+    needed_target_width = (fun _ -> 8 ) ;
+    register_known = (fun _ -> zero ) ;
+    register_bits = (fun _ -> zero ) }
 
 let make_sex_mapping mapping one =
   { mapping with

@@ -41,7 +41,7 @@
 ;; adde
 ;; addeo
 
-(definsn addi ((ra 0 32))
+(definsn addi ((ra 0 32) (simm (0)))
   (set rd (if (int-zero-p 8 ra)
 	      (sex 2 simm)
 	    (+i (register ra) (sex 2 simm)))))
@@ -49,7 +49,7 @@
 ;; addic
 ;; addic.
 
-(definsn addis ((ra 0 32))
+(definsn addis ((ra 0 32) (simm (0)))
   (set rd (if (int-zero-p 8 ra)
 	      (shiftl simm 16)
 	    (+i (register ra) (shiftl simm 16)))))
@@ -119,15 +119,15 @@
 ;; icbi
 ;; isync
 
-(definsn lbz ((ra 0 32))
+(definsn lbz ((ra 0 32) (d (0)))
   (set rd (zex 1 (load-byte (if (int-zero-p 8 ra)
 				(sex 2 d)
 				(+i (register ra) (sex 2 d)))))))
 
-;(definsn lbzu ()
-;  (let (ea (zex 4 (+i (register ra) (sex 2 d))))
-;    (set rd (zex 1 (load-byte ea)))
-;    (set ra ea)))
+(definsn lbzu ((d (0)))
+  (seq
+   (set ra (+i (register ra) (sex 2 d)))
+   (set rd (zex 1 (load-byte (register ra))))))
 
 (definsn rlwimi ((sh 0 32) (mb 0 32) (me 0 32))
   (set ra (bit-or (bit-and (rotl 4 (register rs) sh) (ppc-mask mb me))

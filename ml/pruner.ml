@@ -296,6 +296,18 @@ let expr_known mapping fields expr =
 and expr_bits mapping fields expr =
   expr_bits_one_arg (mapping, fields, expr)
 
+let rec cheap_prune fields expr =
+  match expr with
+    | If (condition, cons, alt) ->
+	if is_const (cfold_expr fields condition) then
+	  cm_if fields condition
+	    (fun _ -> cheap_prune fields cons)
+	    (fun _ -> cheap_prune fields alt)
+	else
+	  apply_to_expr_subs_with_monad cm_return cm_bind (cheap_prune fields) expr
+    | _ ->
+	apply_to_expr_subs_with_monad cm_return cm_bind (cheap_prune fields) expr
+
 let unmemoized_prune_expr prune_one_arg mapping fields expr needed =
   let prune expr needed =
     prune_one_arg (mapping, fields, expr, needed)
@@ -520,7 +532,7 @@ let unmemoized_prune_expr prune_one_arg mapping fields expr needed =
     in
     if_prune (BinaryWidth (IntEqual, 8, bitand_expr (known expr) needed, needed))
       (fun _ -> (if is_const (cfold_expr fields expr) then
-		   return expr
+		   cheap_prune fields expr
 		 else
 		   let bits = bits expr
 		   in match expr_value_type expr with
@@ -625,7 +637,7 @@ let rec prune_expr_one_arg =
 and prune_expr mapping fields expr needed =
   prune_expr_one_arg (mapping, fields, expr, (int_literal_expr needed))
 
-let prune_stmt mapping fields stmt =
+let rec prune_stmt mapping fields stmt =
   match stmt with
     Store (byte_order, width, addr, value) ->
       (make_bind2 cm_bind cm_bind)
@@ -638,6 +650,18 @@ let prune_stmt mapping fields stmt =
 	(prune_expr mapping fields value (width_mask (mapping.needed_target_width register)))
 	(fun pvalue ->
 	  cm_return (Assign (register, pvalue)))
+  | Let (name, width, rhs, sub) ->
+      (make_bind2 cm_bind cm_bind)
+	(prune_expr mapping fields rhs (width_mask width))
+	(prune_stmt mapping fields sub)
+	(fun prhs psub ->
+	   cm_return (Let (name, width, prhs, psub)))
+  | Seq (sub1, sub2) ->
+      (make_bind2 cm_bind cm_bind)
+	(prune_stmt mapping fields sub1)
+	(prune_stmt mapping fields sub2)
+	(fun psub1 psub2 ->
+	   cm_return (Seq (psub1, psub2)))
 
 (*** sex optimization ***)
 
@@ -655,4 +679,4 @@ let rec optimize_sex_expr mapping fields expr =
 	 | _ -> cm_return expr)
 
 let optimize_sex_stmt mapping fields stmt =
-  apply_to_stmt_subs_with_monad cm_return cm_bind (optimize_sex_expr mapping fields) stmt
+  apply_to_stmt_subs_with_cond_monad (optimize_sex_expr mapping fields) stmt

@@ -31,6 +31,7 @@ open Matcher
 open Pruner
 open Simplify
 open Mapping
+open Machine
 
 (*** simplifying expressions and statements ***)
 
@@ -95,7 +96,7 @@ let sex_simplify_stmt mapping fields stmt =
     in cm_bind (optimize_sex_stmt mapping fields stmt)
 	 (fun stmt ->
 	    simplify_and_prune_stmt_until_fixpoint mapping fields stmt)
-  in cm_bind (apply_to_stmt_subs_with_monad cm_return cm_bind (sex_simplify_expr mapping fields) stmt)
+  in cm_bind (apply_to_stmt_subs_with_cond_monad (sex_simplify_expr mapping fields) stmt)
        (fun sstmt ->
 	  if stmt <> sstmt then
 	    ( (* print_stmt stmt ; print_stmt sstmt *) )
@@ -144,35 +145,50 @@ let explore_all_fields stmt mapping fields target_insns =
 	    matches
 	  else
 	    stmt_form_match :: (add_stmt_form_match fields stmt rest_matches)
-  and add_stmt_form fields stmt_forms =
+  and add_stmt_form fields stmt_forms conds_so_far =
     match stmt_forms with
 	[] ->
 	  let (new_stmt, new_conds) =
 	    cm_yield
 	      (cm_bind (simplify_and_prune_stmt_until_fixpoint mapping fields stmt)
 		 (fun sstmt -> sex_simplify_stmt mapping fields sstmt))
-	  in [{ stmt = new_stmt ;
-		form_conditions = simplify_conditions new_conds ;
-		matches = add_stmt_form_match fields new_stmt [] }]
+	  in print_stmt (cfold_stmt fields new_stmt) ;
+	    [{ stmt = new_stmt ;
+	       form_conditions = conds_so_far @ (simplify_conditions new_conds) ;
+	       matches = add_stmt_form_match fields new_stmt [] }] ;
       | { stmt = stmt ;
 	  form_conditions = conds ;
 	  matches = matches } as stmt_form :: rest_stmt_forms ->
 	  if for_all (fun c ->
-			match cfold_expr fields c with
-			    ConditionConst true -> true
-			  | _ -> false) conds then
+			(mem c conds_so_far)
+			|| (match cfold_expr fields c with
+				ConditionConst true -> true
+			      | _ -> false)) conds then
 	    { stmt = stmt ;
 	      form_conditions = conds ;
 	      matches = add_stmt_form_match fields stmt matches } :: rest_stmt_forms
 	  else
-	    stmt_form :: (add_stmt_form fields rest_stmt_forms)
-  and explore fields_so_far rest_fields stmts_so_far =
+	    stmt_form :: (add_stmt_form fields rest_stmt_forms conds_so_far)
+  and explore_some_values fields_so_far name values rest_fields stmts_so_far conds_so_far =
+    match values with
+	[] -> stmts_so_far
+      | value :: rest ->
+	  let stmts_so_far = explore ((name, value) :: fields_so_far) rest_fields stmts_so_far conds_so_far
+	  in explore_some_values fields_so_far name rest rest_fields stmts_so_far conds_so_far
+  and make_value_conds name values =
+    map (fun v ->
+	   Unary (ConditionNeg, BinaryWidth (IntEqual, 8, IntConst (IntField name), int_literal_expr v)))
+      values
+  and explore fields_so_far rest_fields stmts_so_far conds_so_far =
     match rest_fields with
       [] ->
-	add_stmt_form fields_so_far stmts_so_far
-    | (name, min, max) :: rest_fields when (compare min max) < 0 ->
-	let stmts_so_far = explore ((name, min) :: fields_so_far) rest_fields stmts_so_far
-	in explore fields_so_far ((name, (add min one), max) :: rest_fields) stmts_so_far
+	add_stmt_form fields_so_far stmts_so_far conds_so_far
+    | (name, FromTo (min, max)) :: rest_fields when (compare min max) < 0 ->
+	let stmts_so_far = explore ((name, min) :: fields_so_far) rest_fields stmts_so_far conds_so_far
+	in explore fields_so_far ((name, FromTo ((add min one), max)) :: rest_fields) stmts_so_far conds_so_far
+    | (name, SomeValues values) :: rest_fields ->
+	let stmts_so_far = explore_some_values fields_so_far name values rest_fields stmts_so_far conds_so_far
+	in explore fields_so_far rest_fields stmts_so_far ((make_value_conds name values) @ conds_so_far)
     | _ -> stmts_so_far
   in
-    explore [] fields []
+    explore [] fields [] []

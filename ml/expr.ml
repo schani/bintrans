@@ -36,6 +36,8 @@ exception Unknown_user_op
 exception Wrong_user_op_args
 exception User_op_called_incorrectly
 exception User_op_args_unhandled
+exception Stmt_expected
+exception Expr_expected
 
 type byte_order =
     BigEndian
@@ -181,6 +183,7 @@ type register =
     GuestRegister of int_const * value_type
   | HostRegister of int * value_type
   | IntermediateRegister of expr
+  | LetRegister of input_name * value_type * width
 and expr =
     IntConst of int_const
   | FloatConst of float
@@ -200,6 +203,22 @@ and expr =
 type stmt =
     Store of byte_order * width * expr * expr
   | Assign of register * expr
+  | Let of input_name * width * expr * stmt
+  | Seq of stmt * stmt
+
+type stmt_or_expr =
+    Stmt of stmt
+  | Expr of expr
+
+let get_stmt soe =
+  match soe with
+      Stmt stmt -> stmt
+    | Expr _ -> raise Stmt_expected
+
+let get_expr soe =
+  match soe with
+      Stmt _ -> raise Stmt_expected
+    | Expr expr -> expr
 
 (* user ops *)
 
@@ -229,6 +248,7 @@ let rec register_value_type reg =
       GuestRegister (_, value_type) -> value_type
     | HostRegister (_, value_type) -> value_type
     | IntermediateRegister expr -> expr_value_type expr
+    | LetRegister (_, value_type, _) -> value_type
 and expr_value_type expr =
   match expr with
     IntConst _ -> Int
@@ -264,10 +284,12 @@ let expr_sub_exprs expr =
   | UserOp (_, subs) -> subs
   | _ -> []
 
-let stmt_sub_exprs stmt =
+let rec stmt_sub_exprs stmt =
   match stmt with
     Store (byte_order, width, sub1, sub2) -> [ sub1 ; sub2 ]
   | Assign (register, sub) -> [ sub ]
+  | Let (name, _, expr, sub) -> expr :: (stmt_sub_exprs sub)
+  | Seq (sub1, sub2) -> (stmt_sub_exprs sub1) @ (stmt_sub_exprs sub2)
 
 (* returns a list of tuples (reg, read, write) where reg is a GuestRegister,
    read is true if the register is read from, write is true if the register is
@@ -295,15 +317,6 @@ let is_const expr =
     match expr with
 	IntConst (IntLiteral _) | FloatConst _ | ConditionConst _ -> true
       | _ -> false
-
-(* an expression is register const if its value only depends on fields, but
-   not on registers or memory *)
-let rec is_register_const expr =
-  match expr with
-      Register _ -> false
-    | LoadBO _ -> false
-    | Unary (LoadByte, _) -> false
-    | _ -> for_all is_register_const (expr_sub_exprs expr)
 
 let rec expr_size expr =
     1 + (fold_left ( + ) 0 (map expr_size (expr_sub_exprs expr)))
@@ -485,18 +498,32 @@ let apply_to_expr_subs =
   apply_to_expr_subs_with_monad (fun x -> x) (fun v f -> f v)
 
 let apply_to_stmt_subs_with_monad return bind modify stmt =
-  match stmt with
-    Store (byte_order, width, addr, value) ->
-      (make_bind2 bind bind) (modify addr) (modify value)
-	(fun maddr mvalue ->
-	  return (Store (byte_order, width, maddr, mvalue)))
-  | Assign (register, expr) ->
-      bind (modify expr)
-	(fun mexpr ->
-	  return (Assign (register, mexpr)))
+  let rec apply stmt =
+    match stmt with
+	Store (byte_order, width, addr, value) ->
+	  (make_bind2 bind bind) (modify addr) (modify value)
+	  (fun maddr mvalue ->
+	     return (Stmt (Store (byte_order, width, get_expr maddr, get_expr mvalue))))
+      | Assign (register, expr) ->
+	  bind (modify expr)
+	    (fun mexpr ->
+	       return (Stmt (Assign (register, get_expr mexpr))))
+      | Let (name, width, expr, sub) ->
+	  (make_bind2 bind bind)
+            (modify expr)
+            (apply sub)
+            (fun mexpr msub ->
+	       return (Stmt (Let (name, width, get_expr mexpr, get_stmt msub))))
+      | Seq (sub1, sub2) ->
+	  (make_bind2 bind bind)
+	    (apply sub1)
+	    (apply sub2)
+	    (fun msub1 msub2 ->
+	       return (Stmt (Seq (get_stmt msub1, get_stmt msub2))))
+  in apply stmt
 
-let apply_to_stmt_subs =
-  apply_to_stmt_subs_with_monad (fun x -> x) (fun v f -> f v)
+let apply_to_stmt_subs modify stmt =
+  get_stmt (apply_to_stmt_subs_with_monad (fun x -> x) (fun v f -> f v) modify stmt)
 
 (* constant folding *)
 
@@ -667,7 +694,23 @@ let cfold_expr fields expr =
     cfold expr
 
 let cfold_stmt fields =
-  apply_to_stmt_subs (cfold_expr fields)
+  apply_to_stmt_subs (fun expr -> Expr (cfold_expr fields expr))
+
+(* an expression is register const if its value only depends on fields, but
+   not on registers or memory *)
+let rec is_register_const fields expr =
+  match expr with
+      Register _ -> false
+    | LoadBO _ -> false
+    | Unary (LoadByte, _) -> false
+    (*
+    | If (cond, cons, alt) ->
+	(match cfold_expr fields cond with
+	     ConditionConst true -> is_register_const fields cons
+	   | ConditionConst false -> is_register_const fields alt
+	   | _ -> (is_register_const fields cons) && (is_register_const fields alt))
+    *)
+    | _ -> for_all (is_register_const fields) (expr_sub_exprs expr)
 
 (* printing *)
 
@@ -709,6 +752,7 @@ let print_register register =
       GuestRegister (num, value_type) -> print_string "G" ; print_value_type value_type ; print_int_const num
     | HostRegister (num, value_type) -> print_string "H" ; print_value_type value_type ; print_int num
     | IntermediateRegister expr -> print_string "*IR*"
+    | LetRegister (name, value_type, _) -> print_string "L" ; print_string name
 
 let rec print_expr expr =
   let print_args exprs =
@@ -750,12 +794,16 @@ let rec print_expr expr =
     | UserOp (name, args) ->
 	print_string (name ^ "(") ; print_args args ; print_string ")"
 
-let print_stmt stmt =
+let rec print_stmt stmt =
   match stmt with
     Store (byte_order, width, addr, value) ->
       print_string "MEM" ; print_width width ; print_byte_order byte_order ;
       print_string "[" ; print_expr addr ; print_string "] := " ; print_expr value ; print_newline ()
   | Assign (dst, src) -> print_register dst ; print_string " := " ; print_expr src ; print_newline ()
+  | Let (name, width, expr, sub) ->
+      print_string (name ^ " :=") ; print_int width ; print_string " " ;
+      print_expr expr ; print_string ";\n" ; print_stmt sub
+  | Seq (sub1, sub2) -> print_stmt sub1 ; print_string ";\n" ; print_stmt sub2
 
 (*** patterns ***)
 

@@ -40,6 +40,7 @@ open Irmacros
 open Uncertainty
 
 exception Not_guest_register
+exception Width_not_supported
 
 (*
 let rec repeat_until_fixpoint fn data =
@@ -113,53 +114,80 @@ let print_c_func reg_type result_passed printers name stmt fields =
       | name :: rest ->
 	  print_string "word_64 field_" ; print_string name ; print_string ", ";
 	  print_fields rest
-  in
-    if result_passed then
-      print_string "void"
-    else
-      print_string reg_type ;
-    print_string "\nmlgen_" ; print_string name ; print_string " (" ; print_fields (stmt_fields stmt) ; print_string ")\n{\n" ;
+  and sort_guest_regs regs =
+    sort (fun (_, r1, _) (_, r2, _) ->
+	    match (r1, r2) with
+		(true, false) -> -1
+	      | (false, true) -> 1
+	      | _ -> 0)
+      regs
+  and handle_leaf_stmt stmt =
     let stmt_forms = explore_all_fields stmt mapping_ppc_to_alpha fields alpha_matchers
     in let switch = switch_cases (map (fun form -> (form.form_conditions, form)) stmt_forms)
     in print_switch
 	 (fun form ->
-	    let guest_regs = collect_stmt_guest_regs form.stmt
+	    let guest_regs = sort_guest_regs (collect_stmt_guest_regs form.stmt)
 	    and switch = switch_cases (map (fun form_match -> (form_match.match_conditions, form_match)) form.matches)
 	    in print_string (reg_type ^ " " ^
 			     (join_strings ", "
 				(map (fun (reg, read, write) ->
 					match reg with
 					    GuestRegister (int_const, _) ->
-					      (register_to_c [] reg) ^ " = ALLOC_GUEST_REG(" ^ (int_const_to_c int_const) ^ ")"
+					      (register_to_c [] reg) ^ " = ALLOC_GUEST_REG_" ^
+					      (if read then "R" else "") ^ (if write then "W" else "") ^
+					      "(" ^ (int_const_to_c int_const) ^ ")"
 					  | _ -> raise Not_guest_register)
 				   guest_regs)) ^
 			     ";\n") ;
-	    print_switch
-		 (fun form_match ->
-		    let allocation = make_allocation form_match.best_sub_matches form_match.match_datas
-		    in let interm_reg_strings = (map0_int (fun i -> "interm_reg_" ^ (string_of_int i))
-						   1 (length allocation))
-		    in print_string "{\n" ;
-		      if allocation <> [] then
-			(print_string (reg_type ^ " " ^ (join_strings ", " interm_reg_strings) ^ ";\n") ;
-			 print_string ("int " ^ (join_strings ", " (map (fun r -> r ^ "_set = 0") interm_reg_strings)) ^ ";\n\n"))
-		      else
-			() ;
-		      print_target_insns printers allocation form_match.best_sub_matches form_match.match_datas ;
-		      print_string "}\n")
-		 switch ;
-	    iter (fun (reg, _, _) ->
-		    match reg with
-			GuestRegister (int_const, _) ->
-			  print_string ("FREE_GUEST_REG(" ^ (int_const_to_c int_const) ^ ");\n")
-		      | _ -> raise Not_guest_register)
-	      guest_regs)
-	 switch ;
-      if not result_passed then
-	print_string "\nreturn guest_reg_1;\n"
-      else
-	() ;
-      print_string "}\n\n"
+	      print_switch
+		(fun form_match ->
+		   let allocation = make_allocation form_match.best_sub_matches form_match.match_datas
+		   in let interm_reg_strings = (map0_int (fun i -> "interm_reg_" ^ (string_of_int i))
+						  1 (length allocation))
+		   in print_string "{\n" ;
+		     if allocation <> [] then
+		       (print_string (reg_type ^ " " ^ (join_strings ", " interm_reg_strings) ^ ";\n") ;
+			print_string ("int " ^ (join_strings ", " (map (fun r -> r ^ "_set = 0") interm_reg_strings)) ^ ";\n\n"))
+		     else
+		       () ;
+		     print_target_insns printers allocation form_match.best_sub_matches form_match.match_datas ;
+		     print_string "}\n")
+		switch ;
+	      iter (fun (reg, _, _) ->
+		      match reg with
+			  GuestRegister (int_const, _) ->
+			    print_string ("FREE_GUEST_REG(" ^ (register_to_c [] reg) ^ ");\n")
+			| _ -> raise Not_guest_register)
+		guest_regs)
+	 switch
+  and handle_stmt stmt =
+    match stmt with
+	Store _ -> handle_leaf_stmt stmt
+      | Assign _ -> handle_leaf_stmt stmt
+      | Let (name, width, rhs, sub) ->
+	  print_string ("reg_t let_reg_" ^ name ^ " = alloc_tmp_integer_reg();\n{\n") ;
+	  handle_leaf_stmt (Assign (LetRegister (name, expr_value_type rhs, width), rhs)) ;
+	  print_string "}\n{\n" ;
+	  handle_stmt sub ;
+	  print_string ("free_tmp_integer_reg(let_reg_" ^ name ^ ");\n}\n")
+      | Seq (sub1, sub2) ->
+	  handle_stmt sub1 ;
+	  print_string "{\n" ;
+	  handle_stmt sub2 ;
+	  print_string "}\n"
+  in
+    if result_passed then
+      print_string "void"
+    else
+      print_string reg_type ;
+    print_string "\nmlgen_" ; print_string name ; print_string " (word_32 insn)\n{\n" ;
+    (* print_fields (stmt_fields stmt) ; *)
+    handle_stmt stmt ;
+    if not result_passed then
+      print_string "\nreturn guest_reg_1;\n"
+    else
+      () ;
+    print_string "}\n\n"
 
 let print_test_func =
   print_c_func "word_64" false
@@ -174,11 +202,27 @@ let make_registers () =
   and rb = GuestRegister (IntField "rb", Int)
   in (rs, rd, ra, rb)
 
-let alpha_wrap stmt =
-  match stmt with
-      Assign (GuestRegister (i, Int), expr) -> Assign (GuestRegister (i, Int), sex_expr 4 expr)
-    | Assign _ -> stmt
-    | Store _ -> stmt
+let rec alpha_wrap stmt =
+  let wrap_addr width addr =
+    match width with
+	1 -> bitxor_expr addr (int_literal_expr 3L)
+      | 2 -> bitxor_expr addr (int_literal_expr 1L)
+      | 4 -> addr
+      | _ -> raise Width_not_supported
+  in let rec wrap_expr expr =
+      match expr with
+	  Unary (LoadByte, addr) ->
+	    Unary (LoadByte, wrap_addr 1 (wrap_expr addr))
+	| LoadBO (bo, width, addr) ->
+	    LoadBO (bo, width, wrap_addr width (wrap_expr addr))
+	| _ ->
+	    apply_to_expr_subs wrap_expr expr
+  in match stmt with
+      Assign (GuestRegister (i, Int), expr) -> Assign (GuestRegister (i, Int), sex_expr 4 (wrap_expr expr))
+    | Assign (reg, expr) -> Assign (reg, wrap_expr expr)
+    | Store (bo, width, addr, rhs) -> Store (bo, width, wrap_addr width (wrap_expr addr), wrap_expr rhs)
+    | Let (name, width, rhs, sub) -> Let (name, width, wrap_expr rhs, alpha_wrap sub)
+    | Seq (sub1, sub2) -> Seq (alpha_wrap sub1, alpha_wrap sub2)
 
 let print_gen machine_insn =
   print_gen_func alpha_gen_gens machine_insn.machine_insn_name (alpha_wrap machine_insn.insn_stmt) machine_insn.explore_fields

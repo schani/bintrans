@@ -36,6 +36,8 @@
 	(,(format nil "~~A = ~A;" c-format) rs ra i)
 	(,(format nil "emit(COMPOSE_~A_IMM(~~A, ~~A, ~~A));" name) ra i rs)))))
 
+; we don't add the immediate version of addq because it performs a subset of
+; the functionality of lda
 (defmatcher addq
   (set ?rs (+i (register ?ra) (register ?rb)))
   1
@@ -53,6 +55,13 @@
 (defopmatcher eqv (bit-xor a (bit-neg b)) "~A ^ ~~(~A)")
 
 (defmatcher lda
+  (set ?rs (+i (register ?ra) (any-int ?i)))
+  (when (zero-or-full-p 8 (ashiftr 8 i 15))
+    1)
+  ("~A = ~A + ~A;" rs ra i)
+  ("emit(COMPOSE_LDA(~A, ~A & 0xffff, ~A));" rs i ra))
+
+(defmatcher lda-31
   (set ?rs (any-int ?i))
   (when (zero-or-full-p 8 (ashiftr 8 i 15))
     1)
@@ -60,6 +69,14 @@
   ("emit(COMPOSE_LDA(~A, ~A & 0xffff, 31));" rs i))
 
 (defmatcher ldah
+  (set ?rs (+i (register ?ra) (any-int ?i)))
+  (when (and (int-zero-p 8 (bit-and i #xffff))
+	     (zero-or-full-p 8 (ashiftr 8 i 31)))
+    1)
+  ("~A = ~A + ~A;" rs ra i)
+  ("emit(COMPOSE_LDAH(~A, (~A >> 16) & 0xffff, ~A));" rs i ra))
+
+(defmatcher ldah-31
   (set ?rs (any-int ?i))
   (when (and (int-zero-p 8 (bit-and i #xffff))
 	     (zero-or-full-p 8 (ashiftr 8 i 31)))
@@ -193,6 +210,24 @@
 (defopmatcher subq (-i a b) "~A - ~A")
 
 (defopmatcher xor (bit-xor a b) "~A ^ ~A")
+
+(defmatcher zapnot-imm-1
+  (set ?rs (zex 1 (register ?ra)))
+  1
+  ("~A = zex_8(~A);" rs ra)
+  ("emit(COMPOSE_ZAPNOT_IMM(~A, 1, ~A));" ra rs))
+
+(defmatcher zapnot-imm-3
+  (set ?rs (zex 2 (register ?ra)))
+  1
+  ("~A = zex_16(~A);" rs ra)
+  ("emit(COMPOSE_ZAPNOT_IMM(~A, 3, ~A));" ra rs))
+
+(defmatcher zapnot-imm-15
+  (set ?rs (zex 4 (register ?ra)))
+  1
+  ("~A = zex_32(~A);" rs ra)
+  ("emit(COMPOSE_ZAPNOT_IMM(~A, 15, ~A));" ra rs))
 
 (defmatcher zapnot-imm-sll-srl-imm-bis
   (set ?rs (rotl 4 (register ?ra) (register ?rb)))
