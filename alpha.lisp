@@ -46,7 +46,7 @@
 
 ;;;; macros
 
-(defmacro define-operate-insn (name opcd function effect &optional fields &key (imm-form t))
+(defmacro define-operate-insn (name opcd function effect &optional fields &key (imm-form t) (generate t))
   (let ((reg-form `(define-insn ,name
 		    ((opcd ,opcd)
 		     (operate-function ,function)
@@ -57,7 +57,8 @@
 					      (long-op-b . ,#'(lambda () '(if (= rb (width 5 31)) (width 32 0) (subreg 0 31 rb gpr))))
 					      (word-op-b . ,#'(lambda () '(if (= rb (width 5 31)) (width 16 0) (subreg 0 15 rb gpr))))
 					      (byte-op-b . ,#'(lambda () '(if (= rb (width 5 31)) (width 8 0) (subreg 0 7 rb gpr))))))
-		    (,(format nil "~A $%u,$%u,$%u" (string-downcase (symbol-name name))) ra rb rc))))
+		    (,(format nil "~A $%u,$%u,$%u" (string-downcase (symbol-name name))) ra rb rc)
+		    :generate ,generate)))
     (if imm-form
 	`(progn
 	  ,reg-form
@@ -69,8 +70,9 @@
 	    ,(my-macroexpand effect `((op-b . ,#'(lambda () '(width 64 (zex imm))))
 				      (long-op-b . ,#'(lambda () '(width 32 (zex imm))))
 				      (word-op-b . ,#'(lambda () '(width 16 (zex imm))))
-				      (byte-op-b . ,#'(lambda () '(width 8 (zex imm))))))
-	    (,(format nil "~A $%u,%u,$%u" (string-downcase (symbol-name name))) ra imm rc)))
+				      (byte-op-b . ,#'(lambda () 'imm))))
+	    (,(format nil "~A $%u,%u,$%u" (string-downcase (symbol-name name))) ra imm rc)
+	    :generate ,generate))
 	reg-form)))
 
 (defmacro define-float-insn (name opcd function effect &optional fields)
@@ -124,11 +126,12 @@
 	 (set-fc (fop fb))
 	 (nop)))))
 
-(defmacro define-load-store-insn (name fields effect)
+(defmacro define-load-store-insn (name fields effect &key (generate t))
   `(define-insn ,name
     ,fields
     ,effect
-    (,(format nil "~A $%u,%d($%u)" (string-downcase (symbol-name name))) ra memory-disp rb)))
+    (,(format nil "~A $%u,%d($%u)" (string-downcase (symbol-name name))) ra memory-disp rb)
+    :generate ,generate))
 
 (defmacro define-float-load-store-insn (name fields effect)
   `(define-insn ,name
@@ -182,7 +185,7 @@
       (set (reg fc fpr) val)))
 
 (define-insn-macro mem-src ()
-  (mem (+ (sex memory-disp) (op rb))))
+  (mem (+ (op rb) (sex memory-disp))))
 
 (define-insn-macro set-mem (width value)
   (set (mem (+ (sex memory-disp) (op rb)) width) value))
@@ -203,7 +206,8 @@
 
 (define-operate-insn amask #x11 #x61
   ((set-rc (logand (op-b) (bitneg #x207)))) ;all but mvi
-  ((ra 31)))
+  ((ra 31))
+  :generate nil)
 
 (define-operate-insn and #x11 #x00
   ((set-rc (logand (op ra) (op-b)))))
@@ -272,7 +276,9 @@
   (not (= (op ra) 0)))
 
 (define-operate-insn cmpbge #x10 #x0f
-  ((set-rc (+ (op ra) (op-b)))))	;FIXME
+  ((set-rc (+ (op ra) (op-b))))
+  ()
+  :generate nil)	;FIXME
 
 (define-compare-insn cmpeq #x2d
   (= (op ra) (op-b)))
@@ -468,7 +474,8 @@
      (imm 1)
      (ra 31))
   ((set-rc 0))
-  ("implver $%u" rc))
+  ("implver $%u" rc)
+  :generate nil)
 
 (define-operate-insn insbl #x12 #x0b
   ((set-rc (logand (shiftl (op ra) (* (logand (op-b) 7) 8))
@@ -535,7 +542,8 @@
 
 (define-load-store-insn ldl_l
     ((opcd #x2a))
-  ((set-ra (sex (width 32 (mem-src))))))
+  ((set-ra (sex (width 32 (mem-src)))))
+  :generate nil)
 
 (define-load-store-insn ldq
     ((opcd #x29))
@@ -543,7 +551,8 @@
 
 (define-load-store-insn ldq_l
     ((opcd #x2b))
-  ((set-ra (mem-src))))
+  ((set-ra (mem-src)))
+  :generate nil)
 
 (define-load-store-insn ldq_u
     ((opcd #x0b))

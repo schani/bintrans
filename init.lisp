@@ -2,9 +2,16 @@
 (load "ppc.lisp")
 (load "alpha.lisp")
 
+(defparameter *source-machine* *ppc*)
+(defparameter *target-machine* *alpha*)
+(defparameter *register-mapping* *ppc-to-alpha-register-mapping*)
+
+(generate-all-generators *alpha*)
+
 (defparameter *ppc-and* (find 'and (machine-insns *ppc*) :key #'insn-name))
+(defparameter *ppc-64-and* (64bitify (first (insn-effect *ppc-and*))))
 (defparameter *ppc-add* (find 'add (machine-insns *ppc*) :key #'insn-name))
-(defparameter *ppc-64-add* (64bitify (first (insn-effect *ppc-add*)) *ppc* *alpha* *ppc-to-alpha-register-mapping*))
+(defparameter *ppc-64-add* (64bitify (first (insn-effect *ppc-add*))))
 
 (defparameter *alpha-and* (find 'and (machine-insns *alpha*) :key #'insn-name))
 (defparameter *alpha-and-generators* (generate-generators *alpha-and*))

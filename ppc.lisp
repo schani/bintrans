@@ -177,9 +177,8 @@
      (oe 0)
      (xo9 202)
      (rc 0))
-  ((let ((old-ca (width 32 (zex xer-ca))))
-     (set (reg rd gpr) (+ (reg ra gpr) (zex xer-ca)))
-     (set xer-ca (+carry (reg ra gpr) (zex old-ca)))))
+  ((set (reg rd gpr) (+ (reg ra gpr) (zex xer-ca)))
+   (set xer-ca (+carry (reg ra gpr) (zex xer-ca))))
   ("addze r%u,r%u" rd ra))
 
 (define-rc-insn and ra
