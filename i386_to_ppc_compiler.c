@@ -103,20 +103,20 @@
 #define ref_i386_eflags_w()       ref_integer_reg_for_writing(REG_EFLAGS)
 #define ref_i386_eflags_rw()      ref_integer_reg_for_reading_and_writing(REG_EFLAGS)
 
-/*
 #define KILL_OF                   ((flags_killed >> 11) & 1)
 #define KILL_CF                   (flags_killed & 1)
 #define KILL_SF                   ((flags_killed >> 7) & 1)
 #define KILL_ZF                   ((flags_killed >> 6) & 1)
 #define KILL_SZF                  (KILL_SF || KILL_ZF)
 #define KILL_PF                   (flags_killed & 4)
-*/
+/*
 #define KILL_OF                   1
 #define KILL_CF                   1
 #define KILL_SF                   1
 #define KILL_ZF                   1
 #define KILL_SZF                  1
 #define KILL_PF                   1
+*/
 
 #define PARITY_REG                25
 
@@ -2489,12 +2489,93 @@ handle_ret_insn (void)
 static void
 handle_rol_insn (void)
 {
-    gen_interpreter_handle();
+    if (op_width != 32)
+	gen_interpreter_handle();
+    else
+    {
+	/* this insn translator is still untested, so it probably won't work */
+	reg_t src = ref_src_op(0, 0, 0, 0);
+	reg_t amount = alloc_tmp_integer_reg();
+	reg_t dst, tmp;
+
+	emit(COMPOSE_CLRLWI(amount, src, 27));
+
+	dst = ref_dst_op_to_reg(1, 1, 0);
+	tmp = alloc_tmp_integer_reg();
+
+	emit(COMPOSE_SLW(tmp, dst, amount));
+	emit(COMPOSE_SUBFIC(amount, amount, 32));
+	emit(COMPOSE_SRW(dst, dst, amount));
+	emit(COMPOSE_OR(dst, dst, tmp));
+
+	if (KILL_CF || KILL_OF)
+	{
+	    reg_t minus_one = alloc_tmp_integer_reg();
+	    reg_t tmp2 = alloc_tmp_integer_reg();
+
+	    emit(COMPOSE_LI(minus_one, 0xffff));
+	    emit(COMPOSE_CLRLWI(tmp2, dst, 31));
+	    emit(COMPOSE_ADDIC(tmp, minus_one, tmp2)); /* generate CF */
+
+	    if (KILL_OF)
+	    {
+		label_t label = alloc_label();
+
+		emit(COMPOSE_CMPWI(1, amount, 31));
+		emit_branch(COMPOSE_BNE(6, 0), label);
+
+		emit(COMPOSE_SLWI(tmp2, tmp2, 31));
+		emit(COMPOSE_RLWINM(tmp, dst, 0, 0, 0));
+		emit(COMPOSE_XOR(tmp, tmp, tmp2));
+		emit(COMPOSE_ADDO(tmp, minus_one, tmp)); /* generate OF */
+
+		emit_label(label);
+		free_label(label);
+	    }
+
+	    free_tmp_integer_reg(tmp2);
+	    free_tmp_integer_reg(minus_one);
+	}
+
+	free_tmp_integer_reg(amount);
+	commit_and_dispose_dst_op(dst, 1, 0, 0);
+    }
 }
 
 static void
 handle_ror_insn (void)
 {
+/*    if (mode == MODE_RM32_IMM8)
+    {
+	word_8 amount = imm8 & 0x1f;
+	reg_t dst, tmp;
+
+	dst = ref_dst_op_to_reg(1, amount != 0, 0);
+	tmp = alloc_tmp_integer_reg();
+
+	if (amount != 0)
+	{
+	    emit(COMPOSE_SLWI(tmp, dst, 32 - amount));
+	    emit(COMPOSE_SRWI(dst, dst, amount));
+	    emit(COMPOSE_OR(dst, dst, tmp));
+	}
+
+	if (KILL_CF)
+	{
+	    reg_t minus_one = alloc_tmp_integer_reg();
+	    reg_t tmp2 = alloc_tmp_integer_reg();
+
+	    emit(COMPOSE_LI(minus_one, 0xffff));
+	    emit(COMPOSE_CLRLWI(tmp2, dst, 31));
+	    emit(COMPOSE_ADDIC(tmp, minus_one, tmp2)); /* generate CF */ /*
+	}
+
+	if (KILL_OF)
+	{
+	}
+    }
+    else
+*/
     gen_interpreter_handle();
 }
 
