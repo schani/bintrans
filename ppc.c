@@ -581,7 +581,7 @@ translate_filename (char *file)
 
     for (i = 0; unmangled[i] != 0; ++i)
 	if (strcmp(unmangled[i], file) == 0)
-	    return file;
+	    return unmangled[i];
 
     assert(strlen(file) + strlen(EMU_ROOT) <= MAX_FILENAME_LEN);
 

@@ -975,34 +975,42 @@ gen_cond_branch (word_32 insn, word_32 pc, void (*pos_emitter) (reg_t, label_t),
 	word_32 target = pc + (SEX32(FIELD_BD, 14) << 2);
 	label_t alt_label = alloc_label();
 
-	assert(target != pc + 4);
-	assert(next_pc == target || next_pc == pc + 4);
-
-	emit_freeze_save();
-
-	if (next_pc == pc + 4)
-	    pos_emitter(cond_reg, alt_label);
+	if (target == pc + 4)
+	{
+	    if (unref_cond_reg)
+		unref_integer_reg(cond_reg);
+	}
 	else
-	    neg_emitter(cond_reg, alt_label);
+	{
+	    assert(target != pc + 4);
+	    assert(next_pc == target || next_pc == pc + 4);
 
-	if (unref_cond_reg)
-	    unref_integer_reg(cond_reg);
+	    emit_freeze_save();
 
-	emit_begin_alt();
+	    if (next_pc == pc + 4)
+		pos_emitter(cond_reg, alt_label);
+	    else
+		neg_emitter(cond_reg, alt_label);
 
-	emit_label(alt_label);
-	free_label(alt_label);
+	    if (unref_cond_reg)
+		unref_integer_reg(cond_reg);
 
-	emit_start_direct_jump(1);
+	    emit_begin_alt();
 
-	emit_store_regs(EMU_INSN_EPILOGUE);
+	    emit_label(alt_label);
+	    free_label(alt_label);
 
-	if (next_pc == pc + 4)
-	    emit_direct_jump(target);
-	else
-	    emit_direct_jump(pc + 4);
+	    emit_start_direct_jump(1);
 
-	emit_end_alt();
+	    emit_store_regs(EMU_INSN_EPILOGUE);
+
+	    if (next_pc == pc + 4)
+		emit_direct_jump(target);
+	    else
+		emit_direct_jump(pc + 4);
+
+	    emit_end_alt();
+	}
     }
 }
 
