@@ -4,7 +4,7 @@ open Matcher
 open Simplifiers
 
 let rec simplify_expr fields expr =
-  if is_const (cfold_expr [] expr) then
+  if is_const (cfold_expr fields expr) then
     (cm_return expr)
   else
     cm_bind (apply_to_expr_subs_with_monad cm_return cm_bind (simplify_expr fields) expr)

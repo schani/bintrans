@@ -4,6 +4,7 @@ expr.ml
 instruction.ml
 machine.ml
 matcher.ml
+memoize.ml
 monad.ml
 pruner.ml
 simplify.ml

@@ -2,6 +2,7 @@ open Hashtbl
 
 (*** the real memoizer ***)
 
+(*
 let memoize fn =
   let dict = Hashtbl.create 4096
   in let rec memoized_fn arg =
@@ -34,10 +35,10 @@ let memoize2 fn1 fn2 =
 	    in Hashtbl.add dict2 arg result ;
 	      result
   in (memoized_fn1, memoized_fn2)
+*)
 
 (*** fake memoizer ***)
 
-(*
 let memoize fn =
   let rec memoized_fn arg =
     fn memoized_fn arg
@@ -50,7 +51,6 @@ let memoize2 fn1 fn2 =
     fn2 memoized_fn1 memoized_fn2 arg
   in
     (memoized_fn1, memoized_fn2)
-*)
 
 (*
 let fib =
