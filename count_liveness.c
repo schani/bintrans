@@ -39,9 +39,15 @@ main (void)
 	num_cr += 32;
 	num_xer += 3;
 	num_gpr += 32;
+
+	printf("%08x %d %d %d\n",
+	       info.foreign_addr,
+	       count_bits(info.live_cr),
+	       count_bits(info.live_xer & 0xe0000000),
+	       count_bits(info.live_gpr));
     }
 
-    printf("%ld %ld %ld %ld %ld %ld\n", live_cr, num_cr, live_xer, num_xer, live_gpr, num_gpr);
+    /* printf("%ld %ld %ld %ld %ld %ld\n", live_cr, num_cr, live_xer, num_xer, live_gpr, num_gpr); */
 
     return 0;
 }

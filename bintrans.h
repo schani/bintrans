@@ -380,5 +380,5 @@ void init_loops (void);
 #elif defined(ARCH_PPC)
 #define disassemble_target_insn               disassemble_ppc_insn
 #else
-#error unsupported target architecture
+#define disassemble_target_insn               assert(0),
 #endif

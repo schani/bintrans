@@ -4691,10 +4691,10 @@ save_live = live_~A;~%"
 		  (progn
 		    (generate-gen-for-expr cond)
 		    (format t "~{gen_~A_save = gen_~:*~A;~%kill_~:*~A_save = kill_~:*~A;~%~}" names)
-		    (generate-gen-killed regs classes (list cons))
+		    (generate-gen-kill regs classes (list cons))
 		    (format t "~{SWAP(gen_~A_save, gen_~:*~A);~%SWAP(kill_~:*~A_save, kill_~:*~A);~%~}"
 			    names)
-		    (generate-gen-killed regs classes (list alt))
+		    (generate-gen-kill regs classes (list alt))
 		    (format t "~{gen_~A |= gen_~:*~A_save;~%kill_~:*~A |= kill_~:*~A_save;~%~}" names))))
 	  (t
 	   (std-handler expr)))))))

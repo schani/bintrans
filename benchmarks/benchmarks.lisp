@@ -40,7 +40,7 @@
 		   ((static-liveness)
 		    (format t "./alive benchrun/cfg.txt /tmp/liveness.txt~%./convert_liveness </tmp/liveness.txt >benchrun/liveness.out~%"))
 		   ((save-liveness ?name)
-		    (format t "cp benchrun/liveness.out benchmarks/~A~%" name))
+		    (format t "cp benchrun/liveness.out benchmarks/~A~%" (format nil name (dcs benchmark) current-run)))
 		   ((name ?name)
 		    (setq default-name name))
 		   (t

@@ -32,10 +32,30 @@ foreach $fn (glob("out.*")) {
 		last;
 	    }
 	} elsif ($count) {
-	    if (/executed load insns:\s*(\d+)/) {
+	    if (/^executed load insns:\s*(\d+)/) {
 		$mem{$bench}{$config}{$nth}{loads} = $1;
-	    } elsif (/executed store insns:\s*(\d+)/) {
+	    } elsif (/^executed store insns:\s*(\d+)/) {
 		$mem{$bench}{$config}{$nth}{stores} = $1;
+	    } elsif (/^executed crf0 insns:\s*(\d+)/) {
+		$mem{$bench}{$config}{$nth}{crf0} = $1;
+	    } elsif (/^executed crfx insns:\s*(\d+)/) {
+		$mem{$bench}{$config}{$nth}{crfx} = $1;
+	    } elsif (/^translated blocks:\s*(\d+)/) {
+		$mem{$bench}{$config}{$nth}{transblocks} = $1;
+	    } elsif (/^translated insns:\s*(\d+)/) {
+		$mem{$bench}{$config}{$nth}{transinsns} = $1;
+	    } elsif (/^generated insns:\s*(\d+)/) {
+		$mem{$bench}{$config}{$nth}{geninsns} = $1;
+	    } elsif (/^load reg insns:\s*(\d+)/) {
+		$mem{$bench}{$config}{$nth}{genloads} = $1;
+	    } elsif (/^store reg insns:\s*(\d+)/) {
+		$mem{$bench}{$config}{$nth}{genstores} = $1;
+	    } elsif (/^generated crf0 bits:\s*(\d+)/) {
+		$mem{$bench}{$config}{$nth}{gencrf0} = $1;
+	    } elsif (/^generated crfx bits:\s*(\d+)/) {
+		$mem{$bench}{$config}{$nth}{gencrfx} = $1;
+	    } elsif (/^patched store reg insns:\s*(\d+)/) {
+		$mem{$bench}{$config}{$nth}{patchedstores} = $1;
 	    }
 	}
     }
@@ -49,9 +69,13 @@ foreach $bench (keys %time) {
 	    foreach $run (keys %{$time{$bench}{$config}{$nth}}) {
 		$time += $time{$bench}{$config}{$nth}{$run};
 	    }
-	    $loads = $mem{$bench}{$config}{$nth}{loads};
-	    $stores = $mem{$bench}{$config}{$nth}{stores};
-	    print "$bench $config $nth $time $loads $stores\n";
+	    print "$bench $config $nth $time";
+	    foreach $key (("loads", "stores", "crf0", "crfx", "transblocks", "transinsns", 
+			   "geninsns", "genloads", "genstores", "gencrf0", "gencrfx", "patchedstores")) {
+		$value = $mem{$bench}{$config}{$nth}{$key};
+		print " $value";
+	    }
+	    print "\n";
 	}
     }
 }
