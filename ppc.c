@@ -3,7 +3,7 @@
  *
  * bintrans
  *
- * Copyright (C) 2001 Mark Probst
+ * Copyright (C) 2001,2002 Mark Probst
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -252,6 +252,7 @@ int emu_errnos[] = { 0,
 #define SYSCALL_WRITE              4
 #define SYSCALL_OPEN               5
 #define SYSCALL_CLOSE              6
+#define SYSCALL_UNLINK            10
 #define SYSCALL_TIME              13
 #define SYSCALL_GETPID            20
 #define SYSCALL_GETUID            24
@@ -262,10 +263,14 @@ int emu_errnos[] = { 0,
 #define SYSCALL_GETEGID           50
 #define SYSCALL_IOCTL             54
 #define SYSCALL_FCNTL             55
+#define SYSCALL_SETRLIMIT         75
+#define SYSCALL_GETRLIMIT         76
+#define SYSCALL_GETRUSAGE         77
 #define SYSCALL_GETTIMEOFDAY      78
 #define SYSCALL_MMAP              90
 #define SYSCALL_MUNMAP            91
 #define SYSCALL_SOCKETCALL       102
+#define SYSCALL_STAT             106
 #define SYSCALL_FSTAT            108
 #define SYSCALL_UNAME            122
 #define SYSCALL_MPROTECT         125
@@ -274,6 +279,7 @@ int emu_errnos[] = { 0,
 #define SYSCALL_SELECT           142
 #define SYSCALL_READV            145
 #define SYSCALL_WRITEV           146
+#define SYSCALL_MREMAP           163
 #define SYSCALL_RT_SIGACTION     173
 #endif
 
@@ -1961,32 +1967,32 @@ handle_system_call (interpreter_t *intp)
 void
 lsbify_elf32_ehdr (Elf32_Ehdr *hdr)
 {
-    hdr->e_type = ntohs(hdr->e_type);
-    hdr->e_machine = ntohs(hdr->e_machine);
-    hdr->e_version = ntohl(hdr->e_version);
-    hdr->e_entry = ntohl(hdr->e_entry);
-    hdr->e_phoff = ntohl(hdr->e_phoff);
-    hdr->e_shoff = ntohl(hdr->e_shoff);
-    hdr->e_flags = ntohl(hdr->e_flags);
-    hdr->e_ehsize = ntohs(hdr->e_ehsize);
-    hdr->e_phentsize = ntohs(hdr->e_phentsize);
-    hdr->e_phnum = ntohs(hdr->e_phnum);
-    hdr->e_shentsize = ntohs(hdr->e_shentsize);
-    hdr->e_shnum = ntohs(hdr->e_shnum);
-    hdr->e_shstrndx = ntohs(hdr->e_shstrndx);
+    hdr->e_type = swap_16(hdr->e_type);
+    hdr->e_machine = swap_16(hdr->e_machine);
+    hdr->e_version = swap_32(hdr->e_version);
+    hdr->e_entry = swap_32(hdr->e_entry);
+    hdr->e_phoff = swap_32(hdr->e_phoff);
+    hdr->e_shoff = swap_32(hdr->e_shoff);
+    hdr->e_flags = swap_32(hdr->e_flags);
+    hdr->e_ehsize = swap_16(hdr->e_ehsize);
+    hdr->e_phentsize = swap_16(hdr->e_phentsize);
+    hdr->e_phnum = swap_16(hdr->e_phnum);
+    hdr->e_shentsize = swap_16(hdr->e_shentsize);
+    hdr->e_shnum = swap_16(hdr->e_shnum);
+    hdr->e_shstrndx = swap_16(hdr->e_shstrndx);
 }
 
 void
 lsbify_elf32_phdr (Elf32_Phdr *hdr)
 {
-    hdr->p_type = ntohl(hdr->p_type);
-    hdr->p_offset = ntohl(hdr->p_offset);
-    hdr->p_vaddr = ntohl(hdr->p_vaddr);
-    hdr->p_paddr = ntohl(hdr->p_paddr);
-    hdr->p_filesz = ntohl(hdr->p_filesz);
-    hdr->p_memsz = ntohl(hdr->p_memsz);
-    hdr->p_flags = ntohl(hdr->p_flags);
-    hdr->p_align = ntohl(hdr->p_align);
+    hdr->p_type = swap_32(hdr->p_type);
+    hdr->p_offset = swap_32(hdr->p_offset);
+    hdr->p_vaddr = swap_32(hdr->p_vaddr);
+    hdr->p_paddr = swap_32(hdr->p_paddr);
+    hdr->p_filesz = swap_32(hdr->p_filesz);
+    hdr->p_memsz = swap_32(hdr->p_memsz);
+    hdr->p_flags = swap_32(hdr->p_flags);
+    hdr->p_align = swap_32(hdr->p_align);
 }
 
 word_32
@@ -2974,7 +2980,7 @@ main (int argc, char *argv[])
 
     /* debug = 1; */
 
-#ifdef DIFFERENT_BYTEORDER
+#if defined(DIFFERENT_BYTEORDER) && !defined(EMULATED_MEM)
     init_unaligned();
 #endif
 

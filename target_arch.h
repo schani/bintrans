@@ -44,3 +44,7 @@
 #ifdef ARCH_I386
 #include "i386_types.h"
 #endif
+
+#ifdef ARCH_PPC
+#include "ppc_types.h"
+#endif

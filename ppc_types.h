@@ -1,5 +1,5 @@
 /*
- * alpha_types.h
+ * ppc_types.h
  *
  * bintrans
  *
@@ -22,7 +22,7 @@
 
 typedef unsigned int word_32;
 typedef unsigned short word_16;
-typedef unsigned long word_64;
+typedef unsigned long long word_64;
 typedef unsigned char word_8;
 typedef unsigned int word_1;
 typedef unsigned int word_2;
@@ -32,11 +32,11 @@ typedef unsigned int word_5;
 typedef word_8 byte;
 typedef signed int sword_32;
 typedef signed short sword_16;
-typedef signed long sword_64;
+typedef signed long long sword_64;
 typedef signed char sword_8;
 
-typedef unsigned long addr_t;
+typedef unsigned int addr_t;
 
-#ifdef EMU_BIG_ENDIAN
+#ifdef EMU_LITTLE_ENDIAN
 #define DIFFERENT_BYTEORDER
 #endif

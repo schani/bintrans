@@ -292,3 +292,6 @@ void init_loops (void);
 #else
 #error no interpreter specified
 #endif
+
+#define swap_16(x)           (((word_16)(x) >> 8) | (((word_16)(x) & 0xff) << 8))
+#define swap_32(x)           (((word_32)swap_16((x)) << 16) | (word_32)swap_16((word_32)(x) >> 16))

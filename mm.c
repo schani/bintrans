@@ -755,14 +755,14 @@ mmap_anonymous (interpreter_t *intp, word_32 len, int flags, int fixed, word_32 
 
 #ifdef DIFFERENT_BYTEORDER
 void
-unbigendify_mem (word_32 *p, word_32 len)
+swap_mem (word_32 *p, word_32 len)
 {
     word_32 i;
 
     len = (len + 3) >> 2;
 
     for (i = 0; i < len; ++i)
-	p[i] = ntohl(p[i]);
+	p[i] = swap_32(p[i]);
 }
 #endif
 
@@ -823,7 +823,7 @@ copy_file_to_mem (interpreter_t *intp, int fd, word_32 addr, word_32 len, word_3
 	assert(result != -1);
 
 #ifdef DIFFERENT_BYTEORDER
-	unbigendify_mem((word_32*)(page->mem + ((addr + num_read) & PPC_PAGE_MASK)), result);
+	swap_mem((word_32*)(page->mem + ((addr + num_read) & PPC_PAGE_MASK)), result);
 #endif
 
 	if (result == 0)

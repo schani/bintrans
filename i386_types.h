@@ -29,3 +29,7 @@ typedef signed int sword_32;
 typedef signed long long sword_64;
 
 typedef unsigned int addr_t;
+
+#ifdef EMU_BIG_ENDIAN
+#define DIFFERENT_BYTEORDER
+#endif

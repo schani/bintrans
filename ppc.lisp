@@ -1329,6 +1329,15 @@
   ((set (reg ra gpr) (logxor (reg rs gpr) (shiftl (zex uimm) 16))))
   ("xoris r%u,r%u,%u" ra rs uimm))
 
+;;;; mnemonics
+
+(define-mnemonic extrwi (a s n b)
+  (rlwinm a s (+ b n) (- 32 n) 31))
+
+(define-mnemonic slwi (a s n)
+  (rlwinm a s n 0 (- 31 n)))
+
+
 (defvar *ppc-to-alpha-register-mapping* '((gpr gpr t) (fpr fpr nil) (spr gpr t)))
 
 #|
