@@ -23,7 +23,7 @@ COMPILER_OBJS = compiler.o
 
 #DEFINES = -DUSE_HAND_TRANSLATOR -DCOLLECT_STATS -DDYNAMO_TRACES -DDYNAMO_THRESHOLD=50 -DSYNC_BLOCKS
 #-DDUMP_CODE
-DEFINES = -DUSE_HAND_TRANSLATOR -DCOLLECT_STATS -DCOLLECT_LIVENESS -DLIVENESS_DEPTH=0
+DEFINES = -DUSE_HAND_TRANSLATOR -DCOLLECT_STATS -DCOLLECT_LIVENESS -DLIVENESS_DEPTH=1
 #-DDUMP_CFG
 #-DDUMP_CODE
 #-DSYNC_BLOCKS
@@ -64,7 +64,8 @@ endif
 ifeq ($(EMU),I386)
 EMU_DEFS = -DEMU_I386 -DEMU_LITTLE_ENDIAN
 EMU_OBJS = i386.o
-XXX_COMPILER_OBJS += i386_add_rm32_simm8_compiler.o i386_add_rm32_r32_compiler.o \
+ifeq ($(ARCH),-DARCH_ALPHA)
+COMPILER_OBJS += i386_add_rm32_simm8_compiler.o i386_add_rm32_r32_compiler.o \
 		i386_inc_pr32_compiler.o i386_inc_rm32_compiler.o \
 		i386_lea_r32_rm32_compiler.o \
 		i386_mov_eax_moffs32_compiler.o i386_mov_moffs32_eax_compiler.o i386_mov_rm32_imm32_compiler.o i386_mov_rm32_r32_compiler.o \
@@ -74,6 +75,7 @@ XXX_COMPILER_OBJS += i386_add_rm32_simm8_compiler.o i386_add_rm32_r32_compiler.o
 		i386_sub_rm32_r32_compiler.o \
 		i386_xor_al_imm8_compiler.o i386_xor_ax_imm16_compiler.o i386_xor_eax_imm32_compiler.o i386_xor_rm32_imm32_compiler.o \
 			i386_xor_rm32_simm8_compiler.o i386_xor_rm32_r32_compiler.o i386_xor_r32_rm32_compiler.o
+endif
 endif
 
 ifeq ($(MODE),INTERPRETER)
@@ -110,13 +112,16 @@ undump_liveness : undump_liveness.c bintrans.h compiler.h
 convert_liveness : convert_liveness.c bintrans.h compiler.h
 	$(DIET) gcc $(CFLAGS) -Wall -o convert_liveness convert_liveness.c
 
-ppc.o : ppc.c ppc_interpreter.c ppc_disassembler.c alpha_types.h bintrans.h
+count_liveness : count_liveness.c bintrans.h compiler.h
+	$(DIET) gcc $(CFLAGS) -Wall -o count_liveness count_liveness.c
+
+ppc.o : ppc.c ppc_interpreter.c ppc_disassembler.c alpha_types.h bintrans.h ppc_jump_analyzer.c
 	$(DIET) gcc $(CFLAGS) -Wall -g -c ppc.c
 
 i386.o : i386.c i386_interpreter.c i386_disassembler.c i386_livenesser.c bintrans.h
 	$(DIET) gcc $(CFLAGS) -Wall -g -c i386.c
 
-compiler.o : compiler.c alpha_composer.h ppc_to_alpha_compiler.c ppc_jump_analyzer.c i386_compiler.c i386_to_ppc_compiler.c alpha_disassembler.c alpha_types.h bintrans.h fragment_hash.h compiler.h
+compiler.o : compiler.c alpha_composer.h ppc_to_alpha_compiler.c i386_compiler.c i386_to_ppc_compiler.c alpha_disassembler.c alpha_types.h bintrans.h fragment_hash.h compiler.h
 	$(DIET) gcc $(CFLAGS) -Wall -g -c compiler.c
 
 mm.o : mm.c bintrans.h alpha_types.h ppc_defines.h
@@ -131,7 +136,7 @@ fragment_hash.o : fragment_hash.c fragment_hash.h bintrans.h
 loops.o : loops.c fragment_hash.h bintrans.h compiler.h
 	$(DIET) gcc $(CFLAGS) -Wall -g -c loops.c
 
-liveness.o : liveness.c bintrans.h
+liveness.o : liveness.c bintrans.h ppc_livenesser.c ppc_consumer.c ppc_gen_kill.c
 	$(DIET) gcc $(CFLAGS) -Wall -g -c liveness.c
 
 lispreader.o : lispreader.c lispreader.h
