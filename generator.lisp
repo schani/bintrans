@@ -411,6 +411,11 @@
 			    (make-expr :kind 'symbol :type type :width width :operands (list expr) :constp (expr-constp binding))))))
 		   ((consp expr)
 		    (case (first expr)
+		      (ignore
+		       (unless (and (null required-width)
+				    (null required-type))
+			 (error "ignore has no return value~%"))
+		       (make-expr :kind 'ignore :operands (list (generate-expr (second expr) bindings)) :constp nil))
 		      (let
 			  (unless (and (null required-width)
 				       (null required-type))
@@ -671,6 +676,7 @@
 			  (pc ,#'(lambda () "pc"))
 			  (addr ,#'(lambda () "addr"))
 			  (symbol ,#'(lambda (name) (cdr (assoc name bindings))))
+			  (ignore ,#'(lambda (value) "0 /* ignore */"))
 			  (let ,#'(lambda (let-bindings body)
 				    (with-output-to-string (out)
 				      (format out "{~%")

@@ -808,9 +808,11 @@ compile_basic_block (word_32 addr)
 {
     word_64 start = (word_64)emit_loc;
     word_32 insnp = addr;
+#ifdef DUMP_CODE
     word_64 x = start;
     int old_num_constants = num_constants;
     int i;
+#endif
 
     have_jumped = 0;
 

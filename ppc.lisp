@@ -205,6 +205,17 @@
 		    (zex xer-so))))
   ("andi. r%u,r%u,%u" ra rs uimm))
 
+(define-insn andis.
+    ((opcd 29))
+  ((set (reg ra gpr) (logand (reg rs gpr) (shiftl (zex uimm) 16)))
+   (set cr-0 (logor (if (<s (reg ra gpr) 0)
+			8
+			(if (>s (reg ra gpr) 0)
+			    4
+			    2))
+		    (zex xer-so))))
+  ("andis. r%u,r%u,%u" ra rs uimm))
+
 (define-insn b
     ((opcd 18)
      (aa 0)
@@ -421,14 +432,15 @@
 	(if (= (numbered-subreg 1 (- (width 5 31) crba) cr) (numbered-subreg 1 (- (width 5 31) crbb) cr)) 1 0)))
   ("creqv crb%u,crb%u,crb%u" crbd crba crbb))
 
-(define-insn crxor
+(define-insn crnor
     ((opcd 19)
-     (xo1 193)
+     (xo1 33)
      (rc 0))
   ((set (numbered-subreg 1 (- (width 5 31) crbd) cr)
-	(logxor (numbered-subreg 1 (- (width 5 31) crba) cr)
-		(numbered-subreg 1 (- (width 5 31) crbb) cr))))
-  ("crxor crb%u,crb%u,crb%u" crbd crba crbb))
+	(logxor (logor (numbered-subreg 1 (- (width 5 31) crba) cr) ;we should actually use bitneg here
+		       (numbered-subreg 1 (- (width 5 31) crbb) cr))
+		1)))
+  ("crnor crb%u,crb%u,crb%u" crbd crba crbb))
 
 (define-insn cror
     ((opcd 19)
@@ -439,7 +451,24 @@
 	       (numbered-subreg 1 (- (width 5 31) crbb) cr))))
   ("cror crb%u,crb%u,crb%u" crbd crba crbb))
 
-(define-insn dcbz
+(define-insn crxor
+    ((opcd 19)
+     (xo1 193)
+     (rc 0))
+  ((set (numbered-subreg 1 (- (width 5 31) crbd) cr)
+	(logxor (numbered-subreg 1 (- (width 5 31) crba) cr)
+		(numbered-subreg 1 (- (width 5 31) crbb) cr))))
+  ("crxor crb%u,crb%u,crb%u" crbd crba crbb))
+
+(define-insn dcbst			;data cache block store
+    ((opcd 31)
+     (xo1 54)
+     (rc 0)
+     (rd 0))
+  ((ignore (+ (reg ra gpr) (reg rb gpr)))) ;FIXME
+  ("dcbst r%u,r%u" ra rb))
+
+(define-insn dcbz			;data cache block clear to zero
     ((opcd 31)
      (xo1 1014)
      (rc 0)
@@ -629,6 +658,24 @@
   ((set (reg frd fpr) (-f (reg fra fpr) (reg frb fpr))))
   ("fsubs fr%u,fr%u,fr%u" frd fra frb))
 
+(define-insn icbi			;instruction cache block invalidate
+    ((opcd 31)
+     (xo1 982)
+     (rc 0)
+     (rd 0))
+  ((ignore (+ (reg ra gpr) (reg rb gpr)))) ;FIXME
+  ("icbi r%u,r%u" ra rb))
+
+(define-insn isync
+    ((opcd 19)
+     (xo1 150)
+     (rd 0)
+     (ra 0)
+     (rb 0)
+     (rc 0))
+  ((nop))
+  ("isync"))
+
 (define-insn lbz
     ((opcd 34))
   ((set (reg rd gpr) (zex (width 8 (mem (if (= ra (width 5 0))
@@ -682,6 +729,13 @@
 								 (reg rb gpr)
 								 (+ (reg ra gpr) (reg rb gpr))))))))
   ("lfsx fr%u,r%u,r%u" frd ra rb))
+
+(define-insn lha
+    ((opcd 42))
+  ((set (reg rd gpr) (sex (width 16 (mem (if (= ra (width 5 0))
+					     (sex d)
+					     (+ (reg ra gpr) (sex d))))))))
+  ("lha r%u,%d(r%u)" rd d ra))
 
 (define-insn lhz
     ((opcd 40))
@@ -775,6 +829,15 @@
      (spr 288))
   ((set (reg ctr) (reg rs gpr)))
   ("mtctr r%u" rs))
+
+(define-insn mtfsb0
+    ((opcd 63)
+     (xo1 70)
+     (fra 0)
+     (frb 0)
+     (rc 0))
+  ((set (numbered-subreg 1 (- (width 5 31) crbd) fpscr) 0))
+  ("mtfsb0 crb%u" crbd))
 
 (define-insn mtfsf
     ((opcd 63)
@@ -902,6 +965,17 @@
 			 (shiftl (reg rs gpr) (subreg 0 4 rb gpr)))))
   ("slw r%u,r%u,r%u" ra rs rb))
 
+(define-rc-insn sraw ra
+    ((opcd 31)
+     (xo1 792))
+  ((set xer-ca (if (<s (reg rs gpr) 0)
+		   (if (= (bitneg (logand (- (shiftl 1 (logand (reg rb gpr) #x1f)) 1) (reg rs gpr))) 0)
+		       0
+		       1)
+		   0))
+   (set (reg ra gpr) (ashiftr (reg rs gpr) (logand (reg rb gpr) #x1f))))
+  ("~A r%u,r%u,r%u" ra rs rb))
+
 (define-rc-insn srawi ra
     ((opcd 31)
      (xo1 824))
@@ -918,7 +992,7 @@
      (xo1 536)
      (rc 0))
   ((set (reg ra gpr) (shiftr (reg rs gpr) (logand (reg rb gpr) #x1f))))
-  ("slw r%u,r%u,r%u" ra rs rb))
+  ("srw r%u,r%u,r%u" ra rs rb))
 
 (define-insn stb
     ((opcd 38))
@@ -1039,6 +1113,16 @@
 		      (+carry (+ (bitneg (reg ra gpr)) (sex simm)) 1)))
    (set (reg rd gpr) (- (sex simm) (reg ra gpr))))
   ("subfic r%u,r%u,%d" rd ra simm))
+
+(define-insn sync
+    ((opcd 31)
+     (xo1 598)
+     (rd 0)
+     (ra 0)
+     (rb 0)
+     (rc 0))
+  ((nop))
+  ("sync"))
 
 (define-rc-insn xor ra
     ((opcd 31)
