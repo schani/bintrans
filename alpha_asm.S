@@ -14,6 +14,7 @@
 	.globl	constant_area
 	.globl	leading_zeros
 	.globl	handle_compiler_system_call
+	.globl	fragment_hash_table
 
 	
 .text
@@ -62,6 +63,21 @@ direct_dispatcher:
 indirect_dispatcher:
 	ldgp	gp,0(pv)
 
+#ifdef COMPILER
+	lda	$1,fragment_hash_table
+	lda	$2,2047*4($31)
+	and	a0,$2,$2
+	s4addq	$2,$1,$1
+	ldq	$2,8($1)	# $2 = native_addr
+	beq	$2,call_provide_fragment
+	ldl	$3,0($1)	# $3 = foreign_addr
+	cmpeq	$3,a0,$4
+	beq	$4,call_provide_fragment
+	lda	pv,constant_area
+	jmp	$31,($2)
+
+call_provide_fragment:
+#endif
 	jsr	ra,provide_fragment
 	ldgp	gp,0(ra)
 	# v0 now holds the native target address
