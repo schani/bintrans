@@ -53,6 +53,29 @@ let rec repeat_until_fixpoint fn data =
     repeat_until_fixpoint fn ndata
 *)
 
+let rec alpha_wrap stmt =
+  let wrap_addr width addr =
+    match width with
+	1 -> bitxor_expr addr (int_literal_expr 3L)
+      | 2 -> bitxor_expr addr (int_literal_expr 2L)
+      | 4 -> addr
+      | _ -> raise Width_not_supported
+  in let rec wrap_expr expr =
+      match expr with
+	  Unary (LoadByte, addr) ->
+	    Unary (LoadByte, wrap_addr 1 (wrap_expr addr))
+	| LoadBO (bo, width, addr) ->
+	    LoadBO (other_byte_order bo, width, wrap_addr width (wrap_expr addr))
+	| _ ->
+	    apply_to_expr_subs wrap_expr expr
+  in match stmt with
+      Assign (GuestRegister (c, i, Int), expr) -> Assign (GuestRegister (c, i, Int), sex_expr 4 (wrap_expr expr))
+    | Assign (reg, expr) -> Assign (reg, wrap_expr expr)
+    | Store (bo, width, addr, rhs) -> Store (other_byte_order bo, width, wrap_addr width (wrap_expr addr), wrap_expr rhs)
+    | Let (name, width, rhs, sub) -> Let (name, width, wrap_expr rhs, alpha_wrap sub)
+    | Seq (sub1, sub2) -> Seq (alpha_wrap sub1, alpha_wrap sub2)
+    | IfStmt (expr, sub1, sub2) -> IfStmt (wrap_expr expr, alpha_wrap sub1, alpha_wrap sub2)
+
 let sort_match_datas match_datas =
   sort (fun a b ->
 	  match (a.cumulative_cost, b.cumulative_cost) with
@@ -216,29 +239,6 @@ let make_registers () =
   and ra = GuestRegister ("GPR", IntField "ra", Int)
   and rb = GuestRegister ("GPR", IntField "rb", Int)
   in (rs, rd, ra, rb)
-
-let rec alpha_wrap stmt =
-  let wrap_addr width addr =
-    match width with
-	1 -> bitxor_expr addr (int_literal_expr 3L)
-      | 2 -> bitxor_expr addr (int_literal_expr 2L)
-      | 4 -> addr
-      | _ -> raise Width_not_supported
-  in let rec wrap_expr expr =
-      match expr with
-	  Unary (LoadByte, addr) ->
-	    Unary (LoadByte, wrap_addr 1 (wrap_expr addr))
-	| LoadBO (bo, width, addr) ->
-	    LoadBO (other_byte_order bo, width, wrap_addr width (wrap_expr addr))
-	| _ ->
-	    apply_to_expr_subs wrap_expr expr
-  in match stmt with
-      Assign (GuestRegister (c, i, Int), expr) -> Assign (GuestRegister (c, i, Int), sex_expr 4 (wrap_expr expr))
-    | Assign (reg, expr) -> Assign (reg, wrap_expr expr)
-    | Store (bo, width, addr, rhs) -> Store (other_byte_order bo, width, wrap_addr width (wrap_expr addr), wrap_expr rhs)
-    | Let (name, width, rhs, sub) -> Let (name, width, wrap_expr rhs, alpha_wrap sub)
-    | Seq (sub1, sub2) -> Seq (alpha_wrap sub1, alpha_wrap sub2)
-    | IfStmt (expr, sub1, sub2) -> IfStmt (wrap_expr expr, alpha_wrap sub1, alpha_wrap sub2)
 
 let print_gen machine_insn =
   let insn = (alpha_wrap (map_condition_bits mapping_ppc_to_alpha machine_insn.insn_stmt))

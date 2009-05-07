@@ -238,7 +238,7 @@
 		  (error "unknown register ~A" name))
 		(destructuring-bind (class index type)
 		    reg
-		  (format nil "GuestRegister (\"~A\", ~A, Int)"
+		  (format nil "GuestRegister (\"~A\", IntLiteral ~AL, Int)"
 			  class index)))))))
   (defun convert-expr (expr bindings)
     (labels ((convert (expr)
@@ -262,8 +262,8 @@
 		  (format nil "Insert (~A, ~A, ~A, ~A)"
 			  (convert arg1)
 			  (convert arg2)
-			  (convert-int-const bindings start)
-			  (convert-int-const bindings length)))
+			  (convert start)
+			  (convert length)))
 		 ((if ?condition ?consequent ?alternative)
 		  (format nil "If (~A, ~A, ~A)"
 			  (convert condition)
@@ -294,6 +294,8 @@
 			 (format nil "int_literal_expr (~AL)" expr))
 			((floatp expr)
 			 (format nil "FloatConst ~A" expr))
+			((lookup-register expr)
+			 (format nil "Register (~A)" (convert-register bindings expr)))
 			((lookup-condition expr)
 			 (destructuring-bind (reg-class reg-index bit-index)
 			     (lookup-condition expr)
@@ -317,13 +319,16 @@
 	       (case-match stmt
 		 ((set ?reg ?value)
 		  (cond ((lookup-register reg)
-			 (error "register lhs not implemented yet"))
+			 (format nil "Assign (~A, ~A)"
+				 (convert-register bindings reg)
+				 (convert-expr value bindings)))
 			((lookup-condition reg)
 			 (destructuring-bind (reg-class reg-index bit-index)
 			     (lookup-condition reg)
 			   (format nil (string-concat "Assign (GuestRegister (\"~A\", IntLiteral ~AL, Int), "
 						              "Insert (Register (GuestRegister (\"~A\", IntLiteral ~AL, Int)), "
-						                      "Unary (ConditionToInt, ~A), IntLiteral ~AL, IntLiteral 1L))")
+						                      "Unary (ConditionToInt, ~A), "
+								      "IntConst (IntLiteral ~AL), IntConst (IntLiteral 1L)))")
 				   reg-class reg-index reg-class reg-index
 				   (convert-expr value bindings)
 				   bit-index)))

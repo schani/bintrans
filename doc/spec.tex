@@ -290,7 +290,9 @@ Insert does the opposite of extract.  Given two virtual registers and
 the two immediates describing a bit-field (start and length), it
 inserts into the first virtual register at the given bit-field
 position the contents of the second virtual register, which must be
-right-aligned.
+right-aligned.  The immediate arguments to an insert or extract
+operation must be such that the operation does not degenerate to a
+move.
 
 Sign and zero extend extend from the specified width to the whole
 virtual register width.  
@@ -662,6 +664,27 @@ return to the fragment are not exits.  The values of \cc{id} and
 \cc{name} are of no consequence for code generation.  \cc{id} can be
 used by the application to easily identify a user-op and \cc{name} is
 used for debugging output.
+
+\begin{verbatim}
+void set_user_op_emitter (user_op_t *user_op,
+                          void (*emitter) (emit_data_t*, hreg_t**));
+\end{verbatim}
+
+Sets \cc{emitter} to be the function to be called for generating
+native code for the user-op \cc{user\_op}.  The emitter function is
+called with two arguments.  The first is a pointer to an
+\cc{emit\_data\_t} structure which contains all information necessary
+for emitting native code and whose exact contents depend on the host
+architecture\endnote{The actual native emitting APIs will be different
+across host architectures and must be defined on a per-case basis.}.
+The second argument is an array of pointers to host register data
+structures.  These are the host registers allocated to the user-op's
+argument virtual registers.
+
+The emitter function must not change contents of allocatable host
+registers other than the ones passed to it.  Of these, only the first
+one may be modified, and only in the case that the user-op in question
+produces a value.
 
 \begin{verbatim}
 void dispose_user_op (user_op_t *user_op);

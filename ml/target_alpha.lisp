@@ -356,21 +356,22 @@
   (set ?rs (insert (register ?ra) (register ?rb) ?s ?l))
   7
   ("~A = bit_insert(~A, ~A, ~A, ~A);" rs ra rb s l)
-  ("{ reg_t mask_tmp = alloc_tmp_integer_reg(), source_tmp;
-      emit(COMPOSE_NOT(31, mask_tmp));
-      emit(COMPOSE_SLL_IMM(mask_tmp, 64 - ~A, mask_tmp));
-      emit(COMPOSE_SRL_IMM(mask_tmp, 64 - (~A + ~A), mask_tmp));
-      source_tmp = alloc_tmp_integer_reg();
-      emit(COMPOSE_SLL_IMM(~A, ~A, source_tmp));
-      emit(COMPOSE_BIC(source_tmp, mask_tmp, source_tmp));
-      emit(COMPOSE_BIC(~A, mask_tmp, ~A));
-      free_tmp_integer_reg(mask_tmp);
-      emit(COMPOSE_BIS(source_tmp, ~A, ~A));
-      free_tmp_integer_reg(source_tmp); }"
+  ("{ reg_t tmp = alloc_tmp_integer_reg();
+      bt_assert(~A != ~A);
+      emit(COMPOSE_NOT(31, tmp));
+      emit(COMPOSE_SLL_IMM(tmp, 64 - ~A, tmp));
+      emit(COMPOSE_SRL_IMM(tmp, 64 - (~A + ~A), tmp));
+      emit(COMPOSE_BIC(~A, tmp, ~A));
+      emit(COMPOSE_SLL_IMM(~A, 64 - ~A, tmp));
+      emit(COMPOSE_SRL_IMM(tmp, 64 - (~A + ~A), tmp));
+      emit(COMPOSE_BIS(tmp, ~A, ~A));
+      free_tmp_integer_reg(tmp); }"
+   rb rs				;assert
    l					;sll
    s l					;srl
-   rb s					;sll
    ra rs				;bic
+   rb l					;sll
+   s l					;srl
    rs rs))				;bis
 
 ;;; loads

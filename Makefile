@@ -1,17 +1,17 @@
 # -*- makefile -*-
 
 ## ATT: choose which architecture you want to emulate
-#EMU = I386
-EMU = PPC
+EMU = I386
+#EMU = PPC
 
 ## ATT: choose the native architecture you're using
-NATIVE = ALPHA
+#NATIVE = ALPHA
 #NATIVE = PPC
-#NATIVE = I386
+NATIVE = I386
 
 ## ATT: choose which mode you want bintrans to run in
-#MODE = INTERPRETER
-MODE = COMPILER
+MODE = INTERPRETER
+#MODE = COMPILER
 #MODE = DEBUGGER
 #MODE = CROSSDEBUGGER
 
@@ -36,7 +36,7 @@ DEFINES = -DUSE_HAND_TRANSLATOR -DCOLLECT_STATS
 #-DDUMP_CODE
 #DEFINES =
 #DEFINES = -O -DPROFILE_LOOPS -DPROFILE_FRAGMENTS -DCOLLECT_STATS
-#DEFINES = -DEMULATED_MEM
+DEFINES = -DEMULATED_MEM
 #DEFINES = -DCOLLECT_STATS
 #-DDUMP_CODE
 #DEFINES = -DCOLLECT_STATS -DPERIODIC_STAT_DUMP
@@ -118,7 +118,7 @@ COMPILER_OBJS = compiler.o
 #LOCATION = -DCOMPLANG
 
 
-CFLAGS = $(MODE_DEFS) $(DEFINES) $(ARCH) $(EMU_DEFS) $(LOCATION) -fno-inline
+CFLAGS = $(MODE_DEFS) $(DEFINES) $(ARCH) $(EMU_DEFS) $(LOCATION) -fno-inline -I.
 
 all : bintrans dump_liveness undump_liveness convert_liveness
 

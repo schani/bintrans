@@ -131,10 +131,10 @@ let expr_sextension mapping fields expr =
 	| Extract (arg, start, length) ->
 	    cm_return (UserOp ("Max", [sub_expr (int_literal_expr 63L) length ; int_literal_expr zero]))
 	| Insert (template, value, start, length) ->
-	    let last_bit = add_expr (IntConst start) (IntConst length)
+	    let last_bit = add_expr start length
 	    in if is_const (cfold_expr fields last_bit) then
 		cm_if fields (Binary (IntEqual, last_bit, int_literal_expr 64L))
-		  (fun _ -> sextension (shiftl_expr value (IntConst start)))
+		  (fun _ -> sextension (shiftl_expr value start))
 		  (fun _ ->
 		     cm_bind (sextension template)
 		     (fun stemplate ->

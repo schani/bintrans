@@ -3,7 +3,7 @@
  *
  * bintrans
  *
- * Copyright (C) 2001,2002 Mark Probst
+ * Copyright (C) 2001-2004 Mark Probst
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -79,6 +79,8 @@
 #define GEN_CRFX_BIT()
 #define GEN_CRFX_BITS(n)
 #endif
+
+#define compose_width_zapnot(ra,w,rs)   COMPOSE_ZAPNOT_IMM((ra),(1<<(w))-1,(rs))
 
 void
 move_ppc_regs_interpreter_to_compiler (interpreter_t *intp)
@@ -251,6 +253,11 @@ static label_t taken_jump_label;
 static word_32 next_pc;
 
 static word_32 kill_cr, kill_xer, kill_gpr;
+
+#ifdef USE_MLGEN
+#include "mlgen_macros.h"
+#include "mlgen_ppc_to_alpha.h"
+#endif
 
 static void
 gen_rc_code (reg_t reg)
@@ -3847,6 +3854,7 @@ gen_and_with_const (reg_t s, reg_t d, word_32 mask)
 static void
 handle_rlwinm_insn (word_32 insn, word_32 pc)
 {
+#ifndef USE_MLGEN
     if (KILL_GPR(PPC_FIELD_RA))
     {
 	word_32 mask = mask_32(31 - PPC_FIELD_ME, 31 - PPC_FIELD_MB);
@@ -3905,6 +3913,21 @@ handle_rlwinm_insn (word_32 insn, word_32 pc)
 
 	unref_integer_reg(ra_reg);
     }
+#else
+    reg_t rs_reg, ra_reg;
+
+    rs_reg = ref_ppc_gpr_r(PPC_FIELD_RS);
+    ra_reg = ref_ppc_gpr_w(PPC_FIELD_RA);
+
+    mlgen_rlwinm(PPC_FIELD_SH, PPC_FIELD_MB, PPC_FIELD_ME, ra_reg, rs_reg);
+
+    unref_integer_reg(rs_reg);
+
+    if (PPC_FIELD_RC)
+	gen_rc_code(ra_reg);
+
+    unref_integer_reg(ra_reg);
+#endif
 }
 
 static void

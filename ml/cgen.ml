@@ -117,7 +117,7 @@ let expr_to_c allocation expr =
 	| Extract (expr, start, length) ->
 	    "bit_extract(" ^ (expr_to_c expr) ^ "," ^ (expr_to_c start) ^ "," ^ (expr_to_c length) ^ ")"
 	| Insert (arg1, arg2, start, length) ->
-	    "bit_insert(" ^ (expr_to_c arg1) ^ "," ^ (expr_to_c arg2) ^ "," ^ (int_const_to_c start) ^ "," ^ (int_const_to_c length) ^ ")"
+	    "bit_insert(" ^ (expr_to_c arg1) ^ "," ^ (expr_to_c arg2) ^ "," ^ (expr_to_c start) ^ "," ^ (expr_to_c length) ^ ")"
 	| If (condition, cons, alt) ->
 	    "(" ^ (expr_to_c condition) ^ "?" ^ (expr_to_c cons) ^ ":" ^ (expr_to_c alt) ^ ")"
 	| UserOp (name, args) ->

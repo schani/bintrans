@@ -154,11 +154,11 @@ let unmemoized_expr_known known_one_arg bits_one_arg mapping fields expr =
     | Insert (arg1, arg2, start, length) ->
 	(let karg1 = known arg1
 	and karg2 = known arg2
-	in match (is_const (cfold_expr fields (IntConst start)), is_const (cfold_expr fields (IntConst length))) with
+	in match (is_const (cfold_expr fields start), is_const (cfold_expr fields length)) with
 	    (true, true) ->
 	      Insert (karg1, karg2, start, length)
 	  | (true, false) ->
-	      bitand_expr karg1 (bitmask_expr (int_literal_expr zero) (IntConst start))
+	      bitand_expr karg1 (bitmask_expr (int_literal_expr zero) start)
 	  | (false, _) ->
 	      empty_mask)
     | If (condition, cons, alt) ->
@@ -273,11 +273,11 @@ let unmemoized_expr_bits bits_one_arg known_one_arg mapping fields expr =
 	     (true, true) -> Extract (bits arg, start, length)
 	   | _ -> empty_mask)
     | Insert (arg1, arg2, start, length) ->
-	(match (is_const (cfold_expr fields (IntConst start)), is_const (cfold_expr fields (IntConst length))) with
+	(match (is_const (cfold_expr fields start), is_const (cfold_expr fields length)) with
 	  (true, true) ->
 	    Insert (bits arg1, bits arg2, start, length)
 	| (true, false) ->
-	    bitand_expr (bits arg1) (bitmask_expr (int_literal_expr zero) (IntConst start))
+	    bitand_expr (bits arg1) (bitmask_expr (int_literal_expr zero) start)
 	| (false, _) -> empty_mask)
     | If (condition, cons, alt) ->
 	bitand_expr (bits cons) (bits alt)
@@ -598,17 +598,17 @@ let unmemoized_prune_expr prune_one_arg mapping fields expr needed =
 			 (fun parg ->
 			    return (Extract (parg, start, length))))
 	    | Insert (arg1, arg2, start, length) ->
-		(match (is_const (cfold_expr fields (IntConst start)), is_const (cfold_expr fields (IntConst length))) with
+		(match (is_const (cfold_expr fields start), is_const (cfold_expr fields length)) with
 		     (true, true) ->
-		       if_prune (make_int_zero_p (Extract (needed, IntConst start, IntConst length)))
+		       if_prune (make_int_zero_p (Extract (needed, start, length)))
 		         (fun _ -> (prune arg1 (Insert (needed, int_literal_expr zero, start, length))))
 		         (fun _ ->
 			    (let1
-			       (prune arg2 (Extract (needed, IntConst start, IntConst length)))
+			       (prune arg2 (Extract (needed, start, length)))
 			       (fun parg2 ->
 				  (if_prune (make_int_zero_p (bitand_expr needed
-								(bitneg_expr (bitmask_expr (IntConst start) (IntConst length)))))
-				     (fun _ -> (return (Binary (ShiftL, parg2, IntConst start))))
+								(bitneg_expr (bitmask_expr start length))))
+				     (fun _ -> (return (Binary (ShiftL, parg2, start))))
 				     (fun _ -> (let1
 						  (prune arg1 (Insert (needed, int_literal_expr zero, start, length)))
 						  (fun parg1 ->
@@ -617,10 +617,10 @@ let unmemoized_prune_expr prune_one_arg mapping fields expr needed =
 		       let1
 			 (prune arg1 needed)
 			 (fun parg1 ->
-			    if_prune (make_int_zero_p (BinaryWidth (LShiftR, 8, needed, (IntConst start))))
+			    if_prune (make_int_zero_p (BinaryWidth (LShiftR, 8, needed, start)))
 			      (fun _ -> (return parg1))
 			      (fun _ -> (let1
-					   (prune arg2 (BinaryWidth (LShiftR, 8, needed, (IntConst start))))
+					   (prune arg2 (BinaryWidth (LShiftR, 8, needed, start)))
 					   (fun parg2 ->
 					      (return (Insert (parg1, parg2, start, length)))))))
 		   | (false, _) ->

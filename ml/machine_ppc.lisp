@@ -25,7 +25,7 @@
 (setq *insns* '())
 (setq *machine-macros* '())
 
-(deffields ((rs 5) (rd 5) (ra 5) (rb 5) (srs 5) (sh 5) (mb 5) (me 5) (simm 16) (uimm 16) (d 16)))
+(deffields ((rs 5) (rd 5) (ra 5) (rb 5) (srs 5) (sh 5) (mb 5) (me 5) (simm 16) (uimm 16) (d 16) (crfd 3)))
 
 (defregisters
   ((lr spr 0 integer)
@@ -94,6 +94,9 @@
 
 (defmachinemacro ppc-mask (begin-bit end-bit)
   (mask (-i 31 end-bit) (-i 31 begin-bit)))
+
+(defmachinemacro cr-bit (field bit)
+  (+i (shiftl (-i 7 field) 2) bit))
 
 ;(defmachinemacro set-rc0-bits (val)
 ;  (seq
@@ -178,7 +181,16 @@
 ;; cmplw
 ;; cmplwi
 ;; cmpw
-;; cmpwi
+
+(definsn cmpwi ((crfd 0 7))
+  (seq
+   (set cr (insert cr (condition-to-int (<is (register (gpr ra)) (sex 2 simm))) (cr-bit crfd 0) 1))
+   (seq
+    (set cr (insert cr (condition-to-int (<is (sex 2 simm) (register (gpr ra)))) (cr-bit crfd 1) 1))
+    (seq
+     (set cr (insert cr (condition-to-int (=i (register (gpr ra)) (sex 2 simm))) (cr-bit crfd 2) 1))
+     (set cr (insert cr (condition-to-int xer-so) (cr-bit crfd 3) 1))))))
+
 ;; cntlzw
 ;; crand
 ;; crandc

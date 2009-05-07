@@ -86,6 +86,8 @@
 #define STACK_TOP  0xc0000000
 #elif defined(ARCH_PPC)
 #define STACK_TOP  0x70000000
+#elif defined(EMULATED_MEM)
+#define STACK_TOP  0xc0000000
 #else
 #error unsupported target architecture
 #endif
@@ -367,6 +369,17 @@ bt_warning (char *msg)
 	    "warning is insubstantial).\n"
 	    "Thank you.\n",
 	    msg);
+}
+
+word_64
+ashiftr_64 (word_64 x, word_64 i)
+{
+    i &= 0x3f;
+
+    if (x >> 63)
+	return (x >> i) | (-1LL << (64 - i));
+    else
+	return x >> i;
 }
 
 word_32

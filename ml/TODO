@@ -29,6 +29,10 @@ ROADMAP DONE:
 
 TODO:
 
+* figure out a way for not having to specify in machine_ppc.lisp that
+  the crfd field has to be iterated over to get correct code when
+  mapping cr bits to registers.
+
 * make upper alpha condition bit register bits known.  only the lowest bit is
   unknown, the others should be 0.
 

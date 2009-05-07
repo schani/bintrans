@@ -24,6 +24,7 @@ open Int64
 open List
 
 open Expr
+open Cond_monad
 open Machine
 
 exception Not_supported_in_dummy_mapping
@@ -65,36 +66,72 @@ let make_sex_mapping mapping one =
       register_known = (fun _ -> shift_left minus_one 31) ;
       register_bits = (fun _ -> if one then shift_left minus_one 31 else zero) }
 
-let map_condition_bits mapping stmt =
+let map_condition_bits mapping fields stmt =
   let rec map_expr expr =
     match expr with
-	Extract (Register (GuestRegister _ as reg), IntConst (IntLiteral start), IntConst (IntLiteral length)) ->
-	  (try
-	     Register (assoc (reg, start, length) (mapping.condition_bit_mappings))
-	   with
-	       Not_found -> Extract (Register reg, IntConst (IntLiteral start), IntConst (IntLiteral length)))
+	Extract (Register (GuestRegister _ as reg), start_expr, length_expr) ->
+	  (match (cfold_expr fields start_expr, cfold_expr fields length_expr) with
+	       (IntConst (IntLiteral start), IntConst (IntLiteral length)) ->
+		 (try
+		    let reg = assoc (reg, start, length) (mapping.condition_bit_mappings)
+		    in cm_when fields (and_expr (Binary (IntEqual, start_expr, int_literal_expr start),
+						 Binary (IntEqual, length_expr, int_literal_expr length)))
+			 (fun _ -> cm_return (Register (reg)))
+		  with
+		      Not_found -> cm_return (Extract (Register reg, IntConst (IntLiteral start), IntConst (IntLiteral length))))
+	     | _ ->
+		 cm_return (Extract (Register reg, IntConst (IntLiteral start), IntConst (IntLiteral length))))
       | _ ->
-	  apply_to_expr_subs map_expr expr
+	  apply_to_expr_subs_with_monad cm_return cm_bind map_expr expr
   and map_stmt stmt =
     match stmt with
 	Assign (GuestRegister _ as lhs,
 		Insert (Register (GuestRegister _ as rhs_reg),
-			rhs_val, IntLiteral start, IntLiteral length)) when lhs = rhs_reg ->
-	  (try
-	     (* FIXME: this assumes that the rhs value is already clipped, but
-	     we may not know that!  We should apply a mask.  *)
-	     let reg = assoc (lhs, start, length) (mapping.condition_bit_mappings)
-	     in Assign (reg, map_expr rhs_val)
-	   with
-	       Not_found -> Assign (lhs, Insert (Register rhs_reg, map_expr rhs_val, IntLiteral start, IntLiteral length)))
+			rhs_val, start_expr, length_expr)) when lhs = rhs_reg ->
+	  cm_bind (map_expr rhs_val)
+	    (fun mrhs_val ->
+	       match (cfold_expr fields start_expr, cfold_expr fields length_expr) with
+		   (IntConst (IntLiteral start), IntConst (IntLiteral length)) ->
+		     (try
+			(* FIXME: this assumes that the rhs value is already clipped, but
+			   we may not know that!  We should apply a mask.  *)
+			let reg = assoc (lhs, start, length) (mapping.condition_bit_mappings)
+			in cm_when fields (and_expr (Binary (IntEqual, start_expr, int_literal_expr start),
+						     Binary (IntEqual, length_expr, int_literal_expr length)))
+			     (fun _ -> cm_return (Assign (reg, mrhs_val)))
+		      with
+			  Not_found -> cm_return (Assign (lhs, Insert (Register rhs_reg, mrhs_val,
+								       start_expr, length_expr))))
+		 | _ ->
+		     cm_return (Assign (lhs, Insert (Register rhs_reg, mrhs_val,
+						     start_expr, length_expr))))
       | Assign (reg, rhs) ->
-	  Assign (reg, map_expr rhs)
+	  cm_bind (map_expr rhs)
+	    (fun mrhs ->
+	       cm_return (Assign (reg, mrhs)))
       | Store (bo, width, addr, rhs) ->
-	  Store (bo, width, map_expr addr, map_expr rhs)
+	  (make_bind2 cm_bind cm_bind)
+	    (map_expr addr)
+	    (map_expr rhs)
+	    (fun maddr mrhs ->
+	       cm_return (Store (bo, width, maddr, mrhs)))
       | Let (name, width, rhs, sub) ->
-	  Let (name, width, map_expr rhs, map_stmt sub)
+	  (make_bind2 cm_bind cm_bind)
+	    (map_expr rhs)
+	    (map_stmt sub)
+	    (fun mrhs msub ->
+	       cm_return (Let (name, width, mrhs, msub)))
       | Seq (sub1, sub2) ->
-	  Seq (map_stmt sub1, map_stmt sub2)
+	  (make_bind2 cm_bind cm_bind)
+	    (map_stmt sub1)
+	    (map_stmt sub2)
+	    (fun msub1 msub2 ->
+	       cm_return (Seq (msub1, msub2)))
       | IfStmt (cond, sub1, sub2) ->
-	  IfStmt (map_expr cond, map_stmt sub1, map_stmt sub2)
+	  (make_bind3 cm_bind cm_bind cm_bind)
+	    (map_expr cond)
+	    (map_stmt sub1)
+	    (map_stmt sub2)
+	    (fun mcond msub1 msub2 ->
+	       cm_return (IfStmt (mcond, msub1, msub2)))
   in map_stmt stmt

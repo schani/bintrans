@@ -1,0 +1,463 @@
+Conditionals must be possible.  Example: SHLD does nothing if ecx ==
+0, otherwise it has all kinds of side effects.  Basic blocks are
+separated by labels.  Instruction selector must not combine
+operations beyond labels.
+
+---
+
+Spilling of registers: user must provide locations for virtual
+registers as well as for temporaries (the library informs the user
+about the number of temporaries needed).  A location must be usable in
+a load/store instruction without needing other temporaries (because
+that would mean that several passes of register allocation would be
+necessary (because spilling would introduce new temporaries)).  For
+now, we will only allow reg+offset.  The i386 backend could in special
+cases avoid assigning a register altogether by using a memory
+operand.
+
+---
+
+Liveness of variables must be annotated, to avoid spilling of dead
+variables.  For simplicity, we might introduce a default behaviour:
+virtual registers are live at the end of block, and liveness within
+the block of both virtual registers as well as temporaries is
+determined by a liveness analysis pass.
+
+---
+
+Classification of condition code systems:
+
+i386: zero, sign, carry, overflow.  Cheap saving/restoring to/from
+GPRs of all bits and saving to GPRs of single bits.  Most instructions
+generate most bits.  conditional move on bits.
+
+SPARC: zero, sign, carry, overflow.  Can branch on condition bits as
+well as on integer registers.  Cheap saving/restoring to/from GPRs of
+all bits.  Semi-cheap (conditional move) saving to GPRs of single
+bits.  Conditional move on bits and GPRs.  Instructions for performing
+operation with and without setting condition bits (most bits are set).
+
+PowerPC: overflow, carry.  Additionally, 32 bits in 8 fields of 4 bits
+each.  Compare instructions set all bits in one field (specified in
+immediate): less than, equal, greater than, and a copy of summary
+overflow bit (unimportant).  Additionally, most instructions have
+forms which implicitly set the contents of first field according to
+comparison of operation result with zero.  Generation of overflow and
+carry must be explicitly specified.  Cheap saving/restoring to/from
+GPRs of all 32 bits.  Cheap extraction/insertion instructions.
+branches on one of the 32 bits (overflow and carry must be explicitly
+copied to condition register, which costs one insn).
+
+MIPS: no bits.  Branches on single GPRs and on two GPRs (compared
+against each other).  Only very limited compare instructions, namely
+"set on less than [immediate] [unsigned]".  "set on equal to zero" is
+"set on less than 1 unsigned".  Also: "move conditional on zero/not
+zero".
+
+Alpha: no bits.  Compare instructions produce values in GPRs.
+Branches on single GPRs.  Conditional move on single GPRs.
+
+StrongARM: zero, sign, carry, overflow.  All instructions are
+predicated.  Cheap saving/restoring to/from GPRs of all bits.
+Semi-cheap (conditional move) saving to GPRs of single bits.
+Instructions for performing operation with and without setting
+condition bits (most bits are set).
+
+SuperH: only one condition bit.  Is set by comparison operations.
+Cheap saving/restoring to/from GPRs.  Only dedicated operations modify
+bit.
+
+IA64: has 64 predicate bit registers.  Compare instructions write
+results into specified bits (two bits are always written: one
+containing the result, the other containing the negation of the
+result).  Branches branch on predicate bits.  Additionally, most
+instructions are predicated.  Cheap saving/restoring to/from GRPs of
+all and single bits (specified with mask).
+
+PA-RISC: very obscure.  Has carry bits for each of the hexadecimal
+digits of a 32 bit result.  Other than that, there are no condition
+bits.  Instead, there are combined compare (move,add) and branch
+instructions.  Additionally, most instructions can, based on the
+result of their operation, nullify the next instruction in sequence.
+
+---
+
+Allocation of condition bits: condition bits can be preallocated to
+bit-variables.
+
+Instruction selector produces annotated instruction stream.
+Instructions which produce bit-variables (virtual as well as
+temporaries) contain annotations describing into which condition bit
+the value is stored.  That annotation is only done when that bit can
+not be chosen.  Additionally, instructions which do not produce
+bit-variables, but mangle values of condition bits, are annotated with
+information describing which bits they mangle.  Instructions which use
+bit-variables have annotations telling where they want the values to
+be.
+
+There are several possibilities for an instruction:
+
+  1. it produces no bit-variables and mangles no bits.
+
+  2. it produces bit-variables and mangles no bits.
+
+  3. it produces no bit-variables and mangles some bits.
+
+  4. it produces bit-variables and mangles some bits.
+
+Regarding saving/restoring of preallocated bit-registers: for the time
+being we should confine ourselves to the following two methods of
+doing this:
+
+  1. all bits at once
+
+  2. all bits separately
+
+We will not yet support hybrid schemes, i.e. some bits together and
+others separately.
+
+Architectures with simple condition system (i386, SPARC, StrongARM,
+SuperH):
+
+  Non pre-allocated variables are always allocated to GPRs, except for
+  the following case: the variable is used in only one block and no
+  instruction within its live range produces any other
+  bit-variables (pre-allocated or not) and does not mangle the bit(s)
+  which it is produced to.  This condition may be weakened in the
+  future.
+
+  What remains are pre-allocated bit-variables and the instructions
+  which mangle bits.  It should now be relatively easy to make sure
+  that the pre-allocated bit-variables are always in their
+  corresponding bits when they are needed and that they are saved
+  whenever their bits might be mangled.
+
+  Of course, on the SuperH the single bit would not be pre-allocated,
+  so everything would be allocated to GPRs, except in the very simple
+  case (see above).
+
+Architectures without condition bits (MIPS, Alpha):
+
+  All bit-variables all allocated to GPRs.
+
+  It might be worth optimizing a special case: a bit-variable which is
+  the result of a comparison and whose only use is as the condition of
+  a branch in the same block.  On the Alpha, if the comparison was
+  against zero, the compared register itself can be used as the
+  condition.  On the MIPS, even more complicated comparisons can be
+  put directly into the branch instruction.
+
+Architectures with large amounts of condition bits (PowerPC, IA64):
+
+  Here we can do actual register allocation for condition bits.  On
+  the PowerPC, we have to allocate to the 8 bit fields, on the IA64 to
+  the 32 bit pairs.  Of course, we always have to keep track of which
+  of the 4 or 2 bits is actually the bit we want.  Fields with
+  pre-allocated bits must not be used by the register allocator.  On
+  the PowerPC, that means we could use the implicit comparisons if the
+  first condition field is not pre-allocated.  Actually, this field
+  should be the preferred one.
+
+  Carry and overflow are special cases on the PowerPC: they are
+  separated from the condition fields.  If they are not pre-allocated,
+  they should be allocated to condition fields, hence copied there
+  whenever necessary (which is cheap).  Also, since they can't be
+  branched on, they must be copied to a condition field whenever used
+  in a branch.
+
+PA-RISC:
+
+  Haven't thought about this yet, but supporting it is probably not a
+  high-priority goal (or is it?).
+
+There is still one little problem: there might be cases of condition
+bit assignments which are not side effects of some other operation.
+Hence, the instruction selector would have to handle these specially.
+In the worst case, this would involve copying the flags register to a
+GPR, modifying the bit, and writing it back.  This might be aided by
+the register allocator, since it occasionally saves and restores the
+flag register itself, and the saving and restoring of the flags
+register by the code generator might result in very bad code.
+Example:
+
+  IR:
+
+    add with set flags
+    blabla
+    of = (a == b)
+    blabla
+
+  selected code:
+
+    1 add                 ; sets flags
+    2 compute a==b to GPR ; mangles flags
+    3 move flags to GPR   ; saving by the instruction selector
+    4 insert of into flags in GPR
+    5 move GPR to flags   ; restoring by the instruction selector
+
+Obviously, the register allocator must save the flags between
+instructions 1 and 2 so that they not be mangled by 2.  Similarly, it
+must restore them between 2 and 3 since 3 requires them to be in
+place.  Hence, after register allocation, the code looks like this:
+
+    1 add
+    2 move flags to GPR   ; saving by the register allocator
+    3 compute a==b to GPR ; mangles flags
+    4 move GPR to flags   ; restoring by the register allocator
+    5 move flags to GPR   ; saving by the instruction selector
+    ...
+
+In such cases, it might be a good idea for the instruction selector to
+insert a pseudo instruction (into the generated instruction stream)
+saying that the flags register is required to be in some GPR.  The
+register allocator could then take the appropriate action.
+
+---
+
+This is a simple basic block consisting of three instructions taken
+from actual i386 code, together with what the IR for these
+instructions could look like:
+
+ 804908b:	bb f8 d2 08 08       	movl   $0x808d2f8,%ebx
+
+    %EBX = 0x808d2f8
+
+ 8049090:	81 fb fc d2 08 08    	cmpl   $0x808d2fc,%ebx
+
+    t1 = 0x808d2fc
+    CF = sub_carry(%EBX, t1)
+    OF = sub_overflow(%EBX, t1)
+    t2 = %EBX - t1
+    ZF = (t2 == 0)
+    SF = (t2 < 0)
+    PF = parity_even(t2)
+
+ 8049096:	73 0f                	jae    80490a7 <exit+0x97>
+
+    ???
+
+I don't know yet how to represent the epilogue, which will usually
+jump to the dispatcher.  It might look something like this:
+
+    if cf then goto branch_not_taken
+  branch_taken:
+    epilogue(0x80490a7)
+  branch_not_taken:
+    epilogue(0x8049098)
+
+The "epilogue" operator would be a user-defined operator.  I think
+it's important to have something like this in order to easily insert
+custom code which is very host-dependent.
+
+When using the i386 as a host, the code generator would pretty much
+reconstruct the same two instructions from the IR.  If it did not know
+that t2 were dead, it might generate something like this instead of
+one "cmpl" instruction:
+
+      movl %EBX,t2
+      subl $0x808d2fc,t2
+
+Anyway, since the "cmpl" or "subl" instruction calculates condition
+bits, it will be annotated, namely with:
+
+      CF->cf, OF->of, ZF->zf, SF->sf, PF->pf
+
+That means the guest bit CF will be calculated and stored in the host
+bit cf, and so on.
+
+Should the register mapping specify that the guest bits are directly
+mapped to the host bits, that's pretty much the end of the story
+regarding condition bits for i386->i386 compilation.  Of course,
+there's still the issue of saving/restoring the bits when some
+instruction mangles the host bits (those instructions will be
+annotated, too), but that should not be a big problem.
+
+Assume that instead of keeping PF in pf, we wanted to put PF in a GPR.
+The register allocator would then notice that PF is put into pf by
+"cmpl" and tell the instruction selector (or at least some part of the
+host-dependent back-end) to insert an instruction putting pf into a
+GPR, which would be
+
+      setp PF_reg
+
+Of course, "setp" only works on RM8, so either register allocation
+gets a bit more complicated (since we can only use %eax, %ebx, %ecx,
+or %edx for PF_reg), or we introduce some hack.  I'm very much for the
+former, especially because I believe that it wouldn't be a major
+problem, at least not for the second-chance binpacking allocator.
+
+Let's now consider code generation for the PowerPC.  The code
+generated for the "movl" instruction would be more or less
+straightforward:
+
+      addis %EBX,r0,0x808       ;load large constant part 1
+      ori %EBX,%EBX,0xd2f8      ;part 2
+
+The assignment to t1 is pretty much the same:
+
+      addis t1,r0,0x808        ;load large constant part 1
+      ori t1,t1,0xd2fc         ;part 2
+
+Then it gets interesting:
+
+    CF = sub_carry(%EBX, t1)
+
+      not t3,%EBX
+      addc t3,t1,t3            ;ANN: CF->ca
+
+The subtraction carry on the PowerPC works differently than on the
+i386, so we have to somehow "fake" it.  Note that the instruction
+selector must either be able to introduce new temp registers, or there
+must be a scratch register reserved for such circumstances.  I prefer
+the former.
+
+    OF = sub_overflow(%EBX, t1)
+    t2 = %EBX - t1
+    ZF = (t2 == 0)
+    SF = (t2 < 0)
+
+      subfo. t2,t1,%EBX        ;ANN: OF->ov, ZF->cr(2), SF->cr(0)
+
+This one instruction does the subtraction and calculates OF, ZF, and
+SF.
+
+    PF = parity_even(t2)
+
+This is a problem.  There is no short way to calculate the parity of a
+value on the PowerPC.  What should be done in this circumstance is to
+generate a different IR, namely one which calculates the parity
+lazily, i.e., just copies the values to a register and calculates the
+parity of that register only when it's actually needed (i.e., pretty
+much never).  I see no better way to consistently handle this issue.
+So, the IR would actually be
+
+    PF_reg = t2
+
+---
+
+Instruction Selection
+
+Optimal instruction selection for trees is a solved problem (BURS).
+For DAGs, it's NP-complete.  The solution usually taken for DAGs is to
+convert a DAG into trees by using each node with more than one parent
+as the root of a new tree.
+
+Our basic blocks consist of one or more DAGs, which we will convert
+into trees (actually, we won't build the DAGs in the first place, but
+directly build trees).
+
+In order to generate efficient code for condition code calculations,
+the standard BURS scheme will have to be extended.  The idea is to
+have BURS rule specify many instead of one tree patterns, one of which
+is the "main" pattern.
+
+Let's assume we want to describe the instruction selector for a
+simplified version of the i386, which only has carry and zero flags.
+One rule would be:
+
+  reg result: ADD(reg op1, rm32 op2)        /* main pattern */
+  cf: ADD_CARRY(op1, op2)              /* secondary pattern */
+  zf: EQUAL(result, CONST(0))          /* secondary pattern */
+
+Note that in the main pattern it's possible to give names to the
+operands and the result.  Those named entities can then be referenced
+in the secondary patterns.
+
+During the dynamic programming process, only the main pattern will be
+tried to match.  Whenever a match is found, the tree currently
+operated on and all following trees (i.e. all trees for which code has
+not yet been finally selected) is searched for matches for the
+secondary patterns (I'm very confident that this can be implemented
+very efficiently).  If such matches are found, the nodes of the
+matches are annotated with match information, as they would be for a
+normal (main pattern) match.
+
+Secondary patterns must not necessarily be matched for an rule to be
+used.  It is sufficient if the main pattern matches.  In fact, the
+instruction emitting code should have access to the information which
+secondary patterns have matched.  This is necessary to generate better
+code on host architectures on which condition code computation is
+optional.  On the PowerPC, for example, the "add" instruction has 8
+variants differing only in the condition bits that are generated.
+Instructions which generate less condition bits impose fewer renaming
+restrictions and can be executed faster on the CPU.
+
+I'm still unsure how to handle two address machines (i.e. the i386)
+efficiently.  The problem is that two address instructions always
+overwrite one of their sources, which is in some cases (namely if that
+source is still live) the wrong thing.  There seem to be several
+solutions:
+
+  1. Always generate a "mov" instruction before the actual operation
+     instruction and hope that the register allocator allocates the
+     same host register to the destination and the overwritten source
+     and removes the "mov".  This depends on the ability of the
+     register allocator to do that.  It seems to be a standard
+     solution (see Andrew Appel: Modern Compiler Implementation in
+     C/ML/Java), but I don't want to do this, because it imposes
+     runtime overhead and probably makes the register allocator more
+     complicated.
+
+  2. When generating the operation instruction, check whether the
+     source is live afterwards.  Only if it is, generate a "mov".
+     This is my preferred solution, at least for our first
+     implementation.  I think it wouldn't generate too many "mov"
+     instructions, and if it did, we could always implement something
+     more sophisticated.
+
+  3. Don't generate a "mov", just make a note to the register
+     allocator that the source register (whatever it might be) will be
+     destroyed by the instruction.  The register allocator must then
+     take the appropriate action (i.e., generate a "mov" in the worst
+     case).  This is probably the best solution in terms of both
+     runtime performance as well as code quality.
+
+---
+
+this is a previous attempt at solving the problem.  i gave it up, but
+haven't thrown away the text.
+
+architectures with traditional condition bits (carry, overflow, zero,
+sign) : i386, sparc, arm
+
+  condition bits are never allocated by the register allocator.
+  bit-registers must either be pre-allocated or they will be allocated
+  to gprs (using, e.g., setXX insns on the i386).
+
+  if condition bits are pre-allocated and instruction selector chooses
+  instructions with overwrite some pre-allocated bits which are live,
+  they (preferably the whole condition bit field) must be saved and
+  restored.
+
+  where/when does this happen?  preferably in a fixup pass before or
+  after register allocation.  it could happen before register
+  allocation because everything that needs to be known is the
+  pre-allocation and the instruction selection.  the actual register
+  allocation is irrelevant if we assume that spilling instructions do
+  not modify condition bits.
+
+  the fixup pass will either need to know about control flow or make
+  pessimistic assumptions (leading to bad code), so it's probably not
+  advisable combine it with the instruction selection pass.  example:
+
+    block1:
+      bla
+      set sf
+      if xyz goto block3
+    block2:
+      add ; overwrites sf
+    block3:
+      use sf
+
+  ideally, the fixup pass would insert save and restore operations
+  only at the beginning and end of block2.  however, a good fixup pass
+  might be too expensive, so we should carefully think this through.
+
+architectures without condition bits: alpha, mips
+
+  bit-registers are always allocated to gprs.  pre-allocation is also
+  possible.  no difficulties.
+
+architectures with many condition bit sets: powerpc, ia64
+
+architectures with one condition bit: sh

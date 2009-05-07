@@ -203,7 +203,7 @@ and expr =
   | BinaryWidth of binary_width_op * width * expr * expr
   | TernaryWidth of ternary_width_op * width * expr * expr * expr
   | Extract of expr * expr * expr	(* the last two exprs must be constant *)
-  | Insert of expr * expr * int_const * int_const
+  | Insert of expr * expr * expr * expr (* the last two exprs must be constant *)
   | If of expr * expr * expr
   | UserOp of string * (expr list)
 
@@ -295,7 +295,7 @@ let expr_sub_exprs expr =
   | BinaryWidth (binary_width_op, width, sub1, sub2) -> [ sub1 ; sub2 ]
   | TernaryWidth (ternary_width_op, width, sub1, sub2, sub3) -> [ sub1 ; sub2 ; sub3 ]
   | Extract (sub, start, length) -> [ sub ; start ; length ]
-  | Insert (sub1, sub2, start, length) -> [ sub1 ; sub2 ]
+  | Insert (sub1, sub2, start, length) -> [ sub1 ; sub2 ; start ; length ]
   | If (sub1, sub2, sub3) -> [ sub1 ; sub2 ; sub3 ]
   | UserOp (_, subs) -> subs
   | _ -> []
@@ -451,7 +451,7 @@ let instantiate_expr expr fields_alist =
       | Extract (arg, start, length) ->
 	  Extract (instantiate arg, instantiate start, instantiate length)
       | Insert (arg1, arg2, start, length) ->
-	  Insert (instantiate arg1, instantiate arg2, instantiate_int_const start, instantiate_int_const length)
+	  Insert (instantiate arg1, instantiate arg2, instantiate start, instantiate length)
       | If (arg1, arg2, arg3) ->
 	  If (instantiate arg1, instantiate arg2, instantiate arg3)
       | UserOp (name, subs) ->
@@ -493,7 +493,9 @@ let apply_to_expr_subs_with_monad return bind modify expr =
 	    (fun marg mstart mlength -> return (Extract (marg, mstart, mlength)))
       | Insert (arg1, arg2, start, length) ->
 	  bind2 (modify arg1) (modify arg2)
-	    (fun marg1 marg2 -> return (Insert (marg1, marg2, start, length)))
+	    (fun marg1 marg2 ->
+	       bind2 (modify start) (modify length)
+	         (fun mstart mlength -> return (Insert (marg1, marg2, mstart, mlength))))
       | If (condition, cons, alt) ->
 	  bind3 (modify condition) (modify cons) (modify alt)
 	    (fun mcondition mcons malt -> return (If (mcondition, mcons, malt)))
@@ -695,7 +697,8 @@ let cfold_expr fields expr =
 	| _ -> fexpr)
     | Insert (arg1, arg2, start, length) ->
 	(match (arg1, arg2, start, length) with
-	  (IntConst (IntLiteral int1), IntConst (IntLiteral int2), IntLiteral start_int, IntLiteral length_int) ->
+	  (IntConst (IntLiteral int1), IntConst (IntLiteral int2),
+	   IntConst (IntLiteral start_int), IntConst (IntLiteral length_int)) ->
 	    IntConst (IntLiteral (insert_bits int1 int2 start_int length_int))
 	| _ -> fexpr)
     | If (condition, cons, alt) ->
@@ -811,7 +814,7 @@ let rec print_expr expr =
 	print_string ", " ; print_expr length ; print_string ")"
     | Insert (arg1, arg2, start, length) ->
 	print_string "Insert(" ; print_expr arg1 ; print_string ", " ; print_expr arg2 ;
-	print_string ", " ; print_int_const start ; print_string ", " ; print_int_const length ; print_string ")"
+	print_string ", " ; print_expr start ; print_string ", " ; print_expr length ; print_string ")"
     | If (condition, cons, alt) ->
 	print_string "If(" ; print_expr condition ; print_string ", " ; print_expr cons ;
 	print_string ", "; print_expr alt ; print_string ")"

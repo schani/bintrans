@@ -989,7 +989,6 @@ emit_load_integer_32 (reg_t reg, word_32 val)
 	emit(COMPOSE_LIS(reg, val >> 16));
 	emit(COMPOSE_ORI(reg, reg, val & 0xffff));
     }
-    
 }
 #else
 #error unsupported target architecture

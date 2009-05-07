@@ -1,0 +1,1107 @@
+http://savage.light-speed.de/study.html
+http://experimentalstuff.sunlabs.com/Technologies/Walkabout/index.html
+
+
+
+
+ppc->alpha registers:
+
+	$0		c function address for stub
+	$1-$3		temporary
+	$4-$15		emu regs
+	$16		jump target reg, stub argument
+	$17		stub argument
+	$18-$25		emu regs
+	$26		return addr
+	$27		constant area, procedure value
+	$28		reserved for assembler?
+	$29		gp
+	$30		sp
+
+
+
+i386->alpha registers
+
+	$0		c function address for stub
+	$1-$15		emu regs
+	$16		jump target reg, stub argument
+	$17		stub argument
+	$18-$21		temporary
+        $22-$25         free
+	$26		return addr
+	$27		constant area, procedure value
+	$28		reserved for assembler?
+	$29		gp
+	$30		sp
+
+
+
+
+making indirect jumps faster on 32->64 bit compilation:
+   reserve 4g of address space for indirect jump resolution
+   indirect jump to $target does:
+
+     add $target,resolution_space_start,$target
+     load $target,$code_area_offset
+     add $code_area_offset,code_area_start,$addr
+     jump $addr
+
+for cisc guests unaligned reads would amount to jumps to unaligned
+targets -> manual lookup
+
+a special code area offset should be reserved for as-yet unresolved
+targets -> jump to dispatcher
+
+
+
+
+
+
+indirect jump:
+
+	mov target_addr,$7
+	ldq $pv,indirect_dispatcher_offset($27)
+	jmp $31,($pv)
+
+direct jump:
+
+	ldq $pv,direct_dispatcher_offset($27)
+	jmp $ra,($pv)
+	# $ra holds this address upon entry to direct dispatcher
+	target address
+
+direct jump patched:
+
+	br offset
+
+
+
+
+
+
+
+
+
+cmpwi with 0:
+	cmovlt ra,8,fld
+	cmoveq ra,4,fld
+	cmovgt ra,2,fld
+	srl xer,63,tmp1
+	or tmp1,fld,fld
+	lda mask,-1($31)
+	sll mask,28,mask
+	bic cr,mask,tmp2
+	sll fld,28,fld
+	bis tmp2,fld,cr
+
+
+
+
+
+
+
+used(insn) + (used(rest) - killed(insn))
+
+
+(set x y)
+
+if (live & x)
+{
+	killed |= x;
+	live &= ~x;
+	live |= y;
+}
+
+(set z y)
+
+live |= y;
+
+
+
+------------------
+
+
+
+carry of a-b (subfc) :
+
+a >= 0, b < 0     => 0           (a < b)
+a >= 0, b >= 0    => a >= b
+a < 0, b >= 0     => 1           (a < b)
+a < 0, b < 0      => a >= b
+
+sgn(a) = sgn(b) => a >= b
+sgn(a) != sgn(b) => a < b
+
+cmple b,a,ca
+eqv a,b,tmp
+blt tmp,end
+cmplt a,b,ca
+end:
+
+
+
+-------------------
+
+carry of a-b without carry (subfe with ca==0) :
+
+a >= 0, b < 0     => 0           (a < b)
+a >= 0, b >= 0    => a > b
+a < 0, b >= 0     => 1           (a < b)
+a < 0, b < 0      => a > b
+
+-------------------
+
+not b,tmp
+addq tmp,ca,ca
+addq a,ca,ca
+srl ca,32,ca
+and ca,1,ca
+
+
+
+
+
+
+
+
+  cmptlt a,b,tmp
+  fbeq tmp,l1
+  li 1,b0
+  li 0,b1
+  li 0,b2
+  br end
+l1:
+  cmptlt b,a,tmp
+  fbeq tmp,l2
+  li 0,b0
+  li 1,b1
+  li 0,b2
+  br end
+l2:
+  li 0,b0
+  li 0,b1
+  li 1,b2
+end:
+
+
+  cmptlt a,b,tmp
+  fbeq tmp,l1
+  li 8,bits
+  br end
+l1:
+  cmptlt b,a,tmp
+  fbeq tmp,l2
+  li 4,bits
+  br end
+l2:
+  li 2,bits
+end:
+
+
+-------------------
+
+ppc flags:
+  lt       x < 0
+  eq       x == 0
+  gt       x > 0
+  ov       (+overflow a b)
+  ca       (+carry a b)
+
+i386 flags:
+  cf       (+carry a b)
+  zf       x == 0
+  sf       x < 0
+  of       (+overflow a b)
+
+mapping:
+  cf -> ca
+  zf -> eq
+  sf -> lt
+  of -> ov
+
+0 is register with content 0
+
+set of = 0
+  addo 0,0,0
+
+set cf = 0
+  addc 0,0,0
+
+set cf = of = 0
+  addco 0,0,0
+
+
+
+-------------------
+
+i386->ppc register mapping:
+
+  r0                    constant 0 (for clearing ca/ov) (caller-saved)
+  r1			stack pointer
+  r2			system reserved
+  r3-r7                 free (argument registers)
+  r8			used as temp for indirect jumps, otherwise free (argument register)
+  r9-r12                temporary registers (caller-saved) (r10 is last argument register)
+  r13			small data area pointer
+  r14-r21               foreign GPR registers (callee-saved)
+  r22			foreign EFLAGS register (callee-saved)
+  r23			foreign FPSW register (callee-saved)
+  r24			foreign FPCW register (callee-saved)
+  r25			parity reg (callee-saved)
+  r26-r29               free (callee-saved)
+  r30			lr saver in asm, otherwise free (callee-saved)
+  r31			constant area (callee-saved)
+  crf3                  crf0 save area (callee-saved)
+  crf4                  xer bits save area (callee-saved)
+
+-------------------
+
+ppc:
+
+indirect jump
+	mr target_addr,3
+	lwz 8,indirect_dispatcher_offset(31)
+	mtlr 8
+	blr
+
+direct jump
+	lwz 0,direct_dispatcher_offset(31)
+	mtlr 0
+	blrl
+	# lr holds this address upon entry to direct dispatcher
+	target address
+
+direct jump patched
+	b offset
+
+-------------------
+
+
+++++++++++++++++
+08048105  and esp,$0xfffffff8       0x00000000
+- - - - - - - - 
+00000000701aedb0  addi r9,r0,-8
+00000000701aedb4  and r18,r18,r9
+
+can be done with rlwinm
+++++++++++++++++
+
+++++++++++++++++
+0807bc86  mov esi,0xc(ebp)       0x00000000
+- - - - - - - - 
+00000000701aee58  addi r9,r0,12
+00000000701aee5c  lwbrx r10,r19,r9
+00000000701aee60  or r20,r10,r10
+
+mov targeting!  the or is unnecessary.
+++++++++++++++++
+
+++++++++++++++++
+0807bd73  push $0x0       0x00000000
+- - - - - - - - 
+00000000701aef54  addi r9,r0,0
+00000000701aef58  addi r18,r18,-4
+00000000701aef5c  stwbrx r9,r0,r18
+
+use r0 instead of loading 0 into r9
+++++++++++++++++
+
+++++++++++++++++
+080752fa  lea eax,0x0(,edx,4)       0x00000000
+- - - - - - - - 
+0000000070228cbc  rlwinm r9,r16,2,0,29
+0000000070228cc0  add r14,r0,r9
+
+add is unnecessary
+++++++++++++++++
+
+++++++++++++++++
+08075344  add eax,$0x812b100       0x00000000
+- - - - - - - - 
+0000000070228d8c  addis r9,r0,2066
+0000000070228d90  ori r9,r9,45312
+0000000070228d94  add r14,r14,r9
+
+add with a constant with bit 15 not set can be done with addis, addi
+directly to the dst register.  adds with bits 0-15 zero or 15-31 zero
+can be done with single addis, or addi, respectively.
+++++++++++++++++
+
+
+-------------------
+
+xbattle:
+
+/bin/xbattle -armies 4 -towns 1 -hex -board 20 -attack -black :0.0 -blue null -hidden -ai 1 10
+
+-------------------
+
+
+
+eldby:
+*** jumping to 1000062c
+
+is
+FPR7: 0x4097a1d6a0000000 (1512.459595)
+
+should be
+FPR7: 0x4097a1d6c0000000 (1512.459717)
+
+
+*** interpreter
+LR: 0x100009d4
+CR: 0x8800086d
+XER: 0x0
+CTR: 0x0
+FPSCR: 0x0
+GPR0: 0x10
+GPR1: 0x7ffff5b0
+GPR2: 0x0
+GPR3: 0x1004ad14
+GPR4: 0x1004ad00
+GPR5: 0x43300000
+GPR6: 0x21
+GPR7: 0x1948b0fd
+GPR8: 0x21
+GPR9: 0x0
+GPR10: 0x80000021
+GPR11: 0x4
+GPR12: 0x10050000
+GPR13: 0x100523ac
+GPR14: 0x7ffff5b8
+GPR15: 0x10032678
+GPR16: 0x10050000
+GPR17: 0x10050000
+GPR18: 0x4
+GPR19: 0x10050000
+GPR20: 0x10050000
+GPR21: 0x10050000
+GPR22: 0x10050000
+GPR23: 0x10050000
+GPR24: 0x10050000
+GPR25: 0x10050000
+GPR26: 0x7ffff5bb
+GPR27: 0x10050000
+GPR28: 0x10050000
+GPR29: 0x25
+GPR30: 0x1004acec
+GPR31: 0x1004ad28
+FPR0: 0x41f0942a9ef065ff (4450331119.024901)
+FPR1: 0x3fe0000000000000 (0.500000)
+FPR2: 0x4330000080000000 (4503601774854144.000000)
+FPR3: 0x3ff43916e5c7fa98 (1.263938)
+FPR4: 0x3ff43916e5c7fa98 (1.263938)
+FPR5: 0xbfc6666666666668 (-0.175000)
+FPR6: 0xbfdee9e06522c3f3 (-0.483025)
+FPR7: 0x4097a1d6c0000000 (1512.459717)
+FPR8: 0x40991c0000000000 (1607.000000)
+FPR9: 0xc1c44cff51b59bd4 (-681180835.418818)
+FPR10: 0x4158987600000000 (6447576.000000)
+FPR11: 0x40edfa2cfcd6e9e0 (61393.405864)
+FPR12: 0x40a70e8fcd6e9e06 (2951.280864)
+FPR13: 0x4184e032e0000000 (43779676.000000)
+FPR14: 0x0 (0.000000)
+FPR15: 0x0 (0.000000)
+FPR16: 0x0 (0.000000)
+FPR17: 0x0 (0.000000)
+FPR18: 0x0 (0.000000)
+FPR19: 0x0 (0.000000)
+FPR20: 0x0 (0.000000)
+FPR21: 0x0 (0.000000)
+FPR22: 0x3ff0000000000000 (1.000000)
+FPR23: 0x0 (0.000000)
+FPR24: 0x4020000000000000 (8.000000)
+FPR25: 0x4044000000000000 (40.000000)
+FPR26: 0x3ff028f5c28f5c29 (1.010000)
+FPR27: 0x3ff0000000000000 (1.000000)
+FPR28: 0x409e600000000000 (1944.000000)
+FPR29: 0xbfc6666666666668 (-0.175000)
+FPR30: 0xbfdee9e06522c3f3 (-0.483025)
+FPR31: 0x3fefae147ae147ae (0.990000)
+PC: 0x10000860
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[schani@samhain schani]$ gcc -v test.c 
+Reading specs from /usr/lib/gcc-lib/ppc-yellowdog-linux/2.95.2/specs
+gcc version 2.95.2 19991024 (release/franzo)
+ /usr/lib/gcc-lib/ppc-yellowdog-linux/2.95.2/cpp -lang-c -v -D__GNUC__=2 -D__GNUC_MINOR__=95 -DPPC -D__ELF__ -Dpowerpc -D__PPC__ -D__ELF__ -D__powerpc__ -D__PPC -D__powerpc -Acpu(powerpc) -Amachine(powerpc) -D__CHAR_UNSIGNED__ -D_CALL_SYSV -D_BIG_ENDIAN -D__BIG_ENDIAN__ -Amachine(bigendian) -D_ARCH_PPC -D__unix__ -D__linux__ -Dunix -Dlinux -Asystem(unix) -Asystem(posix) test.c /tmp/cc79kb4c.i
+GNU CPP version 2.95.2 19991024 (release/franzo) (PowerPC GNU/Linux)
+#include "..." search starts here:
+#include <...> search starts here:
+ /usr/local/include
+ /usr/lib/gcc-lib/ppc-yellowdog-linux/2.95.2/include
+ /usr/include
+End of search list.
+The following default directories have been omitted from the search path:
+ /usr/lib/gcc-lib/ppc-yellowdog-linux/2.95.2/../../../../include/g++-3
+ /usr/lib/gcc-lib/ppc-yellowdog-linux/2.95.2/../../../../ppc-yellowdog-linux/include
+End of omitted list.
+ /usr/lib/gcc-lib/ppc-yellowdog-linux/2.95.2/cc1 /tmp/cc79kb4c.i -quiet -dumpbase test.c -version -o /tmp/ccjOmnID.s
+GNU C version 2.95.2 19991024 (release/franzo) (ppc-yellowdog-linux) compiled by GNU C version 2.95.2 19991024 (release/franzo).
+ as -mppc -V -Qy -o /tmp/ccgLXLP0.o /tmp/ccjOmnID.s
+GNU assembler version 2.9.5-moto-1.7 (ppc-yellowdog-linux) using BFD version 2.9.5.0.22
+ /usr/lib/gcc-lib/ppc-yellowdog-linux/2.95.2/collect2 -m elf32ppclinux -dynamic-linker /lib/ld.so.1 /usr/lib/crt1.o /usr/lib/crti.o /usr/lib/gcc-lib/ppc-yellowdog-linux/2.95.2/crtbegin.o -L/usr/lib/gcc-lib/ppc-yellowdog-linux/2.95.2 /tmp/ccgLXLP0.o /usr/lib/gcc-lib/ppc-yellowdog-linux/2.95.2/libgcc.a -lc /usr/lib/gcc-lib/ppc-yellowdog-linux/2.95.2/libgcc.a /usr/lib/gcc-lib/ppc-yellowdog-linux/2.95.2/crtend.o /usr/lib/crtn.o
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+(bitand a b)
+(bitor a b)
+(bitxor a b)
+(bitnot a)
+(shiftl x a)
+(shiftr x a)
+(ashiftr x a)
+(rotl x a)
+(rotl x a) -> (bitor (shiftl x a) (shiftr x (- w a)))
+(mask b e) -> (shiftr (shiftl (bitnot 0) (- w (+ (- e b) 1))) (- w (+ e 1)))
+(sex x a) -> (ashiftr (shiftl x (- w a)) (- w a))
+(zex x a) -> (shiftr (shiftl x (- w a)) (- w a))
+(zex x a) -> (bitand x (mask 0 (- a 1)))
+(set-sub v b e a) -> (set v (logor (logand v (bitnot (mask b e))) (shiftl a b)))
+
+
+(known (const x)) = (mask 0 (- w 1))
+(bits (const x)) = x
+
+(known (var x)) = 0
+(bits (var x)) = 0
+
+(known (bitand a b)) = (bitor (bitand (known a) (known b))
+                              (bitor (bitand (known a) (bitnot (bits a)))
+                                     (bitand (known b) (bitnot (bits b)))))
+(bits (bitand a b)) = (bitand (bits a) (bits b))
+
+(known (bitor a b)) = (bitor (bitand (known a) (known b))
+                             (bitor (bits a) (bits b)))
+(bits (bitor a b)) = (bitor (bits a) (bits b))
+
+(known (bitxor a b)) = (bitand (known a) (known b))
+(bits (bitxor a b)) = (bitxor (bitand (known a) (bits a))
+                              (bitand (known b) (bits b)))
+
+(known (bitnot a)) = (known a)
+(bits (bitnot a)) = (bitand (known a) (bitnot (bits a)))
+
+(known (shiftl x (const a))) = (bitor (shiftl (known x) a) (mask 0 (- a 1)))
+(known (shiftl x a)) = 0
+(bits (shiftl x (const a))) = (shiftl (bits x) a)
+(bits (shiftl x a)) = 0
+
+(known (shiftr x (const a))) = (bitor (shiftr (known x) a) (mask (- w a) (- w 1)))
+(known (shiftr x a)) = 0
+(bits (shiftr x (const a))) = (shiftr (bits x) a)
+(bits (shiftr x a)) = 0
+
+(known (ashiftr x (const a))) = (ashiftr (known x) a)
+(known (ashiftr x a)) = 0
+(bits (ashiftr x (const a))) = (ashiftr (bits x) a)
+(bits (ashiftr x a)) = 0
+
+
+
+
+
+(bitand a b) : (needed a) = (bitor (bitnot (known b)) (bits b))
+(bitor a b) : (needed a) = (bitor (bitnot (known b)) (bitand (known b) (bitnot (bits b))))
+
+
+x -> (bitand (bits x) (needed x)) if (= (bitand (needed x) (known x)) (needed x))
+
+
+
+
+
+1. known in both -> only those which are 1 in both
+2. only known in a -> only those which are 1 in a
+3. unknown in both -> all
+
+
+
+(known a && known b && bit a && bit b) || (known a && bit a) || (known b && bit b)
+|| (!known a && !known b)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+compress95:
+
+  100001f8 length 132 : e       50  c        0  i        0
+  1000051c length 117 : e 350003225  c  7989076  i 342014099
+  10000558 length 127 : e 113244514  c  7772973  i 105471491
+  10000578 length 119 : e 447616425  c  7510941  i 440105434
+  100005a4 length 19  : e 245043077  c 245043013  i       14
+  10000600 length 20  : e  4643050  c  4639751  i     3249
+  10000610 length 46  : e     3249  c     1070  i     2129
+  10000720 length 85  : e     1525  c     1282  i      193
+  100007b4 length 65  : e 27491132  c  9272038  i 18219044
+  100007c4 length 62  : e  4256274  c  4256224  i        0
+  100007cc length 60  : e 13647816  c 13647763  i        3
+  100007d0 length 59  : e 49939600  c 37329504  i 12610046
+  100007f8 length 19  : e 13119442  c 13119392  i        0
+  10000814 length 12  : e 184547324  c 184547274  i        0
+  1000082c length 51  : e 13119510  c 12527406  i   592054
+  1000085c length 62  : e    11024  c     1518  i     9456
+  100008b4 length 35  : e      198  c      148  i        0
+  10000900 length 44  : e     9258  c     9208  i        0
+  10000a08 length 5   : e     6375  c     6325  i        0
+  10000a7c length 96  : e 104960128  c   726243  i 104233835
+  10000a84 length 11  : e     1525  c     1475  i        0
+  10000aa4 length 3   : e   388875  c   388825  i        0
+  10000ab0 length 75  : e     1525  c     1475  i        0
+  10000ac4 length 96  : e     1525  c     1475  i        0
+  10000adc length 32  : e     5349  c     2035  i     3264
+  10000af4 length 10  : e 102736088  c 102736038  i        0
+  10000b00 length 23  : e 142298203  c 85603039  i 56695114
+  10000b1c length 16  : e 17136234  c 17136184  i        0
+  10000b30 length 82  : e 245043097  c  5224141  i 239818906
+  10000b68 length 68  : e  4641525  c  4061981  i   579494
+  10000c1c length 46  : e 13119323  c 13108424  i    10849
+  10000c38 length 50  : e    10824  c     9256  i     1518
+  10000c54 length 43  : e     1518  c     1468  i        0
+  10000d34 length 26  : e 88654201  c 88654151  i        0
+  10000e7c length 41  : e     1250  c      600  i      600
+  10000ec0 length 22  : e      600  c      550  i        0
+  10000ec8 length 31  : e      879  c      829  i        0
+  10000f2c length 19  : e  6682050  c  6682000  i        0
+  10000f78 length 5   : e     1550  c     1500  i        0
+  10000f80 length 3   : e    12400  c    12350  i        0
+  10000f8c length 10  : e     1544  c     1470  i       24
+  10001174 length 11  : e 184567374  c 184567324  i        0
+  100011a0 length 48  : e 13120860  c  6291836  i  6828974
+  100011b4 length 8   : e    20050  c    20000  i        0
+  100011d4 length 48  : e     1347  c     1272  i       25
+  1000121c length 8   : e      127  c       77  i        0
+  1000122c length 4   : e    16256  c    16206  i        0
+  1000123c length 30  : e      128  c       78  i        0
+  10001288 length 11  : e    16256  c    16206  i        0
+  100012b4 length 5   : e      128  c       78  i        0
+  100012d4 length 12  : e      127  c       77  i        0
+  100012ec length 6   : e    16128  c    16078  i        0
+  10001304 length 3   : e      128  c       78  i        0
+  10001320 length 50  : e 13999998  c 10540224  i  3459724
+  10001454 length 4   : e      300  c      250  i        0
+  10001768 length 10  : e 83999941  c 38883175  i 45116716
+  10001784 length 10  : e 48576430  c  7429550  i 41146830
+  10001798 length 7   : e  6570421  c  6570371  i        0
+  100022d0 length 30  : e      204  c      110  i       44
+  10015648 length 160 : e      153  c       17  i       86
+  10015a30 length 148 : e       86  c        7  i       29
+  10016220 length 30  : e      126  c       60  i       16
+  10016268 length 5   : e     4190  c     4140  i        0
+  1001627c length 13  : e      250  c      100  i      100
+  100162b8 length 8   : e      100  c       50  i        0
+  100162c0 length 6   : e     1340  c     1290  i        0
+  100162d8 length 100 : e      149  c       65  i       34
+  10007504 length 51  : e      128  c       78  i        0
+  10007740 length 66  : e      126  c       30  i       46
+  100077dc length 6   : e       75  c       25  i        0
+  100080cc length 26  : e      133  c       83  i        0
+  10008394 length 35  : e       56  c        0  i        6
+  10008b54 length 14  : e     2992  c     2942  i        0
+  10008bcc length 61  : e      125  c       75  i        0
+  10009c14 length 10  : e      682  c      632  i        0
+  10009c3c length 121 : e       94  c       44  i        0
+  1000a94c length 14  : e      766  c      716  i        0
+
+
+xlisp:
+
+  100001f8 length 88  : e 10947938  c  4477030  i  6470858
+  10000224 length 50  : e  1142057  c   758084  i   383923
+  1000022c length 139 : e  4184344  c  1899877  i  2284417
+  10000240 length 64  : e  1139675  c  1128264  i    11361
+  10000274 length 14  : e  1139697  c  1139640  i        7
+  10000378 length 124 : e  1144443  c  1144243  i      150
+  10000394 length 3   : e      449  c      399  i        0
+  100003a0 length 4   : e  1146857  c  1146807  i        0
+  100003e0 length 116 : e    71152  c     1160  i    69942
+  10000440 length 16  : e     1210  c     1160  i        0
+  10000450 length 16  : e     1104  c     1054  i        0
+  10000480 length 88  : e    69942  c    69892  i        0
+  10000644 length 16  : e    69942  c    69892  i        0
+  10000654 length 16  : e    56476  c    56426  i        0
+  10000664 length 111 : e    69692  c    14667  i    54975
+  100307f0 length 94  : e     1101  c     1051  i        0
+  1000080c length 69  : e    20004  c    19954  i        0
+  10000834 length 86  : e    20004  c    19954  i        0
+  10000890 length 340 : e   482481  c       33  i   482398
+  100008e0 length 72  : e    20004  c    19954  i        0
+  10000968 length 38  : e    20004  c    19954  i        0
+  10000a40 length 118 : e  4858592  c  4858542  i        0
+  10000a8c length 67  : e   381530  c   381473  i        7
+  10000b20 length 73  : e   391058  c   391008  i        0
+  10000b58 length 54  : e   391064  c   391014  i        0
+  10000b84 length 18  : e   389928  c   389878  i        0
+  10000b98 length 144 : e   378976  c      352  i   378574
+  10000bcc length 73  : e    71143  c    71093  i        0
+  10000c04 length 40  : e    71152  c    71102  i        0
+  10000c2c length 11  : e    70805  c    70755  i        0
+  10000ca4 length 81  : e      144  c       94  i        0
+  10000d34 length 251 : e      200  c      136  i       14
+  10000dd4 length 142 : e     1101  c     1051  i        0
+  10000e80 length 90  : e      192  c      118  i       24
+  10000f6c length 94  : e     2400  c     2350  i        0
+  10031054 length 81  : e      162  c      112  i        0
+  100012f0 length 168 : e  3370204  c    13416  i  3356738
+  10001520 length 79  : e   112743  c   112693  i        0
+  10001570 length 68  : e   112743  c   112693  i        0
+  10001594 length 46  : e   112743  c   112693  i        0
+  100015b8 length 83  : e   112743  c   112693  i        0
+  10001600 length 79  : e  2532014  c  2531964  i        0
+  10001614 length 180 : e   159922  c    34569  i   125303
+  10001634 length 91  : e     5203  c      351  i     4802
+  10001648 length 12  : e    73638  c    73588  i        0
+  10001650 length 72  : e    42215  c       50  i    42115
+  10001660 length 3   : e     9189  c     9139  i        0
+  1000166c length 64  : e      187  c       56  i       81
+  100317ac length 130 : e     2301  c     1137  i     1114
+  100317d4 length 260 : e      106  c       56  i        0
+  10001b3c length 144 : e  2532014  c  2531864  i      100
+  10001b70 length 75  : e   915911  c      477  i   915384
+  10001bb0 length 12  : e   915384  c   915334  i        0
+  10001bb8 length 113 : e  2672131  c   148323  i  2523758
+  10001bd0 length 63  : e      571  c      132  i      389
+  10001be0 length 29  : e      589  c      399  i      140
+  10001bf4 length 124 : e      100  c       47  i        3
+  10001c08 length 3   : e   767255  c   767205  i        0
+  10001c14 length 21  : e  2523229  c  2523179  i        0
+  10001c20 length 18  : e   915411  c   915361  i        0
+  10001c48 length 116 : e  2531885  c  2506472  i    25363
+  10001cac length 54  : e  4235600  c  4235550  i        0
+  10001cc0 length 49  : e   859199  c   859149  i        0
+  10001cd8 length 5   : e  2391111  c  1547562  i   843499
+  10001ce0 length 15  : e   843780  c   843730  i        0
+  10001cec length 12  : e     5426  c     5376  i        0
+  10001cf4 length 187 : e   373822  c   120552  i   253220
+  10001d10 length 71  : e  1509573  c  1431741  i    77782
+  10001da8 length 101 : e     7804  c     7754  i        0
+  10001de8 length 15  : e     1019  c      779  i      190
+  10001dfc length 198 : e     7793  c     7545  i      198
+  10001e28 length 100 : e    28511  c    28461  i        0
+  10001e64 length 106 : e    47192  c       11  i    47131
+  10001e70 length 12  : e    26257  c    26207  i        0
+  10001e78 length 2   : e    47100  c    47050  i        0
+  10001e80 length 60  : e     7578  c     1986  i     5542
+  10011e9c length 23  : e     3152  c     3102  i        0
+  10001ea4 length 71  : e    55512  c    55462  i        0
+  10001ed4 length 193 : e    55512  c    54909  i      553
+  10001f28 length 108 : e    55512  c    54900  i      562
+  10001f60 length 81  : e    90580  c    90530  i        0
+  10031fbc length 28  : e     1101  c     1051  i        0
+  10001fec length 10  : e    90581  c    90531  i        0
+  10002004 length 118 : e    90581  c    90531  i        0
+  10002024 length 19  : e    90580  c    90530  i        0
+  10002040 length 12  : e    68753  c    68703  i        0
+  10002048 length 3   : e    81271  c    81221  i        0
+  10002054 length 219 : e    12519  c      462  i    12007
+  10002204 length 458 : e    30710  c    26633  i     4027
+  1000225c length 79  : e    27246  c    27196  i        0
+  100022e0 length 17  : e    27246  c    27196  i        0
+  100022fc length 8   : e    27246  c    27196  i        0
+  10002310 length 12  : e    27246  c    27196  i        0
+  10002350 length 99  : e   380949  c   380899  i        0
+  10002394 length 12  : e     1914  c     1864  i        0
+  1000239c length 3   : e     3729  c     3679  i        0
+  100023a8 length 103 : e     1842  c     1748  i       44
+  100023cc length 5   : e   112742  c   112692  i        0
+  10002414 length 68  : e    47707  c    47657  i        0
+  10022428 length 24  : e    11499  c     3973  i     7476
+  10022430 length 22  : e     4066  c     2176  i     1840
+  10002438 length 15  : e    47707  c    47657  i        0
+  10022448 length 30  : e    16051  c     3159  i    12842
+  1000244c length 102 : e    47707  c    47657  i        0
+  10022478 length 4   : e     7000  c     6915  i       35
+  100024dc length 215 : e    47707  c    47656  i        1
+  10022518 length 12  : e     1348  c       95  i     1203
+  10022548 length 95  : e      181  c        8  i      123
+  1002254c length 89  : e     1203  c      108  i     1045
+  10022630 length 149 : e     1110  c     1055  i        5
+  100226c4 length 162 : e       53  c        2  i        1
+  100226d4 length 163 : e     1424  c     1130  i      244
+  10002878 length 67  : e   203325  c   203275  i        0
+  1000289c length 58  : e    64760  c    64710  i        0
+  100028e4 length 20  : e   212357  c   212307  i        0
+  10002908 length 8   : e   268084  c    64738  i   203296
+  10002928 length 183 : e   203296  c   111523  i    91723
+  100029e0 length 18  : e  4603984  c  4603934  i        0
+  10002a00 length 27  : e   147684  c   135534  i    12100
+  10002a1c length 3   : e    12188  c    12138  i        0
+  10002a28 length 23  : e   381883  c   381833  i        0
+  10022b24 length 459 : e     3152  c     1741  i     1361
+  10022c88 length 6   : e      601  c      551  i        0
+  10022e34 length 3   : e     3152  c     3102  i        0
+  10003090 length 16  : e 125830639  c 104170402  i 21660187
+  100030ac length 53  : e 20473804  c  4499078  i 15974676
+  100030b4 length 69  : e 95384620  c  4285665  i 91098905
+  100030c0 length 48  : e 84353783  c 65982699  i 18371034
+  100030f8 length 61  : e  7080147  c   209447  i  6870650
+  10003108 length 10  : e  6027870  c  6027820  i        0
+  10003130 length 34  : e 77112353  c 77111980  i      323
+  10003134 length 46  : e 60053650  c 10803497  i 49250103
+  10003144 length 45  : e 101412498  c 26379536  i 75032912
+  10003154 length 5   : e 19746807  c  4662070  i 15084687
+  10003178 length 8   : e 58201502  c 58201452  i        0
+  10003198 length 9   : e 20473799  c 15290819  i  5182930
+  100031b0 length 40  : e    20433  c     9023  i    11360
+  10003204 length 19  : e   266827  c   149949  i   116828
+  1000322c length 9   : e 286971741  c 180306329  i 106665362
+  10003238 length 21  : e 106793550  c 106792377  i     1123
+  10003260 length 163 : e     1104  c      734  i      320
+  10003284 length 132 : e       99  c       10  i       39
+  10003310 length 3   : e   287259  c   287209  i        0
+  1000331c length 75  : e    20422  c     2335  i    18037
+  100033c4 length 6   : e    16983  c    16933  i        0
+  10003648 length 101 : e 22840557  c       97  i 22840410
+  10003674 length 55  : e     4919  c     2266  i     2603
+  1000369c length 61  : e 34745398  c     9933  i 34735415
+  100036c0 length 12  : e     7333  c        1  i     7282
+  100036e0 length 57  : e 35033782  c      173  i 35033559
+  100037f8 length 461 : e     1460  c       11  i     1399
+  100038cc length 228 : e      225  c      142  i       33
+  10003968 length 57  : e      188  c      130  i        8
+  100039f8 length 50  : e  4244674  c     5590  i  4239034
+  10003a1c length 191 : e      774  c       49  i      675
+  10003c58 length 15  : e    20431  c    20381  i        0
+  10003dc4 length 132 : e      951  c       71  i      830
+  10003e4c length 4   : e    20432  c    20382  i        0
+  10003e5c length 11  : e    20432  c    20382  i        0
+  10003e74 length 5   : e  6308031  c  6307981  i        0
+  10003e88 length 3   : e  6328449  c  6328399  i        0
+  10003e94 length 1   : e    20429  c    20379  i        0
+  10003f7c length 10  : e   355905  c   355855  i        0
+  10003f90 length 5   : e 119105401  c 119105351  i        0
+  10003fb0 length 70  : e 13661291  c 12766233  i   895008
+  10003fb8 length 24  : e 86299329  c 84956321  i  1342958
+  10004084 length 55  : e 117136342  c 76816413  i 40319879
+  100040b0 length 48  : e  1210316  c   786979  i   423287
+  10004118 length 73  : e 38320256  c 38320206  i        0
+  10004138 length 128 : e  1251579  c     1828  i  1249701
+  10004190 length 7   : e 41048457  c 41048407  i        0
+  100041ac length 28  : e  6706775  c  1210245  i  5496480
+  100041f8 length 16  : e 15832780  c 15832730  i        0
+  10004200 length 157 : e  1613034  c     1917  i  1611067
+  10004204 length 80  : e  5668832  c   458713  i  5210069
+  10004224 length 36  : e 12291885  c  2445824  i  9846011
+  10004284 length 26  : e  1801831  c  1801781  i        0
+  100042a4 length 27  : e  9846011  c  9845961  i        0
+  100042c0 length 3   : e  4987443  c  4987393  i        0
+  100042cc length 41  : e  7151870  c  2144995  i  5006825
+  100044d8 length 43  : e 12431962  c 12429102  i     2810
+  1000450c length 18  : e 22009794  c 22009744  i        0
+  1000452c length 28  : e  9580629  c  9580579  i        0
+  100046f8 length 30  : e     2810  c     2760  i        0
+  1000474c length 75  : e 64995520  c      540  i 64994930
+  10004804 length 43  : e 100741432  c     5623  i 100735759
+  100048dc length 31  : e   126622  c     5331  i   121241
+  10004934 length 36  : e      862  c      473  i      339
+  1000493c length 40  : e   120028  c   119978  i        0
+  100049a4 length 266 : e    30010  c     3982  i    25978
+  10004a14 length 13  : e 20392227  c 20388263  i     3914
+  10004a30 length 6   : e 13831579  c 13831529  i        0
+  10004a54 length 9   : e 34219804  c 20388207  i 13831547
+  10004a60 length 6   : e 13831547  c 13831497  i        0
+  10004a80 length 6   : e  7826910  c  7826860  i        0
+  10004a98 length 38  : e  2149620  c   576547  i  1573023
+  10004b4c length 19  : e 12431962  c 12429102  i     2810
+  10004ba0 length 6   : e     2810  c     2760  i        0
+  10004be4 length 12  : e  2017255  c  2017205  i        0
+  10004bec length 51  : e  9002580  c  1481739  i  7520791
+  10004f6c length 21  : e       69  c       19  i        0
+  10005080 length 75  : e       80  c        5  i       25
+  100050d8 length 9   : e       63  c       13  i        0
+  100050e8 length 52  : e       76  c       16  i       10
+  100152dc length 35  : e       56  c        0  i        6
+  10005590 length 20  : e      172  c      122  i        0
+  100157f4 length 77  : e      357  c      200  i      107
+  100059a8 length 119 : e   137285  c    31790  i   105445
+  10005a44 length 13  : e    70781  c    18261  i    52470
+  10005a64 length 35  : e     2430  c      524  i     1856
+  10015a6c length 52  : e      163  c      112  i        1
+  10005ab4 length 119 : e     1856  c     1806  i        0
+  10005acc length 22  : e       68  c       18  i        0
+  10005ae0 length 112 : e     2392  c      139  i     2203
+  10005afc length 24  : e     2188  c     1787  i      351
+  10005b04 length 54  : e     2251  c      264  i     1937
+  10005b40 length 12  : e    70806  c    70756  i        0
+  10005bc0 length 14  : e    11964  c    11850  i       64
+  10005bdc length 136 : e    70865  c    54315  i    16500
+  10005e1c length 92  : e      282  c      232  i        0
+  10005ee8 length 8   : e      203  c      153  i        0
+  1000640c length 15  : e     1012  c      962  i        0
+  10006448 length 102 : e     1012  c      601  i      361
+  10006494 length 26  : e      896  c      846  i        0
+  100064c8 length 65  : e      217  c      167  i        0
+  100064e4 length 3   : e      361  c      311  i        0
+  100064f0 length 63  : e      122  c       72  i        0
+  10006638 length 21  : e    40009  c    39959  i        0
+  1000668c length 67  : e    40009  c    39959  i        0
+  100066c8 length 11  : e    40009  c    19955  i    20004
+  10006720 length 16  : e    20004  c    19954  i        0
+  10006724 length 15  : e    20004  c    19954  i        0
+  1000672c length 146 : e   120028  c    39993  i    79985
+  10006748 length 6   : e    79985  c    79935  i        0
+  10006760 length 14  : e   120032  c   119982  i        0
+  100067bc length 9   : e   120024  c    39990  i    79984
+  100067cc length 6   : e    79984  c    79934  i        0
+  100067e8 length 2   : e   104950  c   104900  i        0
+  10006a48 length 70  : e   536055  c   536005  i        0
+  10006a60 length 63  : e   536261  c       89  i   536122
+  10006a70 length 70  : e   675229  c   675179  i        0
+  10006ac0 length 70  : e     1876  c     1826  i        0
+  10006b10 length 70  : e   240248  c   240198  i        0
+  10006b28 length 369 : e   240248  c       48  i   240150
+  10006bb0 length 70  : e       56  c        6  i        0
+  10006bc8 length 34  : e       57  c        7  i        0
+  10006f30 length 145 : e  1696905  c      203  i  1696652
+  10006f44 length 90  : e  1158195  c     9831  i  1148314
+  10006f54 length 5   : e   242671  c   242621  i        0
+  10006fb0 length 69  : e   400786  c   400736  i        0
+  10007000 length 60  : e       66  c       15  i        1
+  10007020 length 15  : e   110026  c   109976  i        0
+  1000705c length 30  : e   110026  c   109976  i        0
+  10007070 length 25  : e   220050  c   220000  i        0
+  10007084 length 7   : e   330076  c   220017  i   110009
+  1000708c length 6   : e   110009  c   109959  i        0
+  100070a8 length 303 : e   110010  c    14985  i    94975
+  1000733c length 29  : e       62  c        8  i        4
+  1000780c length 3   : e      958  c      908  i        0
+  10007818 length 3   : e      958  c      908  i        0
+  10007824 length 5   : e      957  c      907  i        0
+  10007874 length 114 : e      111  c       61  i        0
+  1000794c length 9   : e     1998  c     1948  i        0
+  10007970 length 66  : e      100  c       50  i        0
+  100079b4 length 57  : e    55612  c    55051  i      511
+  10007a08 length 7   : e  1034334  c   979183  i    55101
+  10007a60 length 2   : e    55612  c    55562  i        0
+  10007a68 length 84  : e    55606  c       50  i    55506
+  10007aa8 length 6   : e    40008  c    39958  i        0
+  10007b20 length 150 : e   507300  c   506180  i     1070
+  10007b9c length 506 : e    27247  c    27197  i        0
+  10007c18 length 58  : e     5160  c     3542  i     1568
+  10007c40 length 48  : e     5160  c     5110  i        0
+  10007c6c length 7   : e   260490  c   251711  i     8729
+  10007c88 length 72  : e    10297  c     5125  i     5122
+  10007cb4 length 188 : e   158222  c      651  i   157521
+  10007cf0 length 59  : e   100796  c    93546  i     7200
+  10007e60 length 90  : e   437436  c   226606  i   210780
+  10007e98 length 61  : e    48562  c    43108  i     5404
+  10007f84 length 135 : e   169215  c       30  i   169135
+  10007fac length 143 : e     2462  c       12  i     2400
+  1000806c length 52  : e   107197  c    79930  i    27217
+  10008090 length 104 : e   216968  c     4060  i   212858
+  10008140 length 66  : e   212858  c      167  i   212641
+  1000822c length 8   : e   156236  c   156186  i        0
+  1000823c length 8   : e      893  c      843  i        0
+  10008244 length 19  : e    55512  c    55462  i        0
+  10008358 length 2   : e   212858  c   212808  i        0
+  10008378 length 95  : e   216964  c       50  i   216864
+  100083ac length 57  : e  3963479  c  2299588  i  1663841
+  1000840c length 7   : e  1608329  c  1608279  i        0
+  10008428 length 7   : e    55512  c    55462  i        0
+  100084bc length 201 : e  3962758  c     5466  i  3957242
+  1000861c length 281 : e   301410  c   273605  i    27755
+  1000877c length 50  : e    27755  c    27705  i        0
+  100087a8 length 328 : e  4358218  c   501487  i  3856681
+  100089b8 length 172 : e  2091000  c  1526596  i   564354
+  100089f8 length 225 : e  1649060  c  1632774  i    16236
+  10008b08 length 53  : e   579591  c    32594  i   546947
+  10008b40 length 5   : e   156236  c   156186  i        0
+  10008b54 length 158 : e   156236  c      225  i   155961
+  10008b64 length 5   : e     4110  c     4060  i        0
+  10008b88 length 5   : e      885  c      835  i        0
+  10008b9c length 58  : e      910  c      860  i        0
+  10008bac length 5   : e    55512  c    55462  i        0
+  10008bc0 length 72  : e    55508  c    55458  i        0
+  10008bd0 length 5   : e      100  c       50  i        0
+  10008be4 length 58  : e      200  c       75  i       75
+  10008dc8 length 5   : e  1608329  c  1608279  i        0
+  10008ddc length 169 : e  1608329  c     2177  i  1606102
+  10008dec length 5   : e  2299638  c  2299588  i        0
+  10008ec4 length 5   : e    55512  c    55462  i        0
+  10008ed8 length 200 : e    55506  c    55456  i        0
+  10008f54 length 5   : e   301410  c   301360  i        0
+  10008fe4 length 5   : e  2091000  c  2090950  i        0
+  10008ff8 length 143 : e   508842  c   508792  i        0
+  1000902c length 5   : e   618158  c   618108  i        0
+  10009098 length 5   : e  1649060  c  1649010  i        0
+  100090ac length 121 : e    16236  c      185  i    16001
+  10009114 length 145 : e 78751788  c   186838  i 78564900
+  1000914c length 18  : e 67984496  c 67984123  i      323
+  1000915c length 33  : e  2807523  c  2394663  i   412810
+  1000927c length 28  : e  3838589  c  3838246  i      293
+  100092b4 length 18  : e  3838360  c  3838201  i      109
+  100092c4 length 33  : e  3838360  c   927825  i  2910485
+  1000a314 length 41  : e    15574  c      365  i    15159
+  1000a344 length 15  : e    14939  c    14889  i        0
+  1000a350 length 19  : e    14948  c      564  i    14334
+  1000a3a4 length 4   : e       87  c       37  i        0
+  1000a3b4 length 7   : e      166  c      116  i        0
+  1000a3b8 length 5   : e     1152  c      150  i      952
+  1000a3c0 length 4   : e      952  c      902  i        0
+  1000a3dc length 6   : e      284  c      234  i        0
+  1000a3f4 length 1   : e      986  c      936  i        0
+  1000a42c length 13  : e      589  c      380  i      159
+  1000a430 length 130 : e      132  c       82  i        0
+  1000a4c8 length 6   : e    14386  c    14336  i        0
+  1000a4e0 length 6   : e    14346  c    14266  i       30
+  1000a4f8 length 4   : e    14406  c    14356  i        0
+  1000a514 length 19  : e      202  c       42  i      110
+  1000a5b4 length 2   : e    34538  c    34488  i        0
+  1000a5c8 length 33  : e    19837  c     1856  i    17931
+  1000a84c length 3   : e      181  c      131  i        0
+  1000a858 length 23  : e      115  c       22  i       43
+  1000ac98 length 17  : e       96  c       46  i        0
+  1000ada8 length 17  : e     5381  c     5331  i        0
+  1000adec length 20  : e     5369  c     5319  i        0
+  1000ae0c length 2   : e    15250  c    15200  i        0
+  1000ae14 length 72  : e    15236  c     8675  i     6511
+  1000ae70 length 23  : e     5166  c     5116  i        0
+  1000ae90 length 19  : e     4999  c     4942  i        7
+  1000af74 length 15  : e     5289  c     5239  i        0
+  1000af94 length 2   : e     2725  c     2675  i        0
+  1000af9c length 83  : e     5376  c      276  i     5050
+  1000b1d4 length 37  : e       75  c       10  i       15
+  1000b204 length 2   : e    21748  c    21698  i        0
+  1000b20c length 25  : e    21710  c    19481  i     2179
+  1000b268 length 4   : e     3539  c     3489  i        0
+  1000b278 length 177 : e       64  c        2  i       12
+  1000b298 length 105 : e    10066  c     6649  i     3367
+  1000b2ac length 150 : e     2638  c     1909  i      679
+  1000b39c length 6   : e     1140  c     1090  i        0
+  1000b3b4 length 194 : e      933  c      127  i      756
+  1000b4a0 length 74  : e      382  c      332  i        0
+  1000b528 length 36  : e      573  c      523  i        0
+  1000b624 length 7   : e       51  c        1  i        0
+  1000b840 length 12  : e      609  c      559  i        0
+  1000b878 length 9   : e      134  c       84  i        0
+  1000b89c length 55  : e      534  c      378  i      106
+  1000b8c8 length 11  : e      159  c      109  i        0
+  1001b8d0 length 159 : e      421  c      236  i      135
+  1000b8e0 length 3   : e       52  c        2  i        0
+  1000b8ec length 82  : e       70  c       16  i        4
+  1000b970 length 14  : e       96  c       46  i        0
+  1000b9a8 length 86  : e       96  c       46  i        0
+  1000b9dc length 18  : e       96  c       46  i        0
+  1000bbe4 length 86  : e     5369  c     5319  i        0
+  1000bc18 length 3   : e     5373  c     5323  i        0
+  1000bc88 length 12  : e      114  c       64  i        0
+  1000bcb8 length 86  : e      114  c       64  i        0
+  1001bccc length 4   : e       57  c        7  i        0
+  1001bcdc length 56  : e       56  c        0  i        6
+  1000bce4 length 2   : e     4583  c     4533  i        0
+  1000bcec length 4   : e     4697  c     4647  i        0
+  1000bcfc length 33  : e      114  c       57  i        7
+  1001bd18 length 4   : e      360  c      310  i        0
+  1000be4c length 4   : e      134  c       84  i        0
+  1000be5c length 3   : e      134  c       84  i        0
+  1000be68 length 5   : e      134  c       84  i        0
+  1000be7c length 72  : e       58  c        8  i        0
+  1000bf44 length 2   : e    18271  c    18221  i        0
+  1000bf54 length 15  : e    25095  c    17939  i     7106
+  1000bf70 length 10  : e     2637  c     2586  i        1
+  1000bfa4 length 12  : e      103  c       53  i        0
+  1000c0ec length 3   : e     5628  c     5578  i        0
+  1000c0f8 length 4   : e     5626  c     5576  i        0
+  1000c400 length 120 : e     2400  c     2350  i        0
+  1000c480 length 116 : e     2400  c     2350  i        0
+  1000c49c length 100 : e       56  c        2  i        4
+  1000c73c length 54  : e      361  c      311  i        0
+  1000c7c8 length 14  : e 31858364  c 31858314  i        0
+  1000c810 length 92  : e 12283471  c      890  i 12282531
+  1000c868 length 14  : e   142304  c   142254  i        0
+  1000c8b0 length 62  : e   119473  c      107  i   119316
+  1000ca24 length 88  : e     1012  c      601  i      361
+  1000cb7c length 292 : e     2400  c      783  i     1567
+  1001cbec length 56  : e       52  c        2  i        0
+  1000cc2c length 28  : e      239  c      189  i        0
+  1000cc70 length 33  : e     9181  c     9061  i       70
+  1000cca4 length 22  : e    19831  c    19781  i        0
+  1000ccc0 length 11  : e    10623  c      343  i    10230
+  1000ce94 length 1   : e      359  c      309  i        0
+  1000cee8 length 13  : e 12632918  c 12429572  i   203296
+  1000cf30 length 5   : e 22277873  c 22277823  i        0
+  1000cf44 length 45  : e 22273600  c 12426777  i  9846773
+  1001cf74 length 78  : e     3153  c     3102  i        1
+  1000cffc length 122 : e 30367031  c      451  i 30366530
+  1000d014 length 13  : e 70825890  c 39236329  i 31589511
+  1000d020 length 128 : e 84249645  c  3776859  i 80472736
+  1000d03c length 3   : e 19954404  c 19954354  i        0
+  1000d048 length 54  : e  1943534  c   903216  i  1040268
+  1000d070 length 10  : e 218494952  c 218022446  i   472456
+  1000d07c length 45  : e 244006084  c 52686239  i 191319795
+  1000d0a0 length 145 : e 153203360  c     2564  i 153200746
+  1000d0ac length 138 : e      864  c      144  i      670
+  1000d100 length 139 : e    12716  c       73  i    12593
+  1000d10c length 69  : e   920450  c      755  i   919645
+  1000d11c length 13  : e  3826288  c  3447286  i   378952
+  1000d124 length 6   : e     8427  c     8353  i       24
+  1000d130 length 132 : e     8309  c       50  i     8209
+  1001d13c length 10  : e       52  c        1  i        1
+  1000d168 length 133 : e    21435  c     1081  i    20304
+  1001d19c length 150 : e     2373  c     1073  i     1250
+  1000d1d4 length 3   : e     1163  c     1113  i        0
+  1000d1e0 length 5   : e     1163  c     1113  i        0
+  1000d1f4 length 183 : e     1153  c        1  i     1102
+  1000d2d4 length 181 : e    28492  c       22  i    28420
+  1000d2e0 length 13  : e     6985  c     5944  i      991
+  1000d2ec length 10  : e    22176  c    22126  i        0
+  1000d314 length 8   : e     1030  c      980  i        0
+  1000d330 length 5   : e    22630  c    22580  i        0
+  1000d344 length 19  : e     7777  c      127  i     7600
+  1001dd68 length 14  : e    50400  c    47203  i     3147
+  1001dda0 length 13  : e     3147  c     3097  i        0
+  1001dda8 length 11  : e    75600  c    75550  i        0
+  1001ddd4 length 6   : e     3148  c     3098  i        0
+  1001f148 length 151 : e       62  c        1  i       11
+  1001f2bc length 74  : e      143  c       93  i        0
+  1001f478 length 8   : e      132  c       70  i       12
+  1001fc3c length 56  : e      171  c       42  i       79
+  1001fcc4 length 46  : e       79  c       29  i        0
+  10001e04 length 60  : e      190  c       40  i      100
+  1000d13c length 61  : e     4010  c     3926  i       34

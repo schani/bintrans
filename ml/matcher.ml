@@ -238,7 +238,8 @@ let match_expr_generic register_const_func fields expr pattern =
 		 InsertPattern (arg_pattern1, arg_pattern2, start_pattern, length_pattern)) ->
 		  combine_bindings
 		    (combine_bindings (match_rec arg1 arg_pattern1) (match_rec arg2 arg_pattern2))
-		    (combine_bindings (match_int_const start start_pattern) (match_int_const length length_pattern))
+		    (combine_bindings (match_expr_int_const start (cfold_expr fields start) start_pattern)
+		       (match_expr_int_const length (cfold_expr fields length) length_pattern))
 	      | _ -> fail
   in
     match_rec expr pattern

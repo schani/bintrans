@@ -252,6 +252,8 @@ src_is_imm (word_32 *val)
 static void
 gen_sib_address (reg_t *ra, reg_t *rb, word_16 *imm)
 {
+    *imm = 0;
+
     if (sib_base == 5)
     {
 	if (mod == 0)

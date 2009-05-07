@@ -1,0 +1,134 @@
+The unit of compilation is called "fragment".  A fragment has one
+entry point and one or more exit points.  It consists of one or more
+basic blocks.  Only forward control flow[1] is allowed within
+fragments.  Basic blocks are basic blocks, i.e., they have one entry
+point and one exit point, which may be an unconditional or a two-way
+branch.
+
+The IR is RISC-like.  The variables used in the instruction stream are
+called "virtual registers", or short "virtual".  There are two types
+of virtual registers:
+
+  * Guest registers.  They correspond to the registers of the guest.
+
+  * Temp registers.  They are created by the front-end to hold
+    temporary values.
+
+From the point of view of the front-end the difference between guest
+and temp registers is that the set of guest registers is fixed[2],
+whereas temp registers can be created at arbitrary times during
+fragment creation.
+
+Each virtual register has a type.  The available types are:
+
+  * Integer.
+
+  * Float.
+
+  * Condition.  Conditions are one-bit virtual variables.  Only they
+    can be used in conditional branches.
+
+Integers and floats usually have the biggest size that the host allows
+without compromising speed.  This means that integers have the host's
+word size and floats usually have double precision (on the i386 they
+are 80 bits long).
+
+There are several types of instructions:
+
+  * Constant load instructions.  These copy constant values into
+    virtual registers.
+
+  * Copy instructions.  They copy a values between registers of the
+    same type.
+
+  * Loads/Stores.  A load takes an address (as a virtual register) and
+    assigns the value at that address to a virtual register.  A store
+    takes an address (as a virtual) and a value and stores the value
+    at that address in memory.  A store has no left-hand side, i.e.,
+    has no result.  There are loads and stores for each type and each
+    width (1,2,4,8 for integers, 4,8,10 for floats).  Conditions
+    cannot be stored directly, but must be converted to integers
+    first.  Widths exceeding the sizes of the virtual registers are
+    not supported, i.e., there is no 8 byte integer store instruction
+    on the i386.  Integer loads whose size is less than the virtual
+    register width leave the upper part of the virtual register
+    undefined[3].  Float loads with smaller width result in values of
+    the correct width.
+
+  * Conversions.  They take a register of one type and return a
+    register of another type.  There are conversions for
+    integer->float, float->integer and condition->integer.
+
+  * Predicates.  A predicate takes one or more registers of the same
+    type and returns a condition, indicating whether the registers
+    satisfy the predicate.  There are variants for each integer
+    operand width.
+
+  * ALU/FP operations.  They take one or more registers of the same
+    type and assign a value to a register of that type.  For some
+    operations[4] there are variants for each operand width.  Integer
+    operations with a width less than the virtual register width leave
+    the upper part of the result undefined[3].  FP operations result
+    in values of the correct widths.
+
+  * Unconditional branch.  Branches to a basic block in the same
+    fragment.
+
+  * Conditional branch.  Takes a condition and branches to a specified
+    basic block in the same fragment if the condition is true.  If it
+    is false, falls through to the next basic block in the fragment.
+
+  * Exits.  Leaves the fragment.  An exit makes the fragment behave
+    like an ordinary procedure taking no arguments by using the
+    call/return convention of the host.
+
+  * Procedure calls.  These use the standard calling convention of the
+    host.  Arguments to the function are integer virtuals and their
+    number is fixed[5].  The address of the procedure to be called is
+    passed in a virtual register[6].
+
+  * User-defined operations.  These are inherently host-dependent and
+    must be implemented by the user[7].  A user-defined operations can
+    take arguments (virtual registers) and can produce a result.  The
+    front-end can specify whether all guest registers must be saved to
+    their home locations before the user-defined operation.  A
+    user-defined operation can be an exit.
+
+---
+
+[1] This restriction may be lifted in future versions.  The reason for
+it is that it allows us to do second-chance binpacking without doing a
+DFA for the ARE_CONSISTENT vector.  We can simply (conservatively)
+assume that a spill store for a virtual register is necessary if it
+has been written during its livetime (i.e. while being assigned to a
+register).
+
+[2] Guest registers in binary translation correspond to variables in
+high-level language compilation.  We should not forget that people
+might want to use different variable sets in different fragments.
+
+[3] Different architectures have different conventions regarding this.
+The Alpha, for example, sign extends 4 byte results, but zero extends
+2 byte and 1 byte results.  The x86-64 zero extends all results.
+Using one or the other means to take a performance hit on
+architectures which don't do it our way.  It should not matter anyway,
+since for all operations for which it matters there are variants for
+all different widths.  See also [4].
+
+[4] I see no reason why we should have, for example, bit operations
+for each operand width.  The decision not to have them is of course
+that there is no canonical representation for values with a width less
+than the virtual register width.  I don't see this as a disadvantage.
+
+[5] Is it necessary to have a more general argument handling system?
+If so, what would be a sensible way to do this?
+
+[6] This will usually be a bit host-dependent.  Usually you will want
+to use an address stored in a table pointed to by some fixed register.
+It will be simple matter though, to let a host-independent front-end
+call-back some short host-dependent function to generate that address.
+
+[7] I am very sure that I will need this, mostly for calling assembler
+routines with non-standard calling conventions.  I want to keep the
+interface as simple as possible as well as pose little overhead for
+the code generator.
