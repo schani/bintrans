@@ -595,7 +595,7 @@
     (machine-insn-macros *this-machine*)))
 
 (defmacro define-insn (name fields-spec effect asm &key (generate t))
-  (when (assoc name (machine-insns *this-machine*))
+  (when (find name (machine-insns *this-machine*) :key #'insn-name)
     (error "insn already defined: ~A~%" name))
   (let* ((known-bits (make-array (machine-insn-bits *this-machine*) :element-type 'bit :initial-element 0))
 	 (known-bit-values (make-array (machine-insn-bits *this-machine*) :element-type 'bit :initial-element 0))
