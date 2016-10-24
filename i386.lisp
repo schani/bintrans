@@ -778,6 +778,18 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
      (set of (+overflow (width op-width dst) (width op-width (+ (bitneg src) 1))))
      (set-pf temp))))
 
+(define-std-simple-insn cpuid (#x0f #xa2)
+  ((if (= (reg eax) 0)
+       (set (reg eax) 1)
+     (if (= (reg eax) 1)
+	 (let ((genu #x756e6547)
+	       (inei #x49656e69)
+	       (ntel #x6c65746e))
+	   (set (reg ebx) genu)
+	   (set (reg edx) inei)
+	   (set (reg ecx) ntel))
+       (not-implemented)))))
+
 (define-std-unary-insn dec
     ((rm8 (#xfe) 1)
      (rm16 (#xff) 1)
@@ -1358,12 +1370,20 @@ opcode_reg = _opcode_reg; imm8 = _imm8; imm16 = _imm16; disp32 = _disp32; imm32 
   ((set (reg esp) (+ (reg esp) op-byte-width))
    (set dst (mem (- (reg esp) op-byte-width)))))
 
+(define-std-simple-insn popfd (#x9d)
+  ((set (reg esp) (+ (reg esp) 4))
+   (set (reg eflags) (mem (- (reg esp) 4)))))
+
 (define-std-unary-insn push
     ((rm32 (#xff) 6)
      (+r32 (#x50))
      (simm8 (#x6a))
      (imm32 (#x68)))
   ((set (mem (- (reg esp) 4)) dst)
+   (set (reg esp) (- (reg esp) 4))))
+
+(define-std-simple-insn pushfd (#x9c)
+  ((set (mem (- (reg esp) 4)) (reg eflags))
    (set (reg esp) (- (reg esp) 4))))
 
 (define-std-simple-insn repe_cmpsb (#xf3 #xa6) ;FIXME: direction
