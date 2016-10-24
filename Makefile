@@ -118,12 +118,12 @@ COMPILER_OBJS = compiler.o
 #LOCATION = -DCOMPLANG
 
 
-CFLAGS = $(MODE_DEFS) $(DEFINES) $(ARCH) $(EMU_DEFS) $(LOCATION) -fno-inline -I.
+CFLAGS = $(MODE_DEFS) $(DEFINES) $(ARCH) $(EMU_DEFS) $(LOCATION) -fno-inline -I. `pkg-config glib-2.0 --cflags`
 
 all : bintrans dump_liveness undump_liveness convert_liveness
 
-bintrans : ppc.o mm.o fragment_hash.o loops.o liveness.o lispreader.o $(OBJS)
-	$(DIET) $(CC) $(LDOPTS) -o bintrans ppc.o mm.o fragment_hash.o loops.o liveness.o lispreader.o $(OBJS)
+bintrans : ppc.o mm.o fragment_hash.o loops.o liveness.o lispreader.o allocator.o pools.o $(OBJS)
+	$(DIET) $(CC) $(LDOPTS) -o bintrans ppc.o mm.o fragment_hash.o loops.o liveness.o lispreader.o allocator.o pools.o $(OBJS) `pkg-config glib-2.0 --libs`
 #	gcc -o bintrans ppc.o mm.o fragment_hash.o loops.o liveness.o lispreader.o $(OBJS)
 
 dump_liveness : dump_liveness.c bintrans.h compiler.h
@@ -164,6 +164,12 @@ liveness.o : liveness.c bintrans.h ppc_livenesser.c ppc_consumer.c ppc_gen_kill.
 
 lispreader.o : lispreader.c lispreader.h
 	$(DIET) $(CC) $(CFLAGS) -I. -Wall -g -c lispreader.c
+
+allocator.o : allocator.c allocator.h
+	$(DIET) $(CC) $(CFLAGS) -I. -Wall -g -c allocator.c
+
+pools.o : pools.c pools.h
+	$(DIET) $(CC) $(CFLAGS) -I. -Wall -g -c pools.c
 
 alpha_asm.o : alpha_asm.S Makefile
 	$(DIET) $(CC) $(MODE_DEFS) $(DEFINES) $(EMU_DEFS) -g -c alpha_asm.S
