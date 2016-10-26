@@ -35,7 +35,7 @@
 
 #define I386_NUM_PREFIXES 9
 
-void i386_decode_opcode (interpreter_t *intp, int *prefix_flags, word_8 *opcode1, word_8 *opcode2);
+void i386_decode_opcode (interpreter_t *intp, int *prefix_flags, word_8 *opcode1);
 void i386_decode_modrm (interpreter_t *intp, word_8 *_modrm, word_8 *_mod, word_8 *_reg, word_8 *_rm);
 void i386_decode_sib (interpreter_t *intp, word_8 modrm, word_8 *_scale, word_8 *_index, word_8 *_base, word_8 *_disp8, word_32 *_disp32);
 word_8 i386_decode_imm8 (interpreter_t *intp);

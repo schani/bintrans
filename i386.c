@@ -41,7 +41,7 @@ static struct { word_8 prefix; int flag; } prefixes[I386_NUM_PREFIXES] = {
 };
 
 void
-i386_decode_opcode (interpreter_t *intp, int *prefix_flags, word_8 *opcode1, word_8 *opcode2)
+i386_decode_opcode (interpreter_t *intp, int *prefix_flags, word_8 *opcode1)
 {
     word_8 b;
     int i;
