@@ -323,10 +323,10 @@
 							r8-rm8 r16-rm16 r32-rm32))
 		 (unless modrm-decoded-p
 		   (format t "tmp = intp.decode_modrm();~%opcode2 = tmp.modrm;~%mod = tmp.mod;~%reg = tmp.reg;~%rm = tmp.rm;~%"))
-		 (format t "tmp = intp.decode_sib(opcode2);~%sib_scale = tmp.sib_scale;~%sib_index = tmp.sib_index;~%sib_base = tmp.sib_base;~%disp8 = tmp.disp8;~%disp32 = tmp.disp32;~%"))
-	       (format t "if (prefix_flags & I386_PREFIX_OP_SIZE_OVERRIDE) {~%")
+		 (format t "tmp = intp.decode_sib(opcode2);~%sib_scale = tmp.scale;~%sib_index = tmp.index;~%sib_base = tmp.base;~%disp8 = tmp.disp8;~%disp32 = tmp.disp32;~%"))
+	       (format t "if (prefix_flags & i386.PREFIX_OP_SIZE_OVERRIDE) {~%")
 	       (if (null insn16)
-		   (format t "bt_assert(0);~%")
+		   (format t "assert(0);~%")
 		   (progn
 		     (decode-immediate-if-necessary insn16)
 		     (format t "next_pc = pc = intp.pc;~%")
@@ -347,20 +347,20 @@
 		   (format t "case ~A :~%" opcode))
 	       (generate-16-32-pair (first insns) (second insns) modrm-decoded-p)))
 	   (generate-switch-for-opcode2 (insns opcode)
-	     (format t "tmp = intp.decode_modrm();~%opcode2 = tmp.opcode2;~%mod = tmp.mod;~%reg = tmp.reg;~%rm = tmp.rm;~%")
+	     (format t "tmp = intp.decode_modrm();~%opcode2 = tmp.modrm;~%mod = tmp.mod;~%reg = tmp.reg;~%rm = tmp.rm;~%")
 	     (format t "switch (opcode2) {~%")
 	     (dolist (opcode2 (remove-duplicates (mapcar* #'(lambda (x) (second (intel-insn-opcode x))) insns)))
 	       (let ((insns2 (remove-if-not #'(lambda (x) (eql opcode2 (second (intel-insn-opcode x)))) insns)))
 		 (generate-case insns2 nil)))
 	     (format t "default :~%~Aswitch (reg) {~%"
 		     (if (and (>= opcode #xd8) (<= opcode #xdf))
-			 (format nil "bt_assert(opcode2 <= 0xbf);~%")
+			 (format nil "assert(opcode2 <= 0xbf);~%")
 			 ""))
 	     (dolist (extended-opcode (remove-duplicates (mapcar* #'intel-insn-extended-opcode insns)))
 	       (let ((insnsx (remove-if-not #'(lambda (x) (eql extended-opcode (intel-insn-extended-opcode x))) insns)))
 		 (format t "case ~A :~%" extended-opcode)
 		 (generate-16-32-pair (first insnsx) (second insnsx) t)))
-	     (format t "default :~%bt_assert(0);~%}~%}~%break;~%")
+	     (format t "default :~%assert(0);~%}~%}~%break;~%")
 	     (assert (null (remove-if-not #'(lambda (x) (and (null (second (intel-insn-opcode x)))
 							     (null (intel-insn-extended-opcode x))))
 					  insns)))))
@@ -375,7 +375,7 @@
 						 (null (intel-insn-extended-opcode x)))) insns))
 	      (format t "case ~A :~%" opcode)
 	      (generate-switch-for-opcode2 insns opcode)))))
-    (format t "default:~%bt_assert(0);~%}~%")))
+    (format t "default:~%assert(0);~%}~%")))
 
 (defun generate-intel-interpreter ()
   (with-open-file (out "i386_interpreter.c" :direction :output :if-exists :supersede)
@@ -484,6 +484,7 @@ to_be_killed = _to_be_killed;~%")
 	    (*standard-output* out)
 	    (*insn-field-accessor* #'(lambda (name begin end) (dcs name))))
 	(format t "var i386 = require('./i386');
+var assert = require('assert');
 exports.disassemble_insn = function disassemble_i386_insn (intp) {
 var opcode, opcode2;
 var pc, next_pc;
@@ -492,7 +493,7 @@ var mod, reg, rm, sib_scale, sib_index, sib_base, disp8, opcode_reg, imm8;
 var imm16;
 var disp32, imm32;
 var tmp;
-var output = "";~%")
+var output = \"\";~%")
 	(generate-intel-insn-recognizer *i386* #'(lambda (insn)
 						   (let ((name (intel-insn-name insn))
 							 (mode (intel-insn-mode insn)))

@@ -20,6 +20,8 @@
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
+var assert = require('assert');
+
 var I386_PREFIX_LOCK               = 0x001;
 var I386_PREFIX_REPNE              = 0x002;
 var I386_PREFIX_REP                = 0x004;
@@ -31,9 +33,8 @@ var I386_PREFIX_ES_OVERRIDE        = 0x080;
 var I386_PREFIX_FS_OVERRIDE        = 0x100;
 var I386_PREFIX_GS_OVERRIDE        = 0x200;
 var I386_PREFIX_OP_SIZE_OVERRIDE   = 0x400;
+exports.PREFIX_OP_SIZE_OVERRIDE = I386_PREFIX_OP_SIZE_OVERRIDE;
 var I386_PREFIX_ADDR_SIZE_OVERRIDE = 0x800;
-
-var I386_NUM_PREFIXES 9
 
 var PREFIXES = [
     { prefix: 0xf0, flag: I386_PREFIX_LOCK },
@@ -50,7 +51,7 @@ var PREFIXES = [
 function i386_decode_opcode ()
 {
     var prefix_flags = 0;
-    var opcode1;
+    var opcode;
     
     var b;
     var i;
@@ -58,31 +59,33 @@ function i386_decode_opcode ()
     for (;;)
     {
 	b = this.mem_get_8(this.pc++);
-	for (i = 0; i < prefixes.length; ++i)
-	    if (prefixes[i].prefix == b)
+	for (i = 0; i < PREFIXES.length; ++i)
+	    if (PREFIXES[i].prefix == b)
 		break;
 
-	if (i < prefixes.length)
+	if (i < PREFIXES.length)
 	{
-	    bt_assert(!(prefix_flags & prefixes[i].flag));
-	    prefix_flags |= prefixes[i].flag;
+	    assert(!(prefix_flags & PREFIXES[i].flag));
+	    prefix_flags |= PREFIXES[i].flag;
 	}
 	else
 	{
-	    opcode1 = b;
+	    opcode = b;
 	    break;
 	}
     }
-    return { prefix_flags: prefix_flags, opcode1: opcode1 };
+    //console.log("prefix flags %d  opcode %d", prefix_flags, opcode);
+    return { prefix_flags: prefix_flags, opcode: opcode };
 }
 
 function i386_decode_modrm ()
 {
     var modrm = this.mem_get_8(this.pc++);
+    //console.log("modrm %d", modrm);
     return { modrm: modrm, mod: modrm >> 6, reg: (modrm >> 3) & 7, rm: modrm & 7 };
 }
 
-function i386_decode_sib ()
+function i386_decode_sib (modrm)
 {
     var scale, index, base, disp8, disp32;
     var need_sib = 0, need_disp8 = 0, need_disp32 = 0;
@@ -108,12 +111,12 @@ function i386_decode_sib ()
 
 	if (base == 5 && mod == 0)
 	{
-	    bt_assert(!need_disp32);
+	    assert(!need_disp32);
 	    need_disp32 = 1;
 	}
 
 	if (base == 5)
-	    bt_assert(need_disp32 || need_disp8);
+	    assert(need_disp32 || need_disp8);
     }
 
     if (need_disp8)
@@ -150,26 +153,29 @@ function i386_decode_imm32 ()
     return imm32;
 }
 
-exports.disassemble_rm8 = function i386_disassemble_r8 (reg)
+function i386_disassemble_r8 (reg)
 {
     var names = [ "al", "cl", "dl", "bl", "ah", "ch", "dh", "bh" ];
-    bt_assert(reg < 8);
+    assert(reg < 8);
     return names[reg];
-};
+}
+exports.disassemble_r8 = i386_disassemble_r8;
 
-exports.disassemble_r16 = function i386_disassemble_r16 (reg)
+function i386_disassemble_r16 (reg)
 {
     var names = [ "ax", "cx", "dx", "bx", "sp", "bp", "si", "di" ];
-    bt_assert(reg < 8);
+    assert(reg < 8);
     return names[reg];
-};
+}
+exports.disassemble_r16 = i386_disassemble_r16;
 
-exports.disassemble_r32 = function i386_disassemble_r32 (reg)
+function i386_disassemble_r32 (reg)
 {
     var names = [ "eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi" ];
-    bt_assert(reg < 8);
+    assert(reg < 8);
     return names[reg];
-};
+}
+exports.disassemble_r32 = i386_disassemble_r32;
 
 function i386_disassemble_sib (mod, scale, index, base, disp32)
 {
@@ -235,7 +241,7 @@ function i386_disassemble_ea (mod, rm, scale, index, base, disp8, disp32)
 
 exports.disassemble_rm8 = function i386_disassemble_rm8 (mod, rm, scale, index, base, disp8, disp32)
 {
-    bt_assert(mod < 4);
+    assert(mod < 4);
 
     if (mod == 0 || mod == 1 || mod == 2)
 	return i386_disassemble_ea(mod, rm, scale, index, base, disp8, disp32);
@@ -245,7 +251,7 @@ exports.disassemble_rm8 = function i386_disassemble_rm8 (mod, rm, scale, index, 
 
 exports.disassemble_rm16 = function i386_disassemble_rm16 (mod, rm, scale, index, base, disp8, disp32)
 {
-    bt_assert(mod < 4);
+    assert(mod < 4);
 
     if (mod == 0 || mod == 1 || mod == 2)
 	return i386_disassemble_ea(mod, rm, scale, index, base, disp8, disp32);
@@ -255,7 +261,7 @@ exports.disassemble_rm16 = function i386_disassemble_rm16 (mod, rm, scale, index
 
 exports.disassemble_rm32 = function i386_disassemble_rm32 (mod, rm, scale, index, base, disp8, disp32)
 {
-    bt_assert(mod < 4);
+    assert(mod < 4);
 
     if (mod == 0 || mod == 1 || mod == 2)
 	return i386_disassemble_ea(mod, rm, scale, index, base, disp8, disp32);
@@ -278,7 +284,7 @@ function mem_get_32_unaligned (addr)
     return this.mem.getUint32(addr, true);
 }
 
-exports.new_i386 = function new_interpreter ()
+exports.new_interpreter = function new_interpreter ()
 {
     var buffer = new ArrayBuffer(1024 * 1024);
     var view = new DataView(buffer);
