@@ -58,7 +58,7 @@
 (defun generate-all-intel-files ()
   (let ((*this-machine* *i386*))
     ;;(generate-defines-file *i386* nil)
-    ;;(generate-intel-interpreter)
+    (generate-intel-interpreter)
     (generate-intel-disassembler)
     ;;(generate-intel-skeleton)
     ;;(generate-intel-livenesser)

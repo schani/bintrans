@@ -1300,7 +1300,7 @@
 
 (defun generate-interpreter (expr bindings &optional (no-cse nil))
   (labels ((register-code (reg &optional class number (with-parens t))
-	     (format nil "~:[~;(~]intp->regs_~A[~A]~:[~;)~]"
+	     (format nil "~:[~;(~]intp.regs_~A[~A]~:[~;)~]"
 		     with-parens
 		     (register-class-name class)
 		     (generate-interpreter number bindings)
@@ -1323,7 +1323,7 @@
 		     (format nil "field_~A" (dcs name))
 		     (funcall *insn-field-accessor* name begin end)))
 	  (integer (value) (format nil "~A" value))
-	  (float (value) (format nil "((~A)~A)" (if (= (expr-width expr) 32) "float" "double") value))
+	  (float (value) (format nil "(~A(~A))" (if (= (expr-width expr) 32) "Math.fround" "") value))
 	  (string (value) (format nil "\"~A\"" value))
 	  (pc () "pc")
 	  (addr () "addr")
@@ -1332,28 +1332,28 @@
 	  (ignore (value) "0 /* ignore */")
 	  (let (let-bindings body)
 	    (with-output-to-string (out)
-	      (format out "({~%")
+	      (format out "((function(){~%")
 	      (let ((new-bindings (append (mapcar #'(lambda (binding)
 						      (destructuring-bind (name . expr)
 							  binding
 							(let ((code (generate-interpreter expr bindings))
 							      (c-name (make-tmp-name)))
-							  (format out "~A ~A = ~A;~%"
-								  (c-type (expr-width expr) (expr-type expr)) c-name code)
+							  (format out "var ~A = ~A;~%" c-name code)
 							  (cons name c-name))))
 						  let-bindings)
 					  bindings)))
-		(dolist (expr body)
-		  (format out "~A;~%" (generate-interpreter expr new-bindings))))
-	      (format out "})~%")))
+		(loop for l on body
+		   while (cdr l)
+		     do (format out "~A;~%" (generate-interpreter (car l) new-bindings)))
+		(format out "return ~A;~%})())~%" (generate-interpreter (car (last body)) new-bindings)))))
 	  (set (lvalue rhs)
 	       (let ((rhs-name (make-tmp-name)))
-		 (format nil "({ ~A ~A = ~A; ~A; })"
-			 (c-type (expr-width rhs) (expr-type rhs)) rhs-name (generate-interpreter rhs bindings)
+		 (format nil "((function() { var ~A = ~A; return ~A; })())"
+			 rhs-name (generate-interpreter rhs bindings)
 			 (let ((*assign-value* rhs-name))
 			   (generate-interpreter lvalue bindings)))))
 	  (promote (value)
-		   (format nil "((~A)~A)" (c-type (expr-width expr) 'integer) (generate-interpreter value bindings)))
+		   (format nil "bt.promote_~A(~A)" (c-type (expr-width expr) 'integer) (generate-interpreter value bindings)))
 	  (jump (target) (format nil "(next_pc = ~A)" (generate-interpreter target bindings)))
 	  (if (cond cons alt)
 	      (format nil "(~A ? ~A : ~A)"
@@ -1362,24 +1362,24 @@
 	  (case (value cases)
 	    (if (null *assign-value*)
 		(let ((result-name (make-tmp-name)))
-		  (format nil "({ ~A ~A; switch (~A) { ~{ ~{case ~A: ~}~A = ~A; break; ~}} ~A; })"
-			  (c-type (expr-width expr) (expr-type expr)) result-name
+		  (format nil "((function(){ var ~A; switch (~A) { ~{ ~{case ~A: ~}~A = ~A; break; ~}} return ~A; })())"
+			  result-name
 			  (generate-interpreter value bindings)
 			  (mappend #'(lambda (x)
 				       (list (car x) result-name (generate-interpreter (cdr x) bindings)))
 				   cases)
 			  result-name))
-		(format nil "({ switch (~A) { ~{ ~{case ~A: ~}~A; break; ~}}})"
+		(format nil "((function(){ switch (~A) { ~{ ~{case ~A: ~}~A; break; ~}}})())"
 			(generate-interpreter value bindings)
 			(mappend #'(lambda (x)
 				     (list (car x) (generate-interpreter (cdr x) bindings)))
 				 cases))))
 	  (dowhile (cond body)
-		   (format nil "({ do {~%~{~A;~%~}} while (~A); })~%"
+		   (format nil "((function(){ do {~%~{~A;~%~}} while (~A); })())~%"
 			   (mapcar #'(lambda (x) (generate-interpreter x bindings)) body)
 			   (generate-interpreter cond bindings)))
 	  (bit-set-p (value index)
-		     (format nil "(~A & (1 << ~A))" (generate-interpreter value bindings) (generate-interpreter index bindings)))
+		     (format nil "bt.bit_set_p(~A, ~A)" (generate-interpreter value bindings) (generate-interpreter index bindings)))
 	  (register (reg class number)
 		    (let ((code (register-code reg class number)))
 		      (if (null *assign-value*)
@@ -1394,115 +1394,107 @@
 		       (let ((width (1+ (- end begin)))
 			     (reg-code (register-code reg class number (not named))))
 			 (if (null *assign-value*)
-			     (format nil "((~A >> ~A) & 0x~X)" reg-code begin (1- (expt 2 width)))
-			     (format nil "(~A = (~A & 0x~X) | (~A << ~A))"
-				     reg-code
-				     reg-code (bit-vector-to-integer (bit-not (bit-range begin end (register-class-width class))))
-				     *assign-value* begin))))
+			     (format nil "bt.extract_field(~A, ~A, ~A)" reg-code begin width)
+			     (format nil "(~A = bt.insert_field(~A, ~A, ~A, ~A))"
+				     reg-code reg-code begin width *assign-value*))))
 	  (numbered-subregister (reg class number width index)
 				(let ((reg-code (register-code reg class number))
 				      (width-code (let ((*assign-value* nil)) (generate-interpreter width bindings)))
 				      (index-code (let ((*assign-value* nil)) (generate-interpreter index bindings))))
 				  (if (null *assign-value*)
-				      (format nil "((~A >> (~A * ~A)) & ((1 << ~A) - 1))"
+				      (format nil "bt.extract_field(~A, ~A * ~A,  ~A)"
 					      reg-code width-code index-code width-code)
-				      (format nil "(~A = (~A & ~~mask_32(~A * ~A, ~A * ~A + ~A - 1)) | (~A << (~A * ~A)))"
+				      (format nil "(~A = bt.insert_field(~A, ~A * ~A, ~A, ~A))"
 					      reg-code
-					      reg-code width-code index-code width-code index-code width-code
-					      *assign-value* width-code index-code))))
+					      reg-code width-code index-code width-code
+					      *assign-value*))))
 	  (mem (addr)
 	       (let ((addr-code (let ((*assign-value* nil)) (generate-interpreter addr bindings))))
 		 (if (null *assign-value*)
-		     (format nil "mem_get_~A(intp, ~A)" (expr-width expr) addr-code)
-		     (format nil "mem_set_~A(intp, ~A, ~A)" (expr-width expr) addr-code *assign-value*))))
+		     (format nil "intp.mem_get_~A(~A)" (expr-width expr) addr-code)
+		     (format nil "intp.mem_set_~A(~A, ~A)" (expr-width expr) addr-code *assign-value*))))
 	  (zex (value)
 	       (let ((code (generate-interpreter value bindings)))
 		 (if (> (expr-width expr) 32)
-		     (format nil "((~A)~A)" (c-type (expr-width expr) 'integer) code)
+		     (format nil "bt.zex_~A_~A(~A)" (expr-width value) (expr-width expr) code)
 		     code)))
 	  (sex (value)
-	       (let ((old-width (expr-width value))
-		     (new-width (expr-width expr))
-		     (code (generate-interpreter value bindings))
-		     (type (c-type (if (> (expr-width expr) 32) (expr-width expr) 32) 'integer)))
-		 (format nil "((~A & 0x~X) ? ((~A)~A | 0x~X) : (~A)~A)"
-			 code (expt 2 (1- old-width))
-			 type code (- (1- (expt 2 new-width)) (1- (expt 2 old-width)))
-			 type code)))
+	       (let ((code (generate-interpreter value bindings)))
+		 (format nil "bt.sex_~A_~A(~A)"
+			 (expr-width value)
+			 (expr-width expr) code)))
 	  (ashiftr (value amount)
 		   (let ((value-code (generate-interpreter value bindings))
 			 (amount-code (generate-interpreter amount bindings)))
-		     (format nil "((~A >> ~A) | ((~A & (1 << ~A)) ? ~~((1 << (~A - ~A)) - 1) : 0))"
-			     value-code amount-code value-code (1- (expr-width expr))
-			     (expr-width expr) amount-code)))
+		     (format nil "bt.ashiftr_~A(~A, ~A)"
+			     (expr-width expr) value-code amount-code)))
 	  (maskmask (bit-width mask)
-		    (format nil "maskmask(~A, ~A, ~A)" bit-width (expr-width mask) (generate-interpreter mask bindings)))
-	  (leading-zeros (value) (format nil "leading_zeros(~A)" (generate-interpreter value bindings)))
-	  (parity-even (value) (format nil "parity_even(~A)" (generate-interpreter value bindings)))
+		    (format nil "bt.maskmask(~A, ~A, ~A)" bit-width (expr-width mask) (generate-interpreter mask bindings)))
+	  (leading-zeros (value) (format nil "bt.leading_zeros(~A)" (generate-interpreter value bindings)))
+	  (parity-even (value) (format nil "bt.parity_even(~A)" (generate-interpreter value bindings)))
 	  (convert-float (value)
-			 (format nil "((~A)~A)" (c-type (expr-width expr) 'float) (generate-interpreter value bindings)))
+			 (format nil "bt.convert_float_~A(~A)" (expr-width expr) (generate-interpreter value bindings)))
 	  (bits-to-float (value)
-			 (let ((width (expr-width expr)))
-			   (format nil "({ ~A tmp = ~A; *(~A*)&tmp; })"
-				   (c-type width 'integer)
-				   (generate-interpreter value bindings)
-				   (c-type width 'float))))
+			 (format nil "bt.bits_to_float_~A(~A)"
+				 (expr-width expr) (generate-interpreter value bindings)))
 	  (float-to-bits (value)
-			 (let ((width (expr-width expr)))
-			   (format nil "({ ~A tmp = ~A; *(~A*)&tmp; })"
-				   (c-type width 'float)
-				   (generate-interpreter value bindings)
-				   (c-type width 'integer))))
+			 (format nil "bt.float_to_bits_~A(~A)"
+				 (expr-width expr) (generate-interpreter value bindings)))
 	  (integer-to-float (value)
-			    (format nil "((~A)(~A)~A)" (c-type (expr-width expr) 'float) (c-type (expr-width value) 'integer t)
+			    (format nil "bt.integer_to_float_~A(~A)" (expr-width expr)
 				    (generate-interpreter value bindings)))
 	  (float-to-integer (value)
-			    (let ((width (expr-width expr)))
-			      (format nil "((~A)(~A)~A)" (c-type width 'integer) (c-type width 'integer t)
-				      (generate-interpreter value bindings))))
+			    (format nil "bt.float_to_integer_~A(~A)" (expr-width expr)
+				    (generate-interpreter value bindings)))
 	  (nop () "0 /* nop */")
-	  (not-implemented () "({ bt_assert(0); 0; }) /* not implemented */")
-	  (system-call () "handle_system_call(intp)")
-	  ((= =f < <f > >f + +f - -f * *f / % /f logor logand logxor shiftl shiftr and or) (left right)
-	   (let* ((op (cadr (assoc (expr-kind expr) '((= "==") (=f "==") (< "<") (<f "<") (> ">") (>f ">") (+ "+") (+f "+") (- "-")
-						      (-f "-") (* "*") (*f "*") (/ "/") (% "%") (/f "/")
-						      (logor "|") (logand "&") (logxor "^") (shiftl "<<") (shiftr ">>")
-						      (and "&&") (or "||")))))
-		  (code (format nil "(~A ~A ~A)" (generate-interpreter left bindings) op (generate-interpreter right bindings))))
-	     (if (and (eq (expr-type expr) 'integer) (not (member (expr-width expr) '(8 16 32 64))))
-		 (format nil "(~A & 0x~X)" code (1- (ash 1 (expr-width expr))))
-		 code)))
+	  (not-implemented () "((function(){ assert(0); 0; })()) /* not implemented */")
+	  (system-call () "intp.handle_system_call()")
+	  ((=f <f >f +f -f *f /f) (left right)
+	   (let ((op (cadr (assoc (expr-kind expr) '((=f "===") (<f "<") (>f ">") (+f "+")
+						     (-f "-") (*f "*") (/f "/"))))))
+	     (format nil "(~A ~A ~A)"
+		     (generate-interpreter left bindings)
+		     op
+		     (generate-interpreter right bindings))))
+	  ((= <  > <s >s logor logand logxor shiftr and or atan2) (left right)
+	   (let ((op (cadr (assoc (expr-kind expr) '((= "equalp") (< "lessp") (> "greaterp")
+						     (<s "slessp") (>s "sgreaterp")
+						     (logor "logor") (logand "logand") (logxor "logxor") (shiftr "lshiftr")
+						     (and "booland") (or "boolor") (atan2 "Math.atan2"))))))
+	     (format nil "bt.~A(~A, ~A)"
+		     op
+		     (generate-interpreter left bindings)
+		     (generate-interpreter right bindings))))
+	  ((+ - * / % shiftl) (left right)
+	   (let ((op (cadr (assoc (expr-kind expr) '((+ "iadd") (- "isub") (* "imul") (/ "idiv") (% "imod")
+						     (shiftl "shiftl"))))))
+	     (format nil "(bt.~A(~A, ~A) & 0x~X)"
+		     op
+		     (generate-interpreter left bindings)
+		     (generate-interpreter right bindings)
+		     (1- (ash 1 (expr-width expr))))))
 	  ((*s /s %s) (left right)
-	   (let* ((op (cadr (assoc (expr-kind expr) '((*s "*") (/s "/") (%s "%")))))
+	   (let* ((op (cadr (assoc (expr-kind expr) '((*s "simul") (/s "sidiv") (%s "simod")))))
 		  (width (expr-width expr))
 		  (type (c-type width 'integer t)))
-	     (format nil "((~A)((~A)~A ~A (~A)~A))"
-		     (c-type width 'integer)
-		     type (generate-interpreter left bindings) op type (generate-interpreter right bindings))))
-	  ((neg bitneg) (value)
-	   (let ((op (cadr (assoc (expr-kind expr) '((neg "-") (bitneg "~"))))))
-	     (format nil "((~A)~A~A)" (c-type (expr-width expr) 'integer) op (generate-interpreter value bindings))))
+	     (format nil "bt.~A(~A, ~A)"
+		     op
+		     (generate-interpreter left bindings)
+		     (generate-interpreter right bindings))))
+	  ((neg bitneg not) (value)
+	   (format nil "bt.~A(~A)"
+		   (dcs (expr-kind expr))
+		   (generate-interpreter value bindings)))
 	  ((fneg not) (value)
 	   (let ((op (cadr (assoc (expr-kind expr) '((fneg "-") (not "!"))))))
 	     (format nil "(~A~A)" op (generate-interpreter value bindings))))
-	  ((<s >s) (left right)
-	   (let ((op (cadr (assoc (expr-kind expr) '((<s "<") (>s ">")))))
-		 (type (c-type (expr-width left) 'integer t)))
-	     (format nil "((~A)~A ~A (~A)~A)"
-		     type (generate-interpreter left bindings) op
-		     type (generate-interpreter right bindings))))
 	  ((+carry -carry +overflow rotl mask) (first second)
 	   (let ((func (cadr (assoc (expr-kind expr) '((+carry "addcarry") (-carry "subcarry") (+overflow "addoverflow")
 						       (rotl "rotl") (mask "mask"))))))
-	     (format nil "~A_~A(~A, ~A)" func (expr-width (if (eq (expr-kind expr) 'mask) expr first))
+	     (format nil "bt.~A_~A(~A, ~A)" func (expr-width (if (eq (expr-kind expr) 'mask) expr first))
 		     (generate-interpreter first bindings) (generate-interpreter second bindings))))
-	  (atan2 (x y)
-		 (format nil "atan2(~A, ~A)"
-			 (generate-interpreter x bindings)
-			 (generate-interpreter y bindings)))
 	  (member (value matches)
-		  (format nil "({ ~A tmp = ~A; 0~{ || tmp == ~A~}; })"
-			  (c-type (expr-width value) (expr-type value))
+		  (format nil "((function(){ var tmp = ~A; 0~{ || tmp == ~A~}; })())"
 			  (generate-interpreter value bindings)
 			  matches))))))
 
@@ -3883,18 +3875,18 @@ save_live = live_~A;~%"
 	(format t "default:~%~A~%}~%" unrecognized-action))))
 
 (defun generate-register-dumper (machine)
-  (format t "void dump_~A_registers (interpreter_t *intp) {~%" (dcs (machine-name machine)))
+  (format t "function dump_~A_registers (intp) {~%" (dcs (machine-name machine)))
   (dolist (reg (reverse (machine-registers machine)))
     (let* ((class (register-register-class reg))
 	   (name (register-name reg))
 	   (class-name (register-class-name class))
 	   (number (register-number reg)))
       (if (eq (register-class-type class) 'float)
-	  (format t "printf(\"~A: 0x%lx (%f)\\n\", *(word_64*)&intp->regs_~A[~A], intp->regs_~A[~A]);~%"
+	  (format t "//console.log(\"~A: 0x\" + bt.float_to_bits_64(intp.regs_~A[~A]).toString(16) + \"(\" + intp.regs_~A[~A].toString());~%"
 		  name class-name number class-name number)
-	  (format t "printf(\"~A: 0x%x\\n\", intp->regs_~A[~A]);~%"
+	  (format t "console.log(\"~A: 0x\" + intp.regs_~A[~A].toString(16));~%"
 		  name class-name number))))
-  (format t "printf(\"PC: 0x%x\\n\", intp->pc);~%}~%"))
+  (format t "console.log(\"PC: 0x\" + intp.pc.toString(16));~%}~%"))
 
 (defun generate-cse-bindings-code ()
   (let ((old-bindings nil))
@@ -3908,12 +3900,11 @@ save_live = live_~A;~%"
 	binding
       (if lvalue
 	  (let ((*assign-value* (make-tmp-name)))
-	    (format t "void ~A (interpreter_t *intp, ~A ~A) {~%~A;~%}~%"
-		    name (c-type (expr-width expr) (expr-type expr)) *assign-value*
+	    (format t "function ~A (intp, ~A) {~%~A;~%}~%"
+		    name *assign-value*
 		    (generate-interpreter expr nil t)))
-	  (format t "~A ~A (interpreter_t *intp) {~%return ~A;~%}~%"
-		  (c-type (expr-width expr) (expr-type expr)) name
-		  (generate-interpreter expr nil t))))))
+	  (format t "function ~A (intp) {~%return ~A;~%}~%"
+		  name (generate-interpreter expr nil t))))))
 
 (defun generate-interpreter-file (machine)
   (let ((*this-machine* machine))

@@ -330,10 +330,12 @@
 		   (progn
 		     (decode-immediate-if-necessary insn16)
 		     (format t "next_pc = pc = intp.pc;~%")
+		     (format t "// ~A ~A~%" (intel-insn-name insn16) (intel-insn-mode insn16))
 		     (funcall action insn16)))
 	       (format t "} else {~%")
 	       (decode-immediate-if-necessary insn32)
 	       (format t "next_pc = pc = intp.pc;~%")
+	       (format t "// ~A ~A~%" (intel-insn-name insn32) (intel-insn-mode insn32))
 	       (funcall action insn32)
 	       (format t "}~%break;~%")))
 	   (generate-case (insns modrm-decoded-p)
@@ -378,28 +380,34 @@
     (format t "default:~%assert(0);~%}~%")))
 
 (defun generate-intel-interpreter ()
-  (with-open-file (out "i386_interpreter.c" :direction :output :if-exists :supersede)
+  (with-open-file (out "i386_interpreter.js" :direction :output :if-exists :supersede)
     (let* ((*this-machine* *i386*)
 	   (*standard-output* out)
 	   (*cse-bindings* nil)
 	   (*insn-field-accessor* #'(lambda (name begin end) (dcs name)))
 	   (interpreter (with-output-to-string (str-out)
 			  (let ((*standard-output* str-out))
-			    (format t "void interpret_i386_insn (interpreter_t *intp) {
-word_8 opcode, opcode2;
-word_32 pc, next_pc;
-int prefix_flags;~%")
 			    (generate-intel-insn-recognizer *i386* #'(lambda (insn)
 								       (when (contains-jump-p (intel-insn-effect insn))
-									 (format t "intp->have_jumped = 1;~%"))
+									 (format t "intp.have_jumped = true;~%"))
 								       (dolist (expr (intel-insn-effect insn))
 									 (format t "~A;~%" (generate-interpreter expr nil)))))
-			    (format t "intp->pc = next_pc;~%}~%")))))
-      (format t "static word_8 mod, reg, rm, sib_scale, sib_index, sib_base, disp8, opcode_reg, imm8;
-static word_16 imm16;
-static word_32 disp32, imm32;~%")
+			    (format t "intp.pc = next_pc;~%}~%")))))
+      (format t "var i386 = require('./i386');
+var assert = require('assert');
+var bt = require('./bintrans');
+var mod, reg, rm, sib_scale, sib_index, sib_base, disp8, opcode_reg, disp32;~%")
       (generate-cse-bindings-code)
+      (format t "exports.interpret_insn = function interpret_i386_insn (intp) {
+var opcode, opcode2;
+var pc, next_pc;
+var prefix_flags;
+var imm8;
+var imm16;
+var imm32;
+var tmp;~%")
       (princ interpreter)
+      (format t "exports.dump_registers = ")
       (generate-register-dumper *i386*))))
 
 #|

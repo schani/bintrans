@@ -292,6 +292,10 @@ exports.new_interpreter = function new_interpreter ()
     return {
 	mem: view,
 	pc: 0,
+	regs_FPST: [0, 0, 0, 0, 0, 0, 0, 0],
+	regs_FSPR: [0, 0],
+	regs_SPR: [0],
+	regs_GPR: [0, 0, 0, 0, 0, 0, 0, 0],
 	decode_opcode: i386_decode_opcode,
 	decode_modrm: i386_decode_modrm,
 	decode_sib: i386_decode_sib,
