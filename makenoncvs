@@ -1,3 +1,0 @@
-#!/bin/bash
-
-tar -zcvhf ../noncvs.tar.gz i386_*_compiler.c m88ksim.inputs go.inputs xlisp.inputs i386_livenesser.c i386_jump_analyzer.c i386_interpreter.c i386_disassembler.c i386_compiler.c i386_defines.h alpha_composer.h alpha_disassembler.c ppc_consumer.c ppc_disassembler.c ppc_interpreter.c ppc_jump_analyzer.c ppc_killer.c ppc_livenesser.c ppc_defines.h ppc_composer.h lispreader.[ch] SPEED NOTES TODO
