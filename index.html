@@ -1,0 +1,107 @@
+<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML//EN">
+<html>
+  <head>
+    <title>The bintrans Dynamic Binary Translator</title>
+  </head>
+
+<script type="text/javascript">
+var gaJsHost = (("https:" == document.location.protocol) ? "https://ssl." : "http://www.");
+document.write(unescape("%3Cscript src='" + gaJsHost + "google-analytics.com/ga.js' type='text/javascript'%3E%3C/script%3E"));
+</script>
+<script type="text/javascript">
+var pageTracker = _gat._getTracker("UA-5444102-1");
+pageTracker._trackPageview();
+</script>
+
+  <body>
+    <center><h1>The <tt>bintrans</tt> Dynamic Binary Translator</h1></center>
+
+    <h2>Overview</h2>
+
+    <blockquote>
+      <tt>bintrans</tt> is a dynamic binary translator.  That means it
+      runs programs on architectures they were not compiled for.  It
+      does this by dynamically translating the machine code of the
+      programs to be run to machine code for the native architecture.
+
+      <p>Currently, <tt>bintrans</tt> features translators from i386
+      to PowerPC and from PowerPC to Alpha.  It only supports Linux
+      binaries.
+
+      <p><tt>bintrans</tt> is still in its early development stages,
+      so don't expect it to run Mozilla.  However, it already runs
+      SPECINT95 benchmarks and a few small X applications (see <a
+      href="xdvi.png">screenshot</a>).
+    </blockquote>
+
+    <h2>Documentation and Publications</h2>
+
+    <blockquote>
+      The best way to get an overview over dynamic binary translation
+      in general and <tt>bintrans</tt> in particular is to read the
+      paper <a href="/schani/papers/bintrans-ukuug2002.ps.gz">Dynamic
+      Binary Translation</a>, which I presented at the UKUUG Linux
+      Developer's Conference 2002.
+
+      <p>You may also want to read the article <a
+      href="/schani/papers/bintrans.ps.gz">Fast Machine-Adaptable
+      Dynamic Binary Translation</a> (Workshop on Binary Translation
+      2001), which reflects an earlier state in the development of
+      <tt>bintrans</tt>.
+
+      <p>You'll find installation instructions and a bit of internal
+      documentation in the <a href="README">README</a> file (also
+      contained in the distribution).
+    </blockquote>
+
+    <h2>Screenshot</h2>
+
+    <blockquote>
+      Here's a <a href="xdvi.png">screenshot</a> of <tt>bintrans</tt>
+      running an XDvi compiled for the i386 on a PowerPC.
+    </blockquote>
+
+    <h2>Root File Systems</h2>
+
+    <blockquote>
+      These are root file systems which contain a few programs for the
+      purpose of testing and benchmarking <tt>bintrans</tt>.
+
+      <p><a href="ppc-root.tar.gz">PowerPC Root FS</a> - contains
+      (among others) most SPECINT95 benchmarks and
+      <a href="http://www.lysator.liu.se/~mbrx/XBattleAI/">XBattleAI</a>.
+
+      <p><a href="i386-root.tar.gz">i386 Root FS</a> - contains (among
+      others) XDvi.
+    </blockquote>
+
+    <h2>Licence</h2>
+
+    <blockquote>
+      The <tt>bintrans</tt> program is provided under the terms of the
+      <a href="COPYING">GNU General Public Licence</a>.
+    </blockquote>
+
+    <h2>Download</h2>
+
+    <blockquote>
+      You can download the sources to version 0.1 of <tt>bintrans</tt>
+      <a href="bintrans-0.1.tar.gz">here</a>.
+    </blockquote>
+
+    <h2>Feedback</h2>
+
+    <blockquote>
+      I like hearing about your experiences with <tt>bintrans</tt>, be
+      they good or bad.  So, for anything related to
+      <tt>bintrans</tt>, <a href="mailto:schani@complang.tuwien.ac.at">mail me</a>.
+    </blockquote>
+
+    <h2>The Author</h2>
+
+    <blockquote>
+      Check out <a href="/~schani/">my homepage</a> for other fun stuff!
+    </blockquote>
+
+  </body>
+</html>

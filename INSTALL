@@ -1,0 +1,47 @@
+           Installing bintrans for the very keen
+
+first, modify the Makefile.  choose one of the EMU lines, depending on
+what platform you want to emulate.  the ARCH line selects which
+platform bintrans runs on (i.e. the target platform).  MODE selects
+bintrans's mode of operation:
+
+  INTERPRETER should work with all source-target combinations.  it never
+  generates native code, obly interprets.  it's best to enable the
+  EMULATED_MEM define.
+
+  DEBUGGER is like interpreter, except that it has a simple debugging
+  interface.  it's pretty much like using gdb without symbol tables
+  and without stack walking code.  there's no documentation for it,
+  so if you need it, email me.
+
+  COMPILER is the real deal.  it works for i386->ppc and
+  ppc->alpha.  use the USE_HAND_TRANSLATOR define.  also, if you want
+  to compile i386->ppc, get uclibc.  if you want ppc->alpha, comment
+  out the CC and LDOPTS lines.  also, use the correct ASM_OBJS line.
+
+another thing you'll need is a root directory for the emulated
+machine.  just make a directory somewhere, and copy a statically
+linked hello-world program for the source architecture there.  then
+put a file named ".bintransrc" in your home dir, which should look
+something like this:
+
+  (root ppc linux "/nethome/hansolo/schani/Work/unix/bintrans/ppc-root")
+  (root i386 linux "/nethome/hansolo/schani/Work/unix/bintrans/i386-root")
+
+now, let's say your source executable is called "hello", call bintrans
+with
+
+  ./bintrans /hello
+
+shared executables should work as well, but then you'll have to copy
+all the required files (dynamic linker, libc, ...) to the root
+directory.  i should also mention that i have never tried out
+non-stripped binaries.
+
+also, bintrans probably only runs on linux and emulates only the linux
+system call interface, i.e. you'll need linux-ppc or linux-i386 source
+binaries.
+
+---
+Mark Probst
+schani@complang.tuwien.ac.at
